@@ -16,12 +16,12 @@ Chained Timers
 Chain interval timers for sport, breath, cooking and study. No ads, no tracking.
 ```
 
-## Full description (4000 chars max — used ~2 400)
+## Full description (4000 chars max — used ~2 600)
 
 ```
 Chained Timers is a focused interval-timer app built around a single idea: instead of juggling three separate timers, build a named chain once — a sequence of segments with their own durations and colors — and let the app fire the next one automatically as each one ends.
 
-Vibration, sound and a system notification mark every transition. Notifications fire on time even when the screen is locked.
+Vibration, sound and a system notification mark every transition. The chain keeps ticking on time even when the screen is locked, the phone is in your pocket, or you've switched to another app.
 
 — SCENARIOS —
 
@@ -38,6 +38,8 @@ Vibration, sound and a system notification mark every transition. Notifications 
 • Loops. Repeat a whole chain N times, or just an embedded sub-chain.
 • Cinematic run mode. Editorial display typography, tabular numerals, a calibrated amber accent, and a progression strip showing exactly where you are in the chain.
 • Pre-start countdown, final-3-second tick, instant pause, drag-to-reorder.
+• Reliable in the background. A foreground service holds a wake lock and exempts the app from Doze for the duration of the chain — segment alerts fire on the second, not bunched up at the end.
+• Persistent now-playing notification. Glance at the lock screen to see the current segment, position (e.g. "Segment 4 of 8"), and what's coming next.
 
 — PRIVACY —
 
@@ -45,11 +47,24 @@ Vibration, sound and a system notification mark every transition. Notifications 
 • No analytics, no crash reporters, no ads, no third-party trackers.
 • Your library lives on your device. Export to JSON whenever you want.
 
-The app holds two permissions Android prompts you about: notifications, and exact alarms. Both are required to fire segment-end alerts at the precise time when the screen is locked. Without them, Doze can defer notifications by 10+ minutes — see the in-app Settings → Native bridge panel for status and one-tap fixes.
+The app requests three permissions: notifications, exact alarms, and a foreground-service slot. All three exist for the same reason — to fire your segment-end alerts at the precise time even with the screen off. See the in-app Settings → Native bridge panel for status and one-tap fixes.
 
 Templates included: Tabata, EMOM 10, Boxing Rounds, Pomodoro, Plank Stack, Box Breath. Tap any to fork into your library, then customise freely.
 
 Open source: github.com/mayerwin/Chained-Timers
+```
+
+---
+
+## What's new in v1.1.0 (release notes — 500 chars max — used ~470)
+
+```
+Reliability rewrite for background timers.
+
+• Foreground service holds a wake lock for the chain run — segment alerts now fire on the second, not bunched up at the end of a workout
+• Persistent "▶ Now playing" notification shows current segment, position, and what's next
+• Wall-clock engine: timer state stays correct across screen-locks, app-switches, and even WebView kills
+• Crash-safe: a chain that was running survives a force-stop, OS reboot, or out-of-memory kill
 ```
 
 ---

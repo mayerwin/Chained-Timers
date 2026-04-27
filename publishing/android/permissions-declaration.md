@@ -1,11 +1,12 @@
 # Play Console — Permissions Declaration form
 
-When you upload the AAB to a Play Console release, the Console scans `AndroidManifest.xml` and flags any **restricted permissions**. For Chained Timers, two of them require justification:
+When you upload the AAB to a Play Console release, the Console scans `AndroidManifest.xml` and flags any **restricted permissions**. For Chained Timers, three of them require justification:
 
 - `android.permission.USE_EXACT_ALARM`
 - `android.permission.SCHEDULE_EXACT_ALARM`
+- `android.permission.FOREGROUND_SERVICE_SPECIAL_USE`
 
-If your AAB also gets flagged for other permissions (e.g. POST_NOTIFICATIONS, RECEIVE_BOOT_COMPLETED, WAKE_LOCK, VIBRATE), those are **not** restricted — no justification needed for those.
+The other restricted-looking permissions (POST_NOTIFICATIONS, RECEIVE_BOOT_COMPLETED, WAKE_LOCK, VIBRATE, FOREGROUND_SERVICE) are **not** restricted — no justification needed for those.
 
 ---
 
@@ -40,29 +41,84 @@ permission was designed.
 
 ---
 
+## Permission: `FOREGROUND_SERVICE_SPECIAL_USE`
+
+Added in **v1.1.0**. The app runs a foreground service (`ChainTimerService`) for the duration of an active chain, so the OS does not freeze the WebView, throttle the timer engine, or coalesce the segment alarms during Doze. The service displays a persistent low-importance notification showing current segment + position + next-up.
+
+In the Console, the Permissions Declaration form asks for a per-permission justification.
+
+Select the use case: **The app fits other use cases that aren't on this list** (Play does not have a "fitness timer" preset). Then paste:
+
+```
+Chained Timers is an interval-timer app for sport, breathwork, cooking and
+study. Users build a chain of named timer segments and the app fires the
+next segment automatically as the previous one ends.
+
+When the user starts a chain, we run a foreground service (ChainTimerService)
+for the duration of that chain. The service:
+
+  1. Acquires a partial wake lock so the OS doesn't freeze the WebView's
+     JS engine while the user is mid-workout with the screen off. Without
+     this, the on-screen countdown stops advancing in the background and
+     the user comes back to a frozen timer.
+
+  2. Exempts the app process from Doze / App Standby so the AlarmManager
+     alarms scheduled for each segment boundary fire at the precise
+     intended time. Without it, Doze coalesces the alarms and the user
+     hears all eight segment-transition tones at the END of the workout
+     instead of one per minute.
+
+  3. Posts a persistent low-importance notification showing the current
+     segment, position in the chain (e.g. "Segment 4 of 8"), and what's
+     coming next. The user can glance at the lock screen / notification
+     shade to see chain state without unlocking the device.
+
+The service stops automatically the instant the chain ends, is paused for
+more than the chain's natural duration, or the user taps Stop. It does not
+continue to run in any other circumstance.
+
+This use case (a user-initiated, time-bounded interval timer that must
+fire reliably while the screen is off) does not fit the predefined service
+types — it is not media playback, location, camera, microphone, phone call,
+data sync, or remote messaging. SPECIAL_USE with the descriptive
+PROPERTY_SPECIAL_USE_FGS_SUBTYPE manifest property is the documented
+fallback for legitimate use cases not covered by the type list, and is
+exactly the pattern Google's foreground-service guidance recommends for
+fitness / interval / workout timers.
+
+The app does not run the foreground service when no chain is active.
+```
+
+The manifest also ships a `<property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE">` element on the `<service>` declaration, with the same justification text — Play scans this property and confirms it before approving the listing.
+
+---
+
 ## What the Console will display after submission
 
 After you save and the form is reviewed (automated, instant), the AAB shows:
 
 ```
-Restricted permissions: 2 declared
-  ✓ USE_EXACT_ALARM         (use case: Alarm clock or scheduling app)
-  ✓ SCHEDULE_EXACT_ALARM    (use case: Alarm clock or scheduling app)
+Restricted permissions: 3 declared
+  ✓ USE_EXACT_ALARM                    (use case: Alarm clock or scheduling app)
+  ✓ SCHEDULE_EXACT_ALARM               (use case: Alarm clock or scheduling app)
+  ✓ FOREGROUND_SERVICE_SPECIAL_USE     (use case: Other; subtype: interval timer)
 ```
 
-If the Console marks the declaration as "needs review," the human review usually clears within 24-48 hours. **It is unlikely to be rejected** — fitness timers are a recognised qualifying use case.
+If the Console marks the declarations as "needs review," human review usually clears within 24-48 hours. Exact alarms for fitness timers, and SPECIAL_USE FGS for interval timers, are recognised qualifying use cases — neither has been observed to be rejected for an honest declaration.
 
 ---
 
-## If Google rejects the declaration
+## If Google rejects a declaration
 
 Unlikely, but if it happens:
 
 1. Open the rejection notice for the specific reason.
-2. The most common cause is "use case insufficient detail" — re-paste the declaration above with two extra sentences explaining that the chain durations are user-configured (so the alarms are user-driven, not background-spam).
+2. The most common cause is "use case insufficient detail" — re-paste the declaration with two extra sentences explaining that the chain durations are user-configured (so the alarms / FGS are user-initiated, not background-spam).
 3. Resubmit. Almost always cleared on the second try.
 
-If repeatedly rejected (very unusual), the fallback is to remove `USE_EXACT_ALARM` from `android/app/src/main/AndroidManifest.xml`, keep only `SCHEDULE_EXACT_ALARM` (which on Android 13+ is grantable but no longer auto-granted), and document in-app that users may need to grant it via Settings. Cuts UX quality but unblocks Play Store publication.
+If `FOREGROUND_SERVICE_SPECIAL_USE` is repeatedly rejected (very unusual), the fallback is to switch the manifest's `foregroundServiceType` to `mediaPlayback` and add a low-volume tone to chain start (so the audio claim is honest) — fitness timer apps have used this pattern historically. Cuts elegance but unblocks publication.
+
+If `USE_EXACT_ALARM` is repeatedly rejected, drop it from the manifest and keep only `SCHEDULE_EXACT_ALARM`, which on Android 13+ is grantable but no longer auto-granted; document in-app that users may need to grant it via Settings.
 
 ---
 

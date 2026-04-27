@@ -149,7 +149,7 @@
       <h1>Privacy Policy
         <em>Short version: nothing leaves your device.</em>
       </h1>
-      <div class="meta">Last updated: 26 April 2026 · Version 1.0.0</div>
+      <div class="meta">Last updated: 27 April 2026 · Version 1.1.0</div>
     </header>
 
     <p class="lead">
@@ -182,11 +182,13 @@
 
     <h2>Permissions we request</h2>
     <ul>
-      <li><strong>Notifications</strong> (<code>POST_NOTIFICATIONS</code> on Android, equivalent on iOS): to display the segment-transition alerts you've configured.</li>
+      <li><strong>Notifications</strong> (<code>POST_NOTIFICATIONS</code> on Android, equivalent on iOS): to display the segment-transition alerts you've configured, plus the persistent "▶ Now playing" status row while a chain is active.</li>
       <li><strong>Exact alarms</strong> (<code>USE_EXACT_ALARM</code> / <code>SCHEDULE_EXACT_ALARM</code> on Android 12+): to schedule those notifications at the precise times required by your timer chains, even when the screen is off.</li>
+      <li><strong>Foreground service</strong> (<code>FOREGROUND_SERVICE</code> + <code>FOREGROUND_SERVICE_SPECIAL_USE</code> on Android): to run a small service for the duration of every chain that holds a partial wake lock and exempts the app from Doze, so segment alerts fire on the second instead of being bunched up at the end. The service stops automatically when the chain ends, you tap Stop, or the chain is paused.</li>
       <li><strong>Vibration</strong> (<code>VIBRATE</code> on Android, Haptic feedback on iOS): to vibrate the device at segment transitions, if enabled in settings.</li>
-      <li><strong>Wake lock</strong> (<code>WAKE_LOCK</code> on Android, <em>idle timer disabled</em> on iOS): to keep the screen awake during a chain, if you enable that setting.</li>
+      <li><strong>Wake lock</strong> (<code>WAKE_LOCK</code> on Android, <em>idle timer disabled</em> on iOS): to keep the screen awake during a chain, if you enable that setting; also held by the foreground service while a chain runs.</li>
       <li><strong>Boot completion</strong> (<code>RECEIVE_BOOT_COMPLETED</code> on Android): so your scheduled notifications survive a phone restart.</li>
+      <li><strong>Battery optimisation exemption</strong> (<code>REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code> on Android, optional): only ever requested if you tap the corresponding button in Settings — used to stop OEM battery savers (Samsung, Xiaomi, …) from killing the foreground service mid-chain.</li>
     </ul>
     <p>
       No camera, microphone, location, contacts, calendar, photo library, or any other personal-data-bearing

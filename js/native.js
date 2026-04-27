@@ -7,10 +7,20 @@
    so the chain stays accurate even when the app is fully backgrounded,
    the screen is locked, or the OS has killed the WebView's JS.
 
-   The web Engine drives the bridge via three CustomEvents:
+   In addition to the per-segment alarms, a sticky low-importance "now
+   playing" notification is posted on a silent channel so the user can
+   always see (without a sound ping) what segment is running and what's
+   coming next.
+
+   The web Engine drives the bridge via four CustomEvents:
      - chain:start       → schedule all upcoming segment-end notifications
-     - chain:reschedule  → cancel + re-schedule (after skip / resume)
-     - chain:cancel      → cancel all (after pause / stop)
+                            and post the sticky now-playing row
+     - chain:reschedule  → cancel + re-schedule (after skip / resume /
+                            pause / restored from persistence)
+     - chain:cancel      → cancel everything (after stop)
+     - chain:complete    → clear only the now-playing row (chain ended
+                            naturally; the just-fired "✓ Chain complete"
+                            alarm stays in the user's tray)
    ========================================================================== */
 
 (() => {
@@ -31,6 +41,8 @@
     exactAlarm: 'unknown',     // 'granted' | 'denied' | 'prompt' | 'unknown' (Android 12+ only)
     channelReady: false,
     lastSchedule: null,        // { count, error, when }
+    fgService: false,          // true while the Android foreground service holds the wake lock
+    fgServiceAvailable: false, // false on older APK builds without the ChainTimerPlugin
   };
 
   if (!isNative()) {
@@ -41,6 +53,7 @@
 
   const Plugins = window.Capacitor.Plugins || {};
   const { LocalNotifications, Haptics, StatusBar } = Plugins;
+  const isAndroid = window.Capacitor.getPlatform?.() === 'android';
 
   if (!LocalNotifications) {
     log('LocalNotifications plugin not available');
@@ -48,6 +61,28 @@
     notifyStatusChanged();
     return;
   }
+
+  // Register the custom Android foreground-service plugin. Capacitor's
+  // registerPlugin returns a proxy whose method calls dispatch through
+  // the JS↔native bridge; if no native implementation is registered (e.g.
+  // an older APK installed before this build, or running on iOS) every
+  // call rejects — we wrap each one in try/catch and treat unavailability
+  // as a clean fallback to the LocalNotifications status row.
+  let ChainTimer = null;
+  if (isAndroid && typeof window.Capacitor.registerPlugin === 'function') {
+    try { ChainTimer = window.Capacitor.registerPlugin('ChainTimer'); }
+    catch (e) { log('registerPlugin(ChainTimer) failed:', e); }
+  }
+  // Probe availability so we can quickly fall back without paying for a
+  // full bridge round-trip on every action.
+  let chainTimerAvailable = false;
+  if (ChainTimer && typeof window.Capacitor.isPluginAvailable === 'function') {
+    chainTimerAvailable = !!window.Capacitor.isPluginAvailable('ChainTimer');
+    if (!chainTimerAvailable) {
+      log('ChainTimer plugin not registered natively (rebuild the APK)');
+    }
+  }
+  window.ChainedNativeStatus.fgServiceAvailable = chainTimerAvailable;
 
   window.ChainedNativeStatus.available = true;
   log(`native bridge live (${window.ChainedNativeStatus.platform})`);
@@ -73,9 +108,20 @@
   }
 
   // ---------- Notification setup ----------
-  const CHANNEL_ID  = 'chain-transitions';
-  const NOTIF_BASE  = 9_000;
+  // Two channels:
+  //   chain-transitions — high importance, sound + vibration + heads-up.
+  //                       Fires once per segment boundary so the user
+  //                       hears/feels the cue even with the screen off.
+  //   chain-status      — low importance, silent. Used for the persistent
+  //                       "▶ now playing" notification so the user always
+  //                       sees current segment / progress in the tray
+  //                       without an extra ping for every status update.
+  const CHANNEL_ID         = 'chain-transitions';
+  const STATUS_CHANNEL_ID  = 'chain-status';
+  const NOTIF_BASE         = 9_000;   // transitions: 9000..9000+N-1
+  const STATUS_ID          = 8_999;   // single sticky "now playing" entry
   let scheduledIds  = [];
+  let statusActive  = false;
 
   async function ensurePermission() {
     try {
@@ -135,8 +181,8 @@
       window.ChainedNativeStatus.channelReady = true;
       return true; // iOS does not use channels
     }
-    try {
-      await LocalNotifications.createChannel({
+    const tasks = [
+      LocalNotifications.createChannel({
         id:           CHANNEL_ID,
         name:         'Chain transitions',
         description:  'Fires when one segment ends and the next begins',
@@ -146,16 +192,22 @@
         lights:       true,
         lightColor:   '#F5B042',
         sound:        undefined,    // default channel sound
-      });
-      window.ChainedNativeStatus.channelReady = true;
-      notifyStatusChanged();
-      return true;
-    } catch (e) {
-      log('createChannel failed:', e);
-      // Channel creation is idempotent; failure usually means already exists.
-      window.ChainedNativeStatus.channelReady = true;
-      return true;
-    }
+      }).catch(e => log('createChannel transitions failed:', e)),
+      LocalNotifications.createChannel({
+        id:           STATUS_CHANNEL_ID,
+        name:         'Chain status',
+        description:  'Persistent indicator of the currently-running segment',
+        importance:   2,            // IMPORTANCE_LOW — silent, no heads-up
+        visibility:   1,
+        vibration:    false,
+        lights:       false,
+        sound:        undefined,
+      }).catch(e => log('createChannel status failed:', e)),
+    ];
+    await Promise.all(tasks);
+    window.ChainedNativeStatus.channelReady = true;
+    notifyStatusChanged();
+    return true;
   }
 
   function fmtDur(s) {
@@ -165,28 +217,144 @@
   }
 
   async function cancelAll() {
-    if (!scheduledIds.length) return;
+    await stopService();
+    const ids = [...scheduledIds];
+    if (statusActive) ids.push(STATUS_ID);
+    if (!ids.length) return;
     try {
       await LocalNotifications.cancel({
-        notifications: scheduledIds.map(id => ({ id })),
+        notifications: ids.map(id => ({ id })),
       });
-      log(`cancelled ${scheduledIds.length} pending notifications`);
+      log(`cancelled ${ids.length} notifications`);
     } catch (e) {
       log('cancel failed:', e);
     }
     scheduledIds = [];
+    statusActive = false;
+  }
+
+  // Post (or replace) the persistent "▶ now playing" notification on the
+  // silent status channel. Capacitor's schedule() with no `at` field fires
+  // immediately. Same id every time means the new content replaces the old
+  // entry in place — exactly what the user asked for: a single tray row
+  // showing what's currently running, updating whenever JS is awake (chain
+  // start, reschedule after skip, app resume).
+  async function postStatus(detail) {
+    if (!detail || !Array.isArray(detail.segments)) return;
+    const { name, segments, currentIndex = 0, isPaused } = detail;
+    const cur = segments[currentIndex];
+    if (!cur) return;
+    const next = segments[currentIndex + 1];
+    const total = segments.length;
+
+    const titlePrefix = isPaused ? '⏸' : '▶';
+    const title  = `${titlePrefix} ${cur.name || 'Segment'} · ${fmtDur(cur.duration)}`;
+    const body   = `Segment ${currentIndex + 1} of ${total} · ${name || 'Chain'}`;
+    const lines  = [
+      `${name || 'Chain'} · Segment ${currentIndex + 1} of ${total}`,
+      `${cur.name || 'Segment'} — ${fmtDur(cur.duration)}`,
+      next ? `Next: ${next.name || 'segment'} (${fmtDur(next.duration)})` : 'Last segment',
+    ];
+
+    try {
+      await LocalNotifications.schedule({
+        notifications: [{
+          id:         STATUS_ID,
+          title,
+          body,
+          largeBody:  lines.join('\n'),
+          summaryText: `${currentIndex + 1}/${total}`,
+          // No `schedule` field → posts immediately.
+          smallIcon:  'ic_stat_icon',
+          iconColor:  '#F5B042',
+          channelId:  STATUS_CHANNEL_ID,
+          ongoing:    true,           // sticky — non-swipeable
+          autoCancel: false,
+        }],
+      });
+      statusActive = true;
+    } catch (e) {
+      log('postStatus failed:', e);
+    }
+  }
+
+  // Clear the persistent "now playing" indicator after a chain ends
+  // naturally — both the foreground service (so the wake lock is released
+  // and the ongoing notification disappears) and the LocalNotifications
+  // fallback row, if either was used. Distinct from cancelAll, which is
+  // called on user-initiated stop and also kills pending transition alarms.
+  async function cancelStatus() {
+    await stopService();
+    if (!statusActive) return;
+    try {
+      await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
+    } catch (e) {
+      log('cancelStatus failed:', e);
+    }
+    statusActive = false;
+  }
+
+  // ---------- Foreground service control plane ----------
+  // On Android, drive the ChainTimerService so the process holds a
+  // partial wake lock and stays Doze-exempt for the full chain run.
+  // On iOS this is a no-op (iOS apps can't keep arbitrary code running
+  // in the background; we rely on UNUserNotificationCenter scheduling).
+  function buildStatusContent(detail) {
+    const { name, segments, currentIndex = 0, isPaused } = detail;
+    const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
+    const next = segments[currentIndex + 1];
+    const total = segments.length;
+    const titlePrefix = isPaused ? '⏸' : '▶';
+    return {
+      title:    `${titlePrefix} ${cur.name || 'Segment'} · ${fmtDur(cur.duration)}`,
+      body:     `Segment ${currentIndex + 1} of ${total} · ${name || 'Chain'}`,
+      largeBody: [
+        `${name || 'Chain'} · Segment ${currentIndex + 1} of ${total}`,
+        `${cur.name || 'Segment'} — ${fmtDur(cur.duration)}`,
+        next ? `Next: ${next.name || 'segment'} (${fmtDur(next.duration)})` : 'Last segment',
+      ].join('\n'),
+      subText:  `${currentIndex + 1}/${total}`,
+    };
+  }
+
+  let serviceRunning = false;
+  async function startOrUpdateService(detail) {
+    if (!chainTimerAvailable) return false;
+    const content = buildStatusContent(detail);
+    try {
+      if (serviceRunning) {
+        await ChainTimer.update(content);
+      } else {
+        await ChainTimer.start(content);
+        serviceRunning = true;
+      }
+      window.ChainedNativeStatus.fgService = true;
+      return true;
+    } catch (e) {
+      log('ChainTimer service call failed:', e);
+      return false;
+    }
+  }
+
+  async function stopService() {
+    if (!chainTimerAvailable || !serviceRunning) return;
+    try { await ChainTimer.stop(); } catch (e) { log('ChainTimer.stop failed:', e); }
+    serviceRunning = false;
+    window.ChainedNativeStatus.fgService = false;
   }
 
   // Sweep notifications scheduled by us in a previous app session.
   // scheduledIds is in-memory only and resets on every page load, so
   // without this any leftover notifications would fire at random later.
+  // STATUS_ID (8999) is also in-range so the prior session's sticky
+  // "now playing" entry gets cleared too.
   async function sweepOrphans() {
     if (typeof LocalNotifications.getPending !== 'function') return;
     try {
       const pending = await LocalNotifications.getPending();
       const ours = (pending?.notifications || []).filter(n => {
         const id = Number(n.id);
-        return id >= NOTIF_BASE && id < 99_000;
+        return (id >= NOTIF_BASE && id < 99_000) || id === STATUS_ID;
       });
       if (ours.length) {
         await LocalNotifications.cancel({ notifications: ours.map(n => ({ id: Number(n.id) })) });
@@ -205,9 +373,44 @@
       return;
     }
     await ensureChannel();
-    await cancelAll();
 
-    const { name, segments, currentIndex = 0, segmentStartedAtMs } = detail;
+    // Cancel pre-scheduled alarms but don't tear down the foreground
+    // service — startOrUpdateService below will replace its notification
+    // in place. Stopping the FGS would briefly drop the wake lock and
+    // could let Android freeze the process between cancel and re-schedule.
+    {
+      const ids = [...scheduledIds];
+      if (statusActive) ids.push(STATUS_ID);
+      if (ids.length) {
+        try { await LocalNotifications.cancel({ notifications: ids.map(id => ({ id })) }); }
+        catch (e) { log('cancel pending failed:', e); }
+      }
+      scheduledIds = [];
+      statusActive = false;
+    }
+
+    const { name, segments, currentIndex = 0, segmentStartedAtMs, isPaused } = detail;
+
+    // Foreground service drives the persistent "now playing" indicator.
+    // It also holds the partial wake lock that keeps Doze + WebView pause
+    // from freezing the engine. Started here so the wake lock is in place
+    // *before* we schedule the alarm queue (which is when timing matters).
+    const fgsActive = await startOrUpdateService(detail);
+
+    // Fallback: if the FGS plugin isn't available (older APK build) keep
+    // the in-tray sticky LocalNotification so the user still sees status.
+    if (!fgsActive) await postStatus(detail);
+
+    // While paused, don't schedule transition alarms — wall-clock keeps
+    // marching during a pause, so any pre-scheduled alarm would fire too
+    // early relative to the chain's resumed timeline. They get re-scheduled
+    // on resume.
+    if (isPaused) {
+      window.ChainedNativeStatus.lastSchedule = { count: 0, error: null, when: Date.now(), paused: true };
+      notifyStatusChanged();
+      return;
+    }
+
     const startWall = segmentStartedAtMs || Date.now();
     const notifs = [];
     let cumMs = 0;
@@ -220,17 +423,32 @@
 
       const isLast = i === segments.length - 1;
       const next = segments[i + 1];
+      const title = isLast
+        ? '✓ Chain complete'
+        : `▶ ${next.name || 'segment'} · ${fmtDur(next.duration)}`;
+      const body = isLast
+        ? `${name || 'Chain'} · ${segments.length} segments done`
+        : `Segment ${i + 2} of ${segments.length} · ${name || 'Chain'}`;
+      const after = !isLast ? segments[i + 2] : null;
+      const largeBody = isLast
+        ? `${name || 'Chain'} complete\n${segments.length} segments done`
+        : [
+            `${name || 'Chain'} · Segment ${i + 2} of ${segments.length}`,
+            `${next.name || 'segment'} — ${fmtDur(next.duration)}`,
+            after ? `Up next: ${after.name || 'segment'} (${fmtDur(after.duration)})` : 'Last segment',
+          ].join('\n');
+
       notifs.push({
-        id:        NOTIF_BASE + i,
-        title:     isLast ? '✓ Chain complete' : `Next: ${next.name || 'segment'}`,
-        body:      isLast
-          ? `${name || 'Chain'} · ${segments.length} segments done`
-          : `${fmtDur(next.duration)} · segment ${i + 2} of ${segments.length}`,
-        schedule:  { at: fireAt, allowWhileIdle: true },
-        smallIcon: 'ic_stat_icon',
-        iconColor: '#F5B042',
-        channelId: CHANNEL_ID,
-        ongoing:   false,
+        id:         NOTIF_BASE + i,
+        title,
+        body,
+        largeBody,
+        summaryText: `${i + 2}/${segments.length}`,
+        schedule:   { at: fireAt, allowWhileIdle: true },
+        smallIcon:  'ic_stat_icon',
+        iconColor:  '#F5B042',
+        channelId:  CHANNEL_ID,
+        ongoing:    false,
         autoCancel: true,
       });
     }
@@ -321,13 +539,17 @@
   const queuedEvents = [];
 
   function dispatch(type, detail) {
-    if (type === 'schedule') return serialize(() => scheduleAll(detail));
-    if (type === 'cancel')   return serialize(() => cancelAll());
+    if (type === 'schedule')       return serialize(() => scheduleAll(detail));
+    if (type === 'cancel')         return serialize(() => cancelAll());
+    if (type === 'cancel-status')  return serialize(() => cancelStatus());
   }
 
   window.addEventListener('chain:start',      e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
   window.addEventListener('chain:reschedule', e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
   window.addEventListener('chain:cancel',     ()  => preWarmDone ? dispatch('cancel')           : queuedEvents.push({ type: 'cancel' }));
+  // Chain finished naturally: clear only the sticky status row, leave the
+  // "✓ Chain complete" alarm that just fired in the tray for the user.
+  window.addEventListener('chain:complete',   ()  => preWarmDone ? dispatch('cancel-status')    : queuedEvents.push({ type: 'cancel-status' }));
 
   // Pre-warm: request permission + create channel + check exact-alarm
   // grant up front, before any chain starts, so the OS dialog isn't

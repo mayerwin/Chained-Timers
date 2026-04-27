@@ -271,6 +271,7 @@ Bump `versionCode` (must increase) and `versionName` in `android/app/build.gradl
 
 - **`USE_EXACT_ALARM` is restricted by Play Store policy** — only allowed for apps where exact alarms are central (alarm clocks, timers, calendars, ride-sharing). Chained Timers qualifies as a timer app, but you'll need to declare the use case in the *Permissions declaration form* during submission.
 - **`SCHEDULE_EXACT_ALARM`** without `USE_EXACT_ALARM` is more strictly gated; declare both, document use case as "calendar/alarm".
+- **`FOREGROUND_SERVICE_SPECIAL_USE`** (added in v1.1.0) is also restricted — Play wants a written justification for the SPECIAL_USE foreground-service type. The full submission text lives in [`publishing/android/permissions-declaration.md`](publishing/android/permissions-declaration.md). The manifest also ships a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` element with the same justification, which Play reads automatically.
 - Play requires **target SDK** to be no more than 1 year behind the latest. We're on 36 (Android 16), so safe through 2027.
 
 ---
@@ -401,7 +402,8 @@ You can automate steps 3 & 4 in CI, but Play upload requires a service-account J
 ## What's currently in the repo (state-of-play)
 
 - ✅ Sideload APK signed with stable keystore (no Play key yet)
-- ✅ AndroidManifest declares `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM` (Play permission declaration form will be needed)
+- ✅ AndroidManifest declares `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM` + `FOREGROUND_SERVICE_SPECIAL_USE` (Play permission declaration form will be needed for all three — see `publishing/android/permissions-declaration.md`)
+- ✅ Foreground service (`ChainTimerService`) keeps the timer engine ticking and alarms exempt from Doze for the duration of every chain
 - ✅ `applicationId` / `bundleId` set to `com.mayerwin.chainedtimers` for both
 - ✅ Privacy policy text drafted in this document (not yet hosted)
 - ✅ Icons rendered at all PWA / Android launcher densities

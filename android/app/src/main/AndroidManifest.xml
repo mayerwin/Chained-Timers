@@ -33,6 +33,25 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!--
+          Foreground service that keeps the timer engine running and
+          AlarmManager alarms exempt from Doze while a chain is active.
+          See ChainTimerService for the full rationale.
+
+          foregroundServiceType="specialUse" — the timer doesn't fit any
+          of the predefined types (camera, location, mediaPlayback, …).
+          Per Android 14+ requirements we declare a justification subtype
+          via the PROPERTY_SPECIAL_USE_FGS_SUBTYPE property below.
+        -->
+        <service
+            android:name=".ChainTimerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Interval timer that must keep ticking while the screen is locked or the app is backgrounded so workout, breathwork, cooking and study segment transitions fire on time and remain visible in the notification shade." />
+        </service>
     </application>
 
     <!-- Permissions -->
@@ -54,4 +73,22 @@
     -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!--
+      Foreground service — required for ChainTimerService. The service
+      holds a partial wake lock and posts an ongoing notification while
+      a chain is running so:
+        - the WebView's JS engine isn't frozen by the OS in the background
+        - AlarmManager alarms aren't delayed/coalesced by Doze mode
+        - the user always sees current chain state in the notification shade
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      Lets us prompt the user to exempt the app from manufacturer-specific
+      battery optimization, which on phones like Samsung / Xiaomi / OPPO
+      otherwise overrides even our foreground service + exact alarms.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

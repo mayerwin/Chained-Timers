@@ -34,12 +34,12 @@ timer,interval,workout,hiit,tabata,plank,pomodoro,breath,boxing,emom,fitness,foc
 
 > Don't repeat words from the title; Apple already indexes those.
 
-## Description (4000 chars max — used ~2 600)
+## Description (4000 chars max — used ~2 700)
 
 ```
 Chained Timers is a focused interval-timer app built around a single idea: instead of juggling three separate timers, build a named chain once — a sequence of segments with their own durations and colors — and let the app fire the next one automatically as each one ends.
 
-Vibration, sound and a notification mark every transition. Notifications fire on time even when the screen is locked.
+Vibration, sound and a notification mark every transition. The chain keeps ticking on time even when the screen is locked or you've switched to another app.
 
 SCENARIOS
 
@@ -56,6 +56,8 @@ WHAT MAKES IT DIFFERENT
 • Loops. Repeat a whole chain N times, or just an embedded sub-chain.
 • Cinematic run mode. Editorial display typography, tabular numerals, a calibrated amber accent, and a progression strip showing exactly where you are in the chain.
 • Pre-start countdown, final-3-second tick, instant pause, drag-to-reorder.
+• Reliable in the background. The wall-clock engine and pre-scheduled local notifications keep your chain accurate to the second across screen-locks and app-switches.
+• Crash-safe. A chain that was running survives a force-quit or OS reboot — when you reopen the app you land back on the right segment.
 
 PRIVACY
 
@@ -68,6 +70,20 @@ The app uses local notifications and haptic feedback to fire segment-end alerts 
 Templates included: Tabata, EMOM 10, Boxing Rounds, Pomodoro, Plank Stack, Box Breath. Tap any to fork into your library, then customise freely.
 
 Open source: github.com/mayerwin/Chained-Timers
+```
+
+---
+
+## What's new in v1.1.0 (release notes — 4000 chars max — used ~530)
+
+```
+Reliability rewrite for background timers.
+
+• Wall-clock timer engine: chain state stays correct across screen-locks, app-switches, and brief WebView freezes
+• Crash-safe persistence: a chain that was running survives a force-quit or device restart — reopen the app and you land back on the right segment
+• Persistent now-playing indicator showing current segment, position in chain, and what's next
+• Pause now updates the live notification with a paused indicator
+• Various subtler timing fixes to keep transitions firing on the second
 ```
 
 ---

@@ -75,6 +75,7 @@ Once installed, the app gets its own icon, runs offline, and can vibrate (Androi
 
 For true background reliability — segment notifications that fire when the screen is locked, the phone is in your pocket, the app has been swept away — the web platform isn't enough. The repo ships a [Capacitor](https://capacitorjs.com/) wrapper that re-uses the same web code inside a thin native shell, with access to:
 
+- **Foreground service** (Android, custom plugin) — runs for the duration of the chain, holds a partial wake lock, and exempts the app process from Doze. Posts a persistent low-importance "▶ Now playing" notification showing current segment, position in chain, and what's coming next.
 - **Native local notifications** (`@capacitor/local-notifications`) — the OS schedules each segment-end notification at chain start; they fire on time even with the app fully closed.
 - **Native haptics** (`@capacitor/haptics`) — real vibration on iOS, where `navigator.vibrate` doesn't exist.
 - **Native status bar** — themed to match the app's warm-black palette.
@@ -151,21 +152,24 @@ Open the app → ⚙ **Settings** → scroll to the **Native bridge** panel. It 
 - `notifs: granted` — Android 13+ runtime notification permission (auto-prompted on first launch).
 - `channel: ready` — the high-importance notification channel was created.
 - `exact-alarm: granted` — **the critical one** for Android 12+ (see below).
+- `background service: running / idle` — whether the foreground service holding the wake lock is currently active. Should read `running` while a chain is in progress.
 - `last schedule: N notifications` — confirms the most recent chain wired its segment notifications into the OS.
 
 Tap **Test in 10s**, lock the screen, and confirm the notification fires on time.
 
-Two things commonly cause background notifications to be late or to not fire at all:
+The native build now also runs a **foreground service** (`ChainTimerService`) for the duration of every chain. It holds a partial wake lock, exempts the process from Doze / App Standby, and posts a persistent low-importance "▶ Now playing" notification. As long as that notification is visible while you're running a chain, the timer will not freeze in the background and segment alarms will not be coalesced.
+
+If the persistent notification *isn't* visible despite the chain running, two things commonly cause it:
 
 **1. Exact-alarm permission denied (Android 12+).** Without `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`, Android downgrades scheduled alarms to *inexact* — they can be delayed by 10+ minutes during Doze mode. The native build declares `USE_EXACT_ALARM` (auto-granted on Android 13+ for alarm/timer apps). On Android 12 the user can revoke it. If the panel shows `exact-alarm: denied`, tap **Fix exact alarms** — it opens *Settings → Special access → Alarms & reminders → Chained Timers* — toggle it ON.
 
-**2. Aggressive battery optimization (Samsung, Xiaomi, OPPO, Huawei…).** Some manufacturers kill app processes ahead of normal Doze, which can cancel pending alarms. The fix is OS-side, not app-side:
+**2. Aggressive battery optimization (Samsung, Xiaomi, OPPO, Huawei…).** Some manufacturers kill foreground services and app processes ahead of normal Doze, which can cancel pending alarms even with a foreground service running. The fix is OS-side, not app-side:
 
 - *Settings → Apps → Chained Timers → Battery → Unrestricted*
 - Samsung: also check *Settings → Device care → Battery → Background usage limits → Sleeping apps* and remove the app.
 - Xiaomi (MIUI): *Security → Permissions → Autostart → enable for Chained Timers*; and *Battery saver → No restrictions*.
 
-Notifications are scheduled via `AlarmManager.setExactAndAllowWhileIdle` — the strongest "fire at this exact time, even in Doze" primitive Android exposes. There is no further code-side workaround when the OS chooses to kill the process.
+Notifications are scheduled via `AlarmManager.setExactAndAllowWhileIdle` — the strongest "fire at this exact time, even in Doze" primitive Android exposes — and the foreground service plus partial wake lock keep the process alive so those alarms can fire on time. There is no further code-side workaround when the OS chooses to kill a foreground service entirely (which only happens on a small number of OEM Android skins with extreme battery savers).
 
 ---
 
@@ -217,7 +221,8 @@ Everything is on by default — turn off what you don't want.
 
 - **Web core** — vanilla HTML, CSS, JavaScript. No framework, no bundler, no runtime dependencies. ~30 KB of source.
 - **PWA** — network-first service worker for HTML, cache-first for static assets.
-- **Native shell** — [Capacitor 8](https://capacitorjs.com/) with `@capacitor/local-notifications` and `@capacitor/haptics` plugins. The web code is untouched in native builds; a tiny bridge in [`js/native.js`](js/native.js) listens for `chain:start` / `chain:cancel` / `chain:reschedule` events from the engine and forwards them to the native scheduler.
+- **Native shell** — [Capacitor 8](https://capacitorjs.com/) with `@capacitor/local-notifications`, `@capacitor/haptics`, and a small in-repo Android plugin ([`ChainTimerService`](android/app/src/main/java/com/mayerwin/chainedtimers/ChainTimerService.java) + [`ChainTimerPlugin`](android/app/src/main/java/com/mayerwin/chainedtimers/ChainTimerPlugin.java)) that drives a foreground service holding a partial wake lock for the duration of every chain. The web code is untouched in native builds; a tiny bridge in [`js/native.js`](js/native.js) listens for `chain:start` / `chain:cancel` / `chain:reschedule` / `chain:complete` events from the engine and forwards them to both the native local-notification scheduler and the foreground service.
+- **Wall-clock engine** — the timer math is driven by `Date.now()`, never `performance.now()`, so the chain stays accurate to the second across screen-locks, app-switches, brief WebView freezes, and even out-of-process kills (a running chain is persisted to localStorage on every transition and restored on next launch).
 - **Type display** — **Anton** + **Fraunces** + **JetBrains Mono** + **Manrope** via Google Fonts (preconnected).
 
 ### Local development
