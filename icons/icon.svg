@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-label="Chained Timers">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="38%" r="62%">
+      <stop offset="0" stop-color="#F5B042" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#0E0D0B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBC061"/>
+      <stop offset="1" stop-color="#E29A2A"/>
+    </linearGradient>
+    <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F5B042"/>
+      <stop offset="1" stop-color="#9C6E22"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" fill="#0E0D0B"/>
+  <rect width="512" height="512" fill="url(#bgGlow)"/>
+
+  <!-- chain spine: thin amber thread connecting the three nodes -->
+  <line x1="256" y1="146" x2="256" y2="386" stroke="url(#lineGrad)" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+
+  <!-- ============ NODE 1 (TOP) - small amber dot ============ -->
+  <circle cx="256" cy="120" r="14" fill="#F5B042"/>
+
+  <!-- ============ NODE 2 (CENTER) - timer dial, the hero ============ -->
+  <g transform="translate(256 256)">
+    <!-- outer ring -->
+    <circle r="106" fill="none" stroke="url(#ringGrad)" stroke-width="32"/>
+    <!-- tick marks at 12, 3, 6, 9 -->
+    <g stroke="#F5B042" stroke-width="10" stroke-linecap="round">
+      <line x1="0"   y1="-78" x2="0"   y2="-58"/>
+      <line x1="78"  y1="0"   x2="58"  y2="0"/>
+      <line x1="0"   y1="78"  x2="0"   y2="58"/>
+      <line x1="-78" y1="0"   x2="-58" y2="0"/>
+    </g>
+    <!-- progress arc from 12 sweeping ~70% -->
+    <circle r="64" fill="none" stroke="#F5B042" stroke-width="6" stroke-linecap="round"
+            stroke-dasharray="402 402" stroke-dashoffset="120"
+            transform="rotate(-90)" opacity="0.85"/>
+    <!-- center pip -->
+    <circle r="11" fill="#F5B042"/>
+  </g>
+
+  <!-- ============ NODE 3 (BOTTOM) - small amber dot ============ -->
+  <circle cx="256" cy="412" r="14" fill="#F5B042"/>
+</svg>

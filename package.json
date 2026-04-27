@@ -1,0 +1,40 @@
+{
+  "name": "chained-timers",
+  "version": "1.0.0",
+  "description": "The interval forge — a small, fast, installable PWA that sequences timers into named chains. Native-shell builds via Capacitor.",
+  "private": true,
+  "license": "MIT",
+  "homepage": "https://mayerwin.github.io/Chained-Timers/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mayerwin/Chained-Timers.git"
+  },
+  "scripts": {
+    "serve":             "node tools/serve.mjs",
+    "icons":             "node tools/generate-icons.mjs",
+    "smoke":             "node tools/smoke.mjs",
+    "screenshots:store": "node tools/store-screenshots.mjs",
+    "publishing:refresh":"node tools/publishing-refresh.mjs",
+    "build:www":         "node tools/build-www.mjs",
+    "cap:sync":        "npm run build:www && npx cap sync",
+    "cap:android":     "npm run cap:sync && npx cap open android",
+    "cap:ios":         "npm run cap:sync && npx cap open ios",
+    "cap:add:android":   "npm run build:www && npx cap add android && node tools/generate-android-icons.mjs",
+    "cap:add:ios":       "npm run build:www && npx cap add ios",
+    "icons:android":     "node tools/generate-android-icons.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core":                "^8.3.1",
+    "@capacitor/haptics":             "^8.0.2",
+    "@capacitor/local-notifications": "^8.0.2",
+    "@capacitor/preferences":         "^8.0.1",
+    "@capacitor/status-bar":          "^8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli":     "^8.3.1",
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/ios":     "^8.3.1",
+    "playwright":         "^1.59.1",
+    "sharp":              "^0.34.5"
+  }
+}

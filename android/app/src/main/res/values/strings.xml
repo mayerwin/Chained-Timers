@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Chained Timers</string>
+    <string name="title_activity_main">Chained Timers</string>
+    <string name="package_name">com.mayerwin.chainedtimers</string>
+    <string name="custom_url_scheme">com.mayerwin.chainedtimers</string>
+</resources>

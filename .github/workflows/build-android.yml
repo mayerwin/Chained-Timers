@@ -1,0 +1,98 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+env:
+  # Opt actions into Node 24 ahead of the June 2026 forced cutover.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+permissions:
+  contents: write   # needed for softprops/action-gh-release to create the GitHub Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install npm deps
+        run: npm ci --no-fund --no-audit
+
+      - name: Build web assets and sync Capacitor
+        run: npm run cap:sync
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Show APK info
+        run: ls -lh android/app/build/outputs/apk/debug/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chained-timers-${{ github.sha }}-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage APK for release with friendly name
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p release
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "release/chained-timers-${GITHUB_REF_NAME}.apk"
+          ls -lh release/
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/chained-timers-*.apk
+          generate_release_notes: true
+          body: |
+            ## Sideload-installable Android APK
+
+            ### Install
+            1. Download `chained-timers-${{ github.ref_name }}.apk` below.
+            2. On your Android phone: **Settings → Apps → Special access → Install unknown apps** → enable for your browser/file manager.
+            3. Open the downloaded `.apk` to install.
+            4. **Important — Android 12+:** open the app, go to ⚙ **Settings → Native bridge**. If `exact-alarm` shows `denied`, tap **Fix exact alarms** and grant the permission. Without it, segment notifications are deferred by Doze (10+ minutes).
+            5. If your phone is Samsung / Xiaomi / OPPO / Huawei, also disable battery optimisation for Chained Timers (see [README — Android background notes](https://github.com/mayerwin/Chained-Timers#android--if-notifications-still-dont-fire-when-the-screen-is-locked)).
+
+            ### Verify before installing
+            APK signing certificate fingerprint (SHA-256):
+
+            ```
+            43:26:AA:75:83:02:31:3E:F9:42:C5:78:D0:50:A4:8F:6F:75:7F:26:D2:4C:C0:C7:A7:7A:40:2D:B2:90:D2:36
+            ```
+
+            All releases are signed with the same [committed sideload keystore](https://github.com/mayerwin/Chained-Timers/blob/main/android/sideload.keystore), so subsequent versions install in-place over this one.
+
+            ---

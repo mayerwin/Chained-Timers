@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0E0D0B" />
+  <title>Privacy Policy — Chained Timers</title>
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;1,9..144,400&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0E0D0B; --surface: #1A1714; --rule: #2C2823; --rule-strong: #3D372F;
+      --ink: #F2EDE2; --ink-soft: #C9C2B3; --ink-dim: #8A8273;
+      --accent: #F5B042; --link: #E9CFA0;
+      --f-display: 'Anton', 'Helvetica Neue', sans-serif;
+      --f-serif: 'Fraunces', 'Times New Roman', serif;
+      --f-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --f-body: 'Manrope', system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--f-body);
+      font-size: 16px;
+      line-height: 1.65;
+      letter-spacing: 0.005em;
+      -webkit-font-smoothing: antialiased;
+      background-image: radial-gradient(ellipse 70% 40% at 50% -10%, rgba(245,176,66,0.05), transparent 60%);
+      min-height: 100vh;
+    }
+    a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 56px 24px 80px;
+    }
+    header { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 36px; }
+    .crumb {
+      font-family: var(--f-mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    .crumb a { color: var(--ink-soft); text-decoration: none; }
+    .crumb a:hover { color: var(--accent); }
+    h1 {
+      font-family: var(--f-display);
+      font-size: 56px;
+      letter-spacing: 0.015em;
+      text-transform: uppercase;
+      font-weight: 400;
+      margin: 16px 0 6px;
+      line-height: 1;
+      color: var(--ink);
+    }
+    h1 em {
+      font-family: var(--f-serif);
+      font-style: italic;
+      font-weight: 400;
+      text-transform: none;
+      font-size: 28px;
+      letter-spacing: 0;
+      display: block;
+      color: var(--accent);
+      margin-top: 8px;
+    }
+    h2 {
+      font-family: var(--f-display);
+      font-size: 24px;
+      letter-spacing: 0.015em;
+      text-transform: uppercase;
+      font-weight: 400;
+      color: var(--ink);
+      margin: 40px 0 12px;
+    }
+    .meta {
+      font-family: var(--f-mono);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
+      margin-top: 14px;
+    }
+    p { color: var(--ink-soft); margin: 0 0 14px; }
+    ul {
+      color: var(--ink-soft);
+      padding-left: 22px;
+      margin: 0 0 18px;
+    }
+    li { margin-bottom: 8px; }
+    code, kbd {
+      font-family: var(--f-mono);
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .lead {
+      font-family: var(--f-serif);
+      font-style: italic;
+      font-size: 19px;
+      line-height: 1.55;
+      color: var(--ink);
+      margin: 0 0 28px;
+    }
+    .lead em { color: var(--accent); }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      border-radius: 14px;
+      padding: 18px 22px;
+      margin: 18px 0;
+    }
+    .panel strong {
+      font-family: var(--f-mono);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      display: block;
+      margin-bottom: 6px;
+    }
+    .panel p:last-child { margin-bottom: 0; }
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+      font-family: var(--f-serif);
+      font-style: italic;
+      font-size: 14px;
+      color: var(--ink-dim);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="crumb">
+        <a href="./">← Chained Timers</a>
+      </div>
+      <h1>Privacy Policy
+        <em>Short version: nothing leaves your device.</em>
+      </h1>
+      <div class="meta">Last updated: 26 April 2026 · Version 1.0.0</div>
+    </header>
+
+    <p class="lead">
+      Chained Timers does <em>not</em> collect, store, transmit or share any personal data — full stop.
+      No analytics. No crash reporter. No ads. No third-party trackers. No remote config. No account system.
+    </p>
+
+    <h2>What is stored, and where</h2>
+    <p>
+      All chains, settings, and history are stored locally on your device using the operating system's local storage
+      (browser <code>localStorage</code> for the web/PWA version, native <code>Preferences</code> plugin for the
+      Android and iOS native builds). Nothing is uploaded to any server we operate, and no third-party SDK has access
+      to it.
+    </p>
+
+    <h2>Network requests</h2>
+    <p>The app makes the following network requests, and only these:</p>
+    <ul>
+      <li>
+        <strong>Web fonts</strong> from <code>fonts.googleapis.com</code> and <code>fonts.gstatic.com</code> on the
+        public website. Google may log standard request metadata (IP, User-Agent) per their
+        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">privacy policy</a>; we receive
+        none of this. The native Android and iOS builds bundle the necessary fonts and do not contact Google.
+      </li>
+      <li>
+        <strong>Initial asset download</strong> on first install of the PWA. After that the service worker serves
+        everything offline.
+      </li>
+    </ul>
+
+    <h2>Permissions we request</h2>
+    <ul>
+      <li><strong>Notifications</strong> (<code>POST_NOTIFICATIONS</code> on Android, equivalent on iOS): to display the segment-transition alerts you've configured.</li>
+      <li><strong>Exact alarms</strong> (<code>USE_EXACT_ALARM</code> / <code>SCHEDULE_EXACT_ALARM</code> on Android 12+): to schedule those notifications at the precise times required by your timer chains, even when the screen is off.</li>
+      <li><strong>Vibration</strong> (<code>VIBRATE</code> on Android, Haptic feedback on iOS): to vibrate the device at segment transitions, if enabled in settings.</li>
+      <li><strong>Wake lock</strong> (<code>WAKE_LOCK</code> on Android, <em>idle timer disabled</em> on iOS): to keep the screen awake during a chain, if you enable that setting.</li>
+      <li><strong>Boot completion</strong> (<code>RECEIVE_BOOT_COMPLETED</code> on Android): so your scheduled notifications survive a phone restart.</li>
+    </ul>
+    <p>
+      No camera, microphone, location, contacts, calendar, photo library, or any other personal-data-bearing
+      permission is requested.
+    </p>
+
+    <div class="panel">
+      <strong>Children</strong>
+      <p>The app does not knowingly collect any data from any user, including children, because it does not collect
+        data from anyone. It is suitable for all ages.</p>
+    </div>
+
+    <div class="panel">
+      <strong>Changes to this policy</strong>
+      <p>If we ever change what the app collects (we currently have no plans to), this page will be updated and the
+        version number above bumped. You can subscribe to the
+        <a href="https://github.com/mayerwin/Chained-Timers" target="_blank" rel="noopener">GitHub repository</a>
+        to be notified.</p>
+    </div>
+
+    <h2>Contact</h2>
+    <p>
+      For questions, please open an issue at
+      <a href="https://github.com/mayerwin/Chained-Timers/issues" target="_blank" rel="noopener">github.com/mayerwin/Chained-Timers/issues</a>.
+    </p>
+
+    <footer>
+      Source on <a href="https://github.com/mayerwin/Chained-Timers" target="_blank" rel="noopener">GitHub</a>.
+    </footer>
+  </main>
+</body>
+</html>

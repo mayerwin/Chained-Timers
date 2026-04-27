@@ -1,0 +1,53 @@
+.DS_Store
+node_modules/
+.cache/
+.tmp/
+.vscode/
+.claude/
+*.log
+
+# Smoke-test scratch screenshots — keep only the curated docs/screenshots
+screenshots/_*.png
+
+# Capacitor build output
+dist/
+
+# Android — generated/build files (the project skeleton is committed)
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/app/release/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/captures/
+android/local.properties
+android/*.iml
+android/app/*.iml
+android/keystore.properties
+android/release.keystore
+android/upload.keystore
+upload.keystore
+keystore.properties
+
+# Publishing-time secrets (filled-in copy of publishing/secrets.template.md)
+publishing/secrets.local.md
+# iOS distribution credentials
+*.p12
+*.p8
+AuthKey_*.p8
+# Play Console service account
+play-service-account*.json
+
+# iOS — generated/build files
+ios/App/build/
+ios/App/Pods/
+ios/App/output/
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+ios/DerivedData/
+ios/.idea/
+*.xcuserstate
+xcuserdata/

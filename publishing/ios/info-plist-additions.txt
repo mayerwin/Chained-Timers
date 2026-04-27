@@ -1,0 +1,42 @@
+<!--
+   Paste these snippets INSIDE the top-level <dict> ... </dict> in
+   ios/App/App/Info.plist (Xcode → Project navigator → App → Info.plist
+   → right-click → Open As → Source Code).
+
+   Place them just before the closing </dict>. Do NOT wrap them in
+   another <dict>.
+
+   These are required by Apple's App Review for any permission your
+   app might prompt for. Without them, iOS will crash the app the
+   first time it tries to request the permission.
+-->
+
+<key>NSUserNotificationsUsageDescription</key>
+<string>Chained Timers schedules notifications so segment transitions fire even when the app is backgrounded or the screen is locked.</string>
+
+<!--
+  Capacitor's @capacitor/local-notifications plugin uses
+  UNUserNotificationCenter; iOS does not strictly require a usage
+  description for that, but App Review checks for one.
+-->
+
+<!--
+  ITSAppUsesNonExemptEncryption — REQUIRED for App Store submission.
+  Set to <false/> because Chained Timers uses no encryption beyond
+  the OS-bundled HTTPS/TLS for fetching Google Fonts on the web
+  version. The native build does not even fetch fonts (they are
+  bundled inside the app).
+-->
+<key>ITSAppUsesNonExemptEncryption</key>
+<false/>
+
+<!--
+  Optional: if you want the app to keep the screen awake during a
+  chain (using Wake Lock), Capacitor handles this automatically via
+  UIApplication.shared.isIdleTimerDisabled. No Info.plist key needed.
+
+  Optional: if you ever decide to use Background Modes (Audio etc.),
+  add the corresponding UIBackgroundModes key here. We deliberately
+  do NOT use Audio Background Mode for the silent-audio keep-alive
+  trick — Apple rejects that pattern under guideline 2.5.1.
+-->

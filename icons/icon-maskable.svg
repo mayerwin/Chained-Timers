@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-label="Chained Timers (maskable)">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="65%">
+      <stop offset="0" stop-color="#F5B042" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0E0D0B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBC061"/>
+      <stop offset="1" stop-color="#E29A2A"/>
+    </linearGradient>
+    <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F5B042"/>
+      <stop offset="1" stop-color="#9C6E22"/>
+    </linearGradient>
+  </defs>
+
+  <!-- maskable: full bleed background -->
+  <rect width="512" height="512" fill="#0E0D0B"/>
+  <rect width="512" height="512" fill="url(#bgGlow)"/>
+
+  <!-- artwork constrained to safe ~80% center zone (centered on 256,256) -->
+  <line x1="256" y1="180" x2="256" y2="332" stroke="url(#lineGrad)" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+  <circle cx="256" cy="172" r="11" fill="#F5B042"/>
+  <g transform="translate(256 256)">
+    <circle r="74" fill="none" stroke="url(#ringGrad)" stroke-width="22"/>
+    <g stroke="#F5B042" stroke-width="7" stroke-linecap="round">
+      <line x1="0"   y1="-54" x2="0"   y2="-40"/>
+      <line x1="54"  y1="0"   x2="40"  y2="0"/>
+      <line x1="0"   y1="54"  x2="0"   y2="40"/>
+      <line x1="-54" y1="0"   x2="-40" y2="0"/>
+    </g>
+    <circle r="64" cx="0" cy="0" fill="none" stroke="#F5B042" stroke-width="5" stroke-linecap="round"
+            stroke-dasharray="230 402" transform="rotate(-90)" opacity="0.85"/>
+    <circle r="8" fill="#F5B042"/>
+  </g>
+  <circle cx="256" cy="340" r="11" fill="#F5B042"/>
+</svg>

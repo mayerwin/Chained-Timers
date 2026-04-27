@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0E0D0B" />
+  <meta name="description" content="Chained Timers — sequence intervals into named chains for sport, breathwork, cooking, study. Vibrates and notifies between segments. Installable PWA." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Chains" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <title>Chained Timers — Interval Chains for Sport &amp; Focus</title>
+
+  <meta property="og:title" content="Chained Timers" />
+  <meta property="og:description" content="Sequence intervals into named chains for sport, breathwork, cooking, study. The interval forge — installable PWA, offline, no account." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://mayerwin.github.io/Chained-Timers/" />
+  <meta property="og:image" content="https://mayerwin.github.io/Chained-Timers/icons/social-card.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Chained Timers" />
+  <meta name="twitter:description" content="The interval forge — installable PWA for chained timers." />
+  <meta name="twitter:image" content="https://mayerwin.github.io/Chained-Timers/icons/social-card.png" />
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body data-view="library">
+
+  <!-- ░░░░░░░░░░░░░░░░ APP SHELL ░░░░░░░░░░░░░░░░ -->
+  <div class="app">
+
+    <!-- ░░░░░░░░ LIBRARY VIEW ░░░░░░░░ -->
+    <section class="view view-library" data-view-name="library">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="wordmark">
+            <span class="wordmark-line">CHAINED</span>
+            <span class="wordmark-line">TIMERS</span>
+          </div>
+          <p class="tagline"><em>The interval forge.</em></p>
+        </div>
+        <button class="icon-btn" id="open-settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </header>
+
+      <div class="ribbon">
+        <span class="ribbon-mark">№</span>
+        <span class="ribbon-text" id="library-count">— chains</span>
+        <span class="ribbon-rule"></span>
+        <span class="ribbon-meta" id="library-total">— total</span>
+      </div>
+
+      <main class="library-scroll">
+        <ul class="chain-list" id="chain-list" role="list"></ul>
+
+        <div class="empty-state" id="empty-state" hidden>
+          <div class="empty-art" aria-hidden="true">
+            <span class="ring"></span><span class="ring"></span><span class="ring"></span>
+          </div>
+          <h2 class="empty-title">No chains yet.</h2>
+          <p class="empty-body">Forge your first chain — string together intervals and let the app conduct your workout, breathwork, or study session.</p>
+          <button class="btn btn-primary" id="empty-new-chain">+ New chain</button>
+          <button class="btn btn-ghost" id="empty-templates">Browse templates</button>
+        </div>
+      </main>
+
+      <nav class="tabbar" role="tablist">
+        <button class="tab is-active" data-tab="library" role="tab" aria-selected="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          <span>Library</span>
+        </button>
+        <button class="tab tab-fab" id="new-chain-fab" aria-label="New chain">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="tab" data-tab="templates" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          <span>Templates</span>
+        </button>
+      </nav>
+    </section>
+
+    <!-- ░░░░░░░░ TEMPLATES VIEW ░░░░░░░░ -->
+    <section class="view view-templates" data-view-name="templates" hidden>
+      <header class="topbar">
+        <button class="icon-btn" data-back="library" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+        <div class="topbar-title">
+          <span class="topbar-eyebrow">Catalogue</span>
+          <h1 class="topbar-h">Templates</h1>
+        </div>
+        <span class="icon-btn icon-btn-ghost" aria-hidden="true"></span>
+      </header>
+      <main class="templates-scroll">
+        <p class="templates-blurb">Hand-tuned starter chains. Tap to fork into your library.</p>
+        <ul class="template-list" id="template-list" role="list"></ul>
+      </main>
+    </section>
+
+    <!-- ░░░░░░░░ EDITOR VIEW ░░░░░░░░ -->
+    <section class="view view-editor" data-view-name="editor" hidden>
+      <header class="topbar">
+        <button class="icon-btn" data-back="library" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+        <div class="topbar-title">
+          <span class="topbar-eyebrow" id="editor-mode-label">Editing</span>
+          <h1 class="topbar-h">Chain</h1>
+        </div>
+        <button class="icon-btn" id="editor-menu-btn" aria-label="More">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>
+        </button>
+      </header>
+
+      <main class="editor-scroll">
+        <div class="editor-name-block">
+          <label class="field-label">Chain name</label>
+          <input type="text" class="editor-name-input" id="editor-name" maxlength="48" placeholder="Untitled chain" />
+          <div class="editor-color-row" id="editor-color-row"></div>
+        </div>
+
+        <div class="editor-stats">
+          <div class="stat">
+            <span class="stat-label">Total</span>
+            <span class="stat-value" id="editor-total">00:00</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Segments</span>
+            <span class="stat-value" id="editor-count">0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Loops</span>
+            <span class="stat-value">
+              <span class="stepper">
+                <button class="stepper-btn" data-loops="-1" aria-label="Fewer loops">−</button>
+                <span class="stepper-value" id="editor-loops">1</span>
+                <button class="stepper-btn" data-loops="+1" aria-label="More loops">+</button>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <ul class="segment-list" id="segment-list" role="list"></ul>
+
+        <div class="add-row">
+          <button class="btn btn-add" id="add-segment">
+            <span class="plus">+</span> Add segment
+          </button>
+          <button class="btn btn-add btn-add-ghost" id="add-subchain">
+            <span class="plus">⌘</span> Embed chain
+          </button>
+        </div>
+
+        <div class="hint">Tip: drag the handle to reorder. Long-press a segment for more options.</div>
+      </main>
+
+      <footer class="editor-footer">
+        <button class="btn btn-secondary" id="editor-save-only">Save</button>
+        <button class="btn btn-primary btn-large" id="editor-start">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Save &amp; start
+        </button>
+      </footer>
+    </section>
+
+    <!-- ░░░░░░░░ RUN VIEW ░░░░░░░░ -->
+    <section class="view view-run" data-view-name="run" hidden>
+      <div class="run-bg" id="run-bg"></div>
+
+      <header class="run-topbar">
+        <button class="icon-btn run-close" id="run-stop" aria-label="Stop">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <div class="run-chain-meta">
+          <span class="run-chain-name" id="run-chain-name">—</span>
+          <span class="run-chain-pos" id="run-chain-pos">— / —</span>
+        </div>
+        <button class="icon-btn" id="run-mute" aria-label="Mute">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" id="mute-icon"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19 12c0-2-1-4-3-5M16 8c1 1 2 2 2 4s-1 3-2 4"/></svg>
+        </button>
+      </header>
+
+      <div class="run-chain-strip" id="run-chain-strip" aria-hidden="true"></div>
+
+      <div class="run-main">
+        <div class="run-eyebrow">
+          <span class="run-segment-tag" id="run-segment-tag">Segment 1</span>
+          <span class="run-segment-divider">·</span>
+          <span class="run-segment-of" id="run-segment-of">of —</span>
+        </div>
+
+        <h1 class="run-segment-name" id="run-segment-name">—</h1>
+
+        <div class="run-clock-wrap">
+          <svg class="run-ring" viewBox="0 0 200 200" aria-hidden="true">
+            <g transform="rotate(-90 100 100)">
+              <circle class="run-ring-track" cx="100" cy="100" r="92" />
+              <circle class="run-ring-fill" id="run-ring-fill" cx="100" cy="100" r="92" />
+            </g>
+          </svg>
+          <div class="run-clock" id="run-clock">00:00</div>
+        </div>
+
+        <div class="run-progress">
+          <div class="run-progress-bar"><div class="run-progress-fill" id="run-progress-fill"></div></div>
+          <div class="run-progress-meta">
+            <span id="run-elapsed">00:00 elapsed</span>
+            <span id="run-remaining">00:00 remaining</span>
+          </div>
+        </div>
+
+        <div class="run-next" id="run-next">
+          <span class="run-next-label">Next</span>
+          <span class="run-next-arrow" aria-hidden="true">→</span>
+          <span class="run-next-name" id="run-next-name">—</span>
+          <span class="run-next-dur" id="run-next-dur">—</span>
+        </div>
+      </div>
+
+      <footer class="run-controls">
+        <button class="run-ctrl run-ctrl-secondary" id="run-prev" aria-label="Previous segment">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>
+        </button>
+        <button class="run-ctrl run-ctrl-play" id="run-toggle" aria-label="Pause">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor" id="run-toggle-icon"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+        </button>
+        <button class="run-ctrl run-ctrl-secondary" id="run-next-btn" aria-label="Next segment">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 6h2v12h-2zM6 6l8.5 6L6 18z"/></svg>
+        </button>
+      </footer>
+
+      <!-- Pre-start countdown overlay -->
+      <div class="run-overlay" id="run-prestart" hidden>
+        <div class="run-overlay-text">
+          <span class="run-overlay-eyebrow">Get ready</span>
+          <span class="run-overlay-num" id="run-prestart-num">3</span>
+        </div>
+      </div>
+
+      <!-- Completion overlay -->
+      <div class="run-overlay" id="run-complete" hidden>
+        <div class="run-overlay-text">
+          <span class="run-overlay-eyebrow"><em>Chain complete.</em></span>
+          <span class="run-overlay-title" id="run-complete-title">Well done.</span>
+          <div class="run-overlay-stats">
+            <div><span class="ov-num" id="run-complete-time">00:00</span><span class="ov-lbl">total time</span></div>
+            <div><span class="ov-num" id="run-complete-count">0</span><span class="ov-lbl">segments</span></div>
+          </div>
+          <div class="run-overlay-actions">
+            <button class="btn btn-primary" id="run-complete-again">Run again</button>
+            <button class="btn btn-ghost" id="run-complete-done">Done</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ░░░░░░░░ SETTINGS SHEET ░░░░░░░░ -->
+    <div class="sheet" id="settings-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card" role="dialog" aria-label="Settings">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title">Settings</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <label class="setting-row">
+            <span>
+              <strong>Sound cues</strong>
+              <small>Play a tone when a segment ends.</small>
+            </span>
+            <input type="checkbox" id="setting-sound" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Voice cues</strong>
+              <small>Speak the next segment name aloud.</small>
+            </span>
+            <input type="checkbox" id="setting-voice" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Vibration</strong>
+              <small>Buzz your phone between segments.</small>
+            </span>
+            <input type="checkbox" id="setting-vibrate" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Keep screen awake</strong>
+              <small>Wake Lock — prevents your screen from sleeping during a run.</small>
+            </span>
+            <input type="checkbox" id="setting-wake" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Pre-start countdown</strong>
+              <small>3-2-1 before the chain starts.</small>
+            </span>
+            <input type="checkbox" id="setting-prestart" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Final 3 seconds tick</strong>
+              <small>Quick tones to mark the segment ending.</small>
+            </span>
+            <input type="checkbox" id="setting-finaltick" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Notifications</strong>
+              <small id="notif-status">Show a system notification at each transition.</small>
+            </span>
+            <button class="btn btn-ghost btn-tiny" id="enable-notifs">Enable</button>
+          </label>
+
+          <!-- Native bridge panel — populated by JS only when running inside Capacitor -->
+          <div class="native-panel" id="native-panel" hidden>
+            <div class="native-panel-head">
+              <span class="native-dot" id="native-dot"></span>
+              <strong id="native-title">Native bridge</strong>
+              <span class="badge" id="native-badge">—</span>
+            </div>
+            <p class="native-panel-body" id="native-body">—</p>
+            <div class="native-panel-actions">
+              <button class="btn btn-ghost btn-tiny" id="native-test-10">Test in 10s</button>
+              <button class="btn btn-ghost btn-tiny" id="native-test-30">Test in 30s</button>
+              <button class="btn btn-ghost btn-tiny" id="native-perm">Re-request permission</button>
+              <button class="btn btn-ghost btn-tiny" id="native-exact" hidden>Fix exact alarms</button>
+            </div>
+            <p class="native-panel-hint"><em>Tip:</em> after tapping a test, lock the screen. The notification should fire on time. If it doesn't, check that this app is excluded from your phone's <em>battery optimization</em>.</p>
+          </div>
+
+          <hr class="setting-rule" />
+          <div class="setting-actions">
+            <button class="btn btn-ghost btn-small" id="export-data">Export library</button>
+            <button class="btn btn-ghost btn-small" id="import-data">Import…</button>
+            <input type="file" id="import-file" accept="application/json" hidden />
+          </div>
+          <p class="setting-credit">
+            Built with care. Open source on <a href="https://github.com/mayerwin/Chained-Timers" target="_blank" rel="noopener">GitHub</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ░░░░░░░░ SUB-CHAIN PICKER SHEET ░░░░░░░░ -->
+    <div class="sheet" id="picker-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card sheet-card-tall" role="dialog" aria-label="Embed a chain">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title">Embed a chain</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <p class="picker-blurb">Pick a chain to nest inside this one. Edits to the embedded chain will update everywhere it's used.</p>
+          <ul class="picker-list" id="picker-list" role="list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ░░░░░░░░ EDITOR ACTIONS SHEET ░░░░░░░░ -->
+    <div class="sheet" id="actions-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card" role="dialog" aria-label="Chain actions">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title" id="actions-title">Chain</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <button class="action-row" id="action-duplicate">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>
+            <span><strong>Duplicate</strong><small>Make an editable copy of this chain.</small></span>
+          </button>
+          <button class="action-row" id="action-share">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.6 10.5l6.8-3M8.6 13.5l6.8 3"/></svg>
+            <span><strong>Export JSON</strong><small>Download this chain as a file you can share or import elsewhere.</small></span>
+          </button>
+          <button class="action-row action-row-danger" id="action-delete">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14"/></svg>
+            <span><strong>Delete chain</strong><small>This cannot be undone.</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ░░░░░░░░ DURATION PICKER SHEET ░░░░░░░░ -->
+    <div class="sheet" id="duration-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card" role="dialog" aria-label="Set duration">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title">Duration</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <div class="dpick">
+            <div class="dpick-col">
+              <button class="dpick-step" data-dpick="h+">▲</button>
+              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-h" value="00" />
+              <button class="dpick-step" data-dpick="h-">▼</button>
+              <span class="dpick-lbl">hrs</span>
+            </div>
+            <span class="dpick-sep">:</span>
+            <div class="dpick-col">
+              <button class="dpick-step" data-dpick="m+">▲</button>
+              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-m" value="00" />
+              <button class="dpick-step" data-dpick="m-">▼</button>
+              <span class="dpick-lbl">min</span>
+            </div>
+            <span class="dpick-sep">:</span>
+            <div class="dpick-col">
+              <button class="dpick-step" data-dpick="s+">▲</button>
+              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-s" value="30" />
+              <button class="dpick-step" data-dpick="s-">▼</button>
+              <span class="dpick-lbl">sec</span>
+            </div>
+          </div>
+          <div class="dpick-quick">
+            <button class="chip" data-quick="15">15s</button>
+            <button class="chip" data-quick="30">30s</button>
+            <button class="chip" data-quick="45">45s</button>
+            <button class="chip" data-quick="60">1m</button>
+            <button class="chip" data-quick="90">1m30</button>
+            <button class="chip" data-quick="120">2m</button>
+            <button class="chip" data-quick="180">3m</button>
+            <button class="chip" data-quick="300">5m</button>
+          </div>
+          <button class="btn btn-primary btn-block" id="dpick-confirm">Set duration</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ░░░░░░░░ TOAST ░░░░░░░░ -->
+    <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+    <!-- ░░░░░░░░ INSTALL HINT ░░░░░░░░ -->
+    <div class="install-hint" id="install-hint" hidden>
+      <span><strong>Install on home screen.</strong> <em>Notifications &amp; vibration work better as an app.</em></span>
+      <button class="btn btn-ghost btn-tiny" id="install-btn">Install</button>
+      <button class="install-close" id="install-dismiss" aria-label="Dismiss">×</button>
+    </div>
+
+  </div>
+
+  <script src="./js/app.js"></script>
+  <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
+  <script src="./js/native.js"></script>
+</body>
+</html>
