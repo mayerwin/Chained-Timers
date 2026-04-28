@@ -48,17 +48,32 @@ $env:ANDROID_SDK_ROOT = $sdk
 Write-Host "Using Android SDK: $sdk"
 Write-Host ''
 
+# Resolve npm. We invoke npm.cmd directly rather than `npm`, because in
+# Windows PowerShell 5.1 the npm.ps1 wrapper (which `& npm` may resolve
+# to) has a long-standing bug where it eats the first character of its
+# first argument, producing nonsense like "Unknown command: pm" when you
+# meant `npm`. https://github.com/PowerShell/PowerShell/issues/1995 .
+# Going through npm.cmd routes the call through cmd.exe, which has no
+# such trouble.
+$npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+if (-not $npm) {
+    Write-Host ''
+    Write-Host 'npm.cmd not found on PATH.' -ForegroundColor Red
+    Write-Host 'Install Node.js (https://nodejs.org) and re-run.'
+    exit 1
+}
+
 # --- Step 1+2: build web assets + cap sync ---
 Push-Location $repo
 try {
     if (-not (Test-Path 'node_modules')) {
         Write-Host 'Installing npm dependencies (one-time)...' -ForegroundColor Cyan
-        & npm ci --no-fund --no-audit
+        & $npm ci --no-fund --no-audit
         if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
     }
 
     Write-Host 'Building web assets and syncing Capacitor...' -ForegroundColor Cyan
-    & npm run cap:sync
+    & $npm run cap:sync
     if ($LASTEXITCODE -ne 0) { throw 'cap sync failed' }
 
     # --- Step 3: gradle bundleRelease ---
