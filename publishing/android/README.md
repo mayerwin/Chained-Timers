@@ -21,7 +21,7 @@ A copy-paste recipe. Total active human time: ~45 min spread across ~10 days (re
 | Privacy policy URL | <https://mayerwin.github.io/Chained-Timers/privacy.html> | 5.3 |
 | Support URL | <https://github.com/mayerwin/Chained-Timers/issues> | 5.3 |
 | Marketing URL (optional) | <https://mayerwin.github.io/Chained-Timers/> | 5.3 |
-| Upload keystore (you'll generate in step 2) | `android/upload.keystore` (gitignored) | 3 |
+| Upload keystore (you'll generate in step 2) | `upload.keystore` at repo root (gitignored) | 3 |
 
 ---
 
@@ -40,97 +40,38 @@ While you wait, you can do steps 2 and 3 below.
 
 ## 2. Generate the Play upload keystore (one-time, ~2 min)
 
-The sideload keystore in `android/sideload.keystore` is committed publicly and **must not** be used for the Play Store. Generate a private upload keystore now:
+The sideload keystore in `android/sideload.keystore` is committed publicly and **must not** be used for the Play Store.
 
-```bash
-# from the repo root, in a terminal with JDK installed (any recent version with keytool)
-cd android
-keytool -genkey -v -keystore upload.keystore \
-  -alias chainedtimers-upload -keyalg RSA -keysize 2048 -validity 10000 \
-  -dname "CN=<your name>, O=<your name>, L=<your city>, S=<your state>, C=<your country>"
-# Pick a strong password. Use the same one for both prompts.
-```
+**Double-click [`1-generate-upload-keystore.bat`](1-generate-upload-keystore.bat).** That's it.
 
-This produces `android/upload.keystore` (~2.7 KB), already gitignored.
+The script:
+- Finds a JDK on your machine (Android Studio's bundled JBR works automatically; otherwise honours `JAVA_HOME` or anything `keytool` on PATH).
+- Prompts for a password — input is hidden (`Read-Host -AsSecureString`), then prompts again to confirm.
+- Generates a 2048-bit RSA key valid for 30 000 days, with a clean DN (`CN=Erwin Mayer, O=Erwin Mayer, L=Menoncourt, C=FR` — edit the script if you want a different identity).
+- Writes the keystore to `<repo>\upload.keystore` (gitignored) and the password / alias to `<repo>\android\keystore.properties` (also gitignored). Both files are picked up automatically by the next-step build.
+- Refuses to overwrite an existing keystore so a fumbled re-run can't lock you out of Play.
 
-Then create the keystore properties file (also gitignored):
+> **Save the password to your password manager *immediately* after the script finishes.** If you lose it, Google's only recourse is the [Play upload key reset](https://support.google.com/googleplay/android-developer/answer/9842756) flow, which takes days.
 
-```bash
-cat > android/keystore.properties <<EOF
-storeFile=../upload.keystore
-storePassword=<your password>
-keyAlias=chainedtimers-upload
-keyPassword=<your password>
-EOF
-```
+To see the SHA-1 / SHA-256 fingerprints (Play Console asks for the SHA-256 during App Signing setup), double-click [`2-show-fingerprints.bat`](2-show-fingerprints.bat). It prints both the upload-key and the sideload-key fingerprints.
 
-> Save your password somewhere safe (password manager). **If you lose it, you cannot update the app on the Play Store** — you'd have to publish a brand new app under a different package name. Optionally, copy `upload.keystore` and the password to [`../secrets.local.md`](../secrets.local.md) (gitignored) for repo-side reference.
-
-Add the play signingConfig to `android/app/build.gradle` (place above the existing `signingConfigs { sideload {...} }` block):
-
-```gradle
-def keystorePropertiesFile = rootProject.file("keystore.properties")
-def keystoreProperties = new Properties()
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-}
-```
-
-Then INSIDE the `signingConfigs { ... }` block, add `play` next to `sideload`:
-
-```gradle
-signingConfigs {
-    sideload {
-        // ... unchanged
-    }
-    play {
-        if (keystoreProperties['storeFile']) {
-            storeFile     file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
-            keyAlias      keystoreProperties['keyAlias']
-            keyPassword   keystoreProperties['keyPassword']
-        }
-    }
-}
-```
-
-And switch `release` to use the `play` config:
-
-```gradle
-buildTypes {
-    debug {
-        signingConfig signingConfigs.sideload
-    }
-    release {
-        signingConfig signingConfigs.play  // ← was: signingConfigs.sideload
-        minifyEnabled true
-        shrinkResources true
-        proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-    }
-}
-```
+The Gradle build is wired to fall back to the sideload key if `keystore.properties` is missing, so a fresh repo clone (and the GitHub-Actions sideload pipeline) keeps working without this file.
 
 ---
 
 ## 3. Build the release AAB (~2 min)
 
-Play Store wants Android App Bundles, not APKs:
+**Double-click [`3-build-play-aab.bat`](3-build-play-aab.bat).**
 
-```bash
-# from the repo root
-npm run build:www
-npx cap sync android
-cd android
-./gradlew bundleRelease
-```
-
-Output file:
+The script runs `npm run cap:sync` and `gradlew bundleRelease` for you, signs with the upload key (from step 2), and prints the output path:
 
 ```
 android/app/build/outputs/bundle/release/app-release.aab
 ```
 
-This is what you'll upload in step 7. **Each release**: bump `versionCode` (must increase by 1+) and `versionName` in `android/app/build.gradle`, then re-run this build.
+Prerequisites the script verifies: upload keystore exists, JDK is reachable, Android SDK is reachable (set `ANDROID_HOME` if it can't find the standard `%LOCALAPPDATA%\Android\Sdk` location). It also runs `npm ci` automatically on first invocation if `node_modules/` is missing.
+
+**Each new release**: bump `versionCode` (must increase by 1+) and `versionName` in [`android/app/build.gradle`](../../android/app/build.gradle), then re-run the build script. Step 8 below has the full per-release checklist.
 
 ---
 
@@ -290,30 +231,17 @@ Left sidebar → **Test and release → Production → Create new release**.
 
 ## 8. Future updates (after the first release is live)
 
-```bash
-# 1. Bump versions
-#    android/app/build.gradle:
-#      versionCode 2          (must increase by ≥1)
-#      versionName "1.0.1"
-#    package.json: "version": "1.0.1"
-#    (also bump iOS — see ../ios/README.md)
+1. **Bump versions** in:
+   - `android/app/build.gradle` — `versionCode` (must increase by ≥1) and `versionName`
+   - `package.json` — `"version"`
+   - (Also iOS — see [`../ios/README.md`](../ios/README.md).)
+2. **Refresh publishing assets** if the UI changed:
+   - `npm run smoke` regenerates the in-repo screenshots, then `npm run publishing:refresh` copies the relevant ones into `publishing/`.
+3. **Build the new AAB**: double-click [`3-build-play-aab.bat`](3-build-play-aab.bat).
+4. **Tag the GitHub release** (this triggers the GitHub-Actions sideload-APK build automatically):
+   ```
+   git tag vX.Y.Z && git push --tags
+   ```
+5. **Upload to Play Console**: *Test and release → Production → Create new release → Upload `.aab`*. Refresh screenshots in *Main store listing → Graphics* if they changed. Paste release notes from the new `What's new in vX.Y.Z` block in [`store-listing.md`](store-listing.md). *Save → Review release → Start rollout to Production*.
 
-# 2. Refresh publishing assets if UI changed
-npm run serve &
-npm run screenshots:store
-npm run publishing:refresh
-
-# 3. Build the new AAB
-cd android && ./gradlew bundleRelease
-
-# 4. Tag the release (triggers GitHub-Releases sideload APK build)
-git tag v1.0.1 && git push --tags
-
-# 5. Upload the AAB and screenshot updates to Play Console
-#    Test and release → Production → Create new release → Upload .aab
-#    Update Main store listing → Graphics if screenshots changed
-#    Update release notes from store-listing.md "What's new in v1.0.1"
-#    Submit for review.
-```
-
-Updates with no new permissions usually clear review in <24h.
+Updates with no new permissions usually clear Play review in <24 h.

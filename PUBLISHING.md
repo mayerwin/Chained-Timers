@@ -179,65 +179,34 @@ an **upload key** (which you keep), and Google manages a separate **app signing
 key** for distribution. The sideload keystore in this repo is intentionally
 public, so it must NOT be used for the Play upload key.
 
-```bash
-# Generate a private upload keystore (DO NOT commit)
-keytool -genkey -v -keystore upload.keystore \
-  -alias chainedtimers-upload -keyalg RSA -keysize 2048 -validity 10000 \
-  -dname "CN=<your name>, O=<your org>, L=<city>, S=<state>, C=<country>"
+A pair of one-click scripts in [`publishing/android/`](publishing/android/) handles this:
 
-# Store password and key password in a private file
-cat > android/keystore.properties <<EOF
-storeFile=../upload.keystore
-storePassword=<password>
-keyAlias=chainedtimers-upload
-keyPassword=<password>
-EOF
+| Step | Script | What it does |
+|------|--------|--------------|
+| **1. Generate keystore** (one-time) | `publishing\android\1-generate-upload-keystore.bat` | Prompts for a password (hidden), runs `keytool` with the right DN (`C=FR`, RSA 2048, 30 000-day validity), writes `upload.keystore` to repo root and `android\keystore.properties` for Gradle. Both gitignored. |
+| **2. View fingerprints** | `publishing\android\2-show-fingerprints.bat` | Prints SHA-1 + SHA-256 for the upload key (paste into Play Console → "App signing" → "Upload key certificate") and the sideload key (for the GitHub Releases page). |
+| **3. Build the AAB** (per release) | `publishing\android\3-build-play-aab.bat` | Runs `npm run cap:sync` + `gradlew bundleRelease`, signs with the upload key, prints the path of the resulting `app-release.aab`. |
 
-# upload.keystore and keystore.properties are already in .gitignore
-```
+The scripts find a JDK automatically (Android Studio's bundled JBR, JAVA_HOME,
+or anything on PATH); double-click to run. The keystore + properties file live
+outside Git — back them up to a password manager *immediately* after step 1,
+because losing the keystore + password locks you out of Play Store updates.
 
-Then add a *new* signing config for Play to `android/app/build.gradle` (do not
-remove the `sideload` config — sideload distribution still uses it):
+The Gradle build is wired to fall back to the sideload key automatically when
+`android/keystore.properties` is missing, so a fresh clone of the repo still
+builds and the GitHub-Actions sideload pipeline is unaffected.
 
-```gradle
-def keystorePropertiesFile = rootProject.file("keystore.properties")
-def keystoreProperties = new Properties()
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-}
+### What the scripts wrap
 
-android {
-    signingConfigs {
-        sideload { /* existing block */ }
-        play {
-            if (keystoreProperties['storeFile']) {
-                storeFile     file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias      keystoreProperties['keyAlias']
-                keyPassword   keystoreProperties['keyPassword']
-            }
-        }
-    }
-    buildTypes {
-        release {
-            signingConfig signingConfigs.play   // ← swap from sideload
-            minifyEnabled true                  // shrink for Play
-            shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-}
-```
-
-### Build the AAB (Play Store wants Android App Bundles, not APKs)
-
-```bash
-npm run build:www
-npx cap sync android
-cd android
-./gradlew bundleRelease
-# Output: android/app/build/outputs/bundle/release/app-release.aab
-```
+- The `keytool -genkey` invocation uses `-storepass:env` and `-keypass:env`
+  to pass passwords via environment variables instead of command-line flags,
+  so they don't leak into the process list.
+- The PowerShell prompt uses `Read-Host -AsSecureString` so the password is
+  never echoed and is wiped from memory after use.
+- Gradle reads the password from `android/keystore.properties` at build time
+  (the file is gitignored). For a more locked-down setup, replace the literal
+  values in that file with environment-variable expansion in `build.gradle`
+  and pass `-PstorePassword=…` on the command line.
 
 ### Upload flow
 
