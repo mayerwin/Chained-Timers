@@ -56,7 +56,13 @@ android {
         }
         if (hasPlayKey) {
             play {
-                storeFile     file(keystoreProperties['storeFile'])
+                // rootProject.file() resolves relative to the Gradle root
+                // (android/), which matches the convention used by
+                // keystore.properties (storeFile=../upload.keystore -> repo
+                // root). Plain file() resolves relative to the app module
+                // (android/app/) and would expect the keystore one level
+                // higher, which is wrong.
+                storeFile     rootProject.file(keystoreProperties['storeFile'])
                 storePassword keystoreProperties['storePassword']
                 keyAlias      keystoreProperties['keyAlias']
                 keyPassword   keystoreProperties['keyPassword']
