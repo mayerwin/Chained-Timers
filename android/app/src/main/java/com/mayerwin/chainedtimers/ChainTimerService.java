@@ -158,13 +158,17 @@ public class ChainTimerService extends Service {
             wakeLock.setReferenceCounted(false);
         }
         if (!wakeLock.isHeld()) {
-            // 4-hour safety ceiling: if stopRun() somehow never runs (the
-            // process is killed before it gets a chance, the system gives
-            // up the service unexpectedly, …), the OS auto-releases the
-            // lock. Real chains are minutes-to-an-hour long; nobody runs
-            // a single chain for 4 h continuously, so this is effectively
-            // "indefinite" with a clean failsafe.
-            wakeLock.acquire(4L * 60L * 60L * 1000L);
+            // No timeout — chains can be arbitrarily long (multi-hour
+            // Pomodoro days, sleep-cycle timers, ultra-endurance sessions).
+            // Releasing the lock prematurely would let Doze freeze the
+            // process and silently break the timer.
+            //
+            // Cleanup is handled deterministically by every termination
+            // path: ChainTimerService.stopRun() (user stop / chain end),
+            // onDestroy() (system kill), and the Android kernel itself
+            // on process death — wake locks are tied to the process and
+            // released automatically when it dies.
+            wakeLock.acquire();
         }
     }
 
