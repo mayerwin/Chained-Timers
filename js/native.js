@@ -43,6 +43,8 @@
     lastSchedule: null,        // { count, error, when }
     fgService: false,          // true while the Android foreground service holds the wake lock
     fgServiceAvailable: false, // false on older APK builds without the ChainTimerPlugin
+    batteryOpt: 'unknown',     // 'exempt' | 'optimized' | 'unsupported' | 'unknown'
+    notifHealth: null,         // { appEnabled, statusChannelEnabled, transitionsChannelEnabled, ok }
   };
 
   if (!isNative()) {
@@ -343,6 +345,60 @@
     window.ChainedNativeStatus.fgService = false;
   }
 
+  // ---------- Reliability probes ----------
+  // For medication-grade use cases the user MUST be exempt from battery
+  // optimisation: even with a foreground service + wake lock + exact
+  // alarms, OEM ROMs (Samsung One UI, Xiaomi MIUI, OPPO ColorOS, Huawei
+  // EMUI, Vivo OriginOS, OnePlus OxygenOS, …) will kill the FGS
+  // unconditionally if the app isn't in the unrestricted bucket. The
+  // ChainTimerPlugin probes the actual exemption state via
+  // PowerManager.isIgnoringBatteryOptimizations().
+  async function refreshBatteryOpt() {
+    if (!chainTimerAvailable) return null;
+    try {
+      const r = await ChainTimer.isIgnoringBatteryOptimizations();
+      window.ChainedNativeStatus.batteryOpt = r?.supported === false
+        ? 'unsupported'
+        : (r?.ignoring ? 'exempt' : 'optimized');
+      notifyStatusChanged();
+      return r;
+    } catch (e) {
+      log('isIgnoringBatteryOptimizations failed:', e);
+      return null;
+    }
+  }
+
+  async function requestBatteryOpt() {
+    if (!chainTimerAvailable) return null;
+    try {
+      const r = await ChainTimer.requestIgnoreBatteryOptimizations();
+      // The settings UI is now open; refresh state once the user comes back.
+      // We refresh again from the visibility-change handler too.
+      setTimeout(refreshBatteryOpt, 1500);
+      return r;
+    } catch (e) {
+      log('requestIgnoreBatteryOptimizations failed:', e);
+      return null;
+    }
+  }
+
+  // Notification health: app-level + per-channel grant. A user who has
+  // toggled either off in OS settings will silently miss every alert,
+  // even if our schedule call succeeded — so we surface this loudly at
+  // chain start.
+  async function refreshNotifHealth() {
+    if (!chainTimerAvailable) return null;
+    try {
+      const r = await ChainTimer.getNotificationHealth();
+      window.ChainedNativeStatus.notifHealth = r;
+      notifyStatusChanged();
+      return r;
+    } catch (e) {
+      log('getNotificationHealth failed:', e);
+      return null;
+    }
+  }
+
   // Sweep notifications scheduled by us in a previous app session.
   // scheduledIds is in-memory only and resets on every page load, so
   // without this any leftover notifications would fire at random later.
@@ -400,6 +456,30 @@
     // Fallback: if the FGS plugin isn't available (older APK build) keep
     // the in-tray sticky LocalNotification so the user still sees status.
     if (!fgsActive) await postStatus(detail);
+
+    // Reliability probes — only for fresh starts (first schedule call;
+    // re-schedules during a chain don't need to re-probe).
+    if (!isPaused && !scheduledIds.length) {
+      // Notification health: any of the three flags being false means
+      // the user will miss alerts silently. This is unrecoverable in-app
+      // — we can only surface it loudly so they fix it in OS settings.
+      const health = await refreshNotifHealth();
+      if (health && !health.ok) {
+        const parts = [];
+        if (!health.appEnabled)              parts.push('app notifications OFF');
+        if (!health.statusChannelEnabled)    parts.push('"Chain status" channel OFF');
+        if (!health.transitionsChannelEnabled) parts.push('"Chain transitions" channel OFF');
+        toast(`⚠ Critical: ${parts.join(' · ')} — open OS Settings → Apps → Chained Timers → Notifications and re-enable.`, 'warn');
+      }
+
+      // Battery optimisation: if the OEM has the app in "Optimized", every
+      // OEM ROM we've tested will eventually kill the FGS regardless of
+      // what we declare. The user has to grant the exemption manually.
+      const batt = await refreshBatteryOpt();
+      if (batt && batt.supported && !batt.ignoring) {
+        toast('⚠ Reliability: this phone may kill the timer when the screen is locked. Tap Settings → Native bridge → Allow background to fix.', 'warn');
+      }
+    }
 
     // While paused, don't schedule transition alarms — wall-clock keeps
     // marching during a pause, so any pre-scheduled alarm would fire too
@@ -487,6 +567,9 @@
     status:     () => ({ ...window.ChainedNativeStatus }),
     requestPermission: ensurePermission,
     requestExactAlarm,
+    refreshBatteryOpt,
+    requestBatteryOpt,
+    refreshNotifHealth,
 
     // Manual test from Settings: schedule one notification N seconds from now.
     async testNotification(seconds = 10) {
@@ -560,6 +643,8 @@
     await ensurePermission();
     await ensureChannel();
     await checkExactAlarm();
+    await refreshBatteryOpt();
+    await refreshNotifHealth();
     await sweepOrphans();
     // Snapshot + clear the queue *before* flipping the flag. New events
     // arriving from this point on go straight to dispatch() (serialised
@@ -569,6 +654,56 @@
     for (const ev of drain) dispatch(ev.type, ev.detail);
     notifyStatusChanged();
   })();
+
+  // ---------- Resume + heartbeat re-scheduling ----------
+  // Two scenarios this defends against:
+  //
+  //  1. The user force-stopped the app and relaunched it. Force-stop
+  //     wipes pending AlarmManager alarms. When the engine restores from
+  //     localStorage it emits chain:reschedule, which gets us back to a
+  //     known-good state — but only if the visibility-change fires before
+  //     the next missed segment boundary. Re-scheduling on every resume
+  //     closes the window further.
+  //
+  //  2. The OS killed the FGS during deep Doze (rare on stock Android,
+  //     not rare on aggressive OEM ROMs). When the user comes back to
+  //     the app, we want to immediately re-take the wake lock and
+  //     re-prime the alarm queue.
+  //
+  // The 4-minute heartbeat covers a third case: if the app is in the
+  // background but the FGS is still alive, re-scheduling periodically
+  // ensures any alarms that drifted (re-scheduled inexactly by Doze, lost
+  // by background Restore Receiver weirdness, etc.) are corrected on the
+  // way through.
+  function nudgeReschedule() {
+    if (!preWarmDone) return;
+    if (!serviceRunning && (window.ChainedNativeStatus.lastSchedule?.count ?? 0) === 0) return;
+    // The engine owns the truth — ask it to re-emit chain:reschedule
+    // with current state. Falls back to a no-op if the engine isn't loaded.
+    try {
+      window.dispatchEvent(new CustomEvent('chained:nudgereschedule'));
+    } catch {}
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Re-probe permissions & battery state — anything could have
+      // changed in OS settings while we were backgrounded.
+      refreshNotifHealth();
+      refreshBatteryOpt();
+      checkExactAlarm();
+      nudgeReschedule();
+    }
+  });
+  window.addEventListener('focus',  () => nudgeReschedule());
+  window.addEventListener('pageshow', () => nudgeReschedule());
+
+  // 4-minute heartbeat. Chosen below the 5-minute Android JobScheduler
+  // boundary and below the 9-minute Doze inexact-alarm window, so any
+  // alarm that was about to be coalesced gets re-scheduled before it
+  // would fire late.
+  const HEARTBEAT_MS = 4 * 60 * 1000;
+  setInterval(nudgeReschedule, HEARTBEAT_MS);
 
   // ---------- helpers ----------
   function log(...args) {

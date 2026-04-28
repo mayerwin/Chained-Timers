@@ -74,6 +74,19 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.1.2 (release notes — 4000 chars max — used ~330)
+
+```
+Defense-in-depth for time-critical chains.
+
+• Notification permission and channel state probed at every chain start — silent failure modes are now flagged loudly
+• Pending alarm queue is auto-refreshed on every app resume and on a 4-minute heartbeat, so any silently-dropped alarm is healed before it would have mattered
+```
+
+(The Android-only foreground-service and battery-optimization fixes don't apply on iOS, where the OS aggressively suspends background apps regardless. iOS reliability still relies entirely on `UNUserNotificationCenter` scheduling.)
+
+---
+
 ## What's new in v1.1.0 (release notes — 4000 chars max — used ~530)
 
 ```

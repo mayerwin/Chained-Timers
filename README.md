@@ -153,23 +153,51 @@ Open the app → ⚙ **Settings** → scroll to the **Native bridge** panel. It 
 - `channel: ready` — the high-importance notification channel was created.
 - `exact-alarm: granted` — **the critical one** for Android 12+ (see below).
 - `background service: running / idle` — whether the foreground service holding the wake lock is currently active. Should read `running` while a chain is in progress.
+- `battery: exempt / optimized` — whether Android's battery-optimization is allowed to kill the foreground service. Should read `exempt` for any time-critical chain.
 - `last schedule: N notifications` — confirms the most recent chain wired its segment notifications into the OS.
 
 Tap **Test in 10s**, lock the screen, and confirm the notification fires on time.
 
-The native build now also runs a **foreground service** (`ChainTimerService`) for the duration of every chain. It holds a partial wake lock, exempts the process from Doze / App Standby, and posts a persistent low-importance "▶ Now playing" notification. As long as that notification is visible while you're running a chain, the timer will not freeze in the background and segment alarms will not be coalesced.
+The native build runs a **foreground service** (`ChainTimerService`) for the duration of every chain. It holds an indefinite partial wake lock, exempts the process from Doze / App Standby, and posts a persistent low-importance "▶ Now playing" notification. As long as that notification is visible while you're running a chain, the timer will not freeze in the background and segment alarms will not be coalesced.
 
-If the persistent notification *isn't* visible despite the chain running, two things commonly cause it:
+In addition, the bridge re-checks all permissions and re-issues the alarm queue every time the app comes back to the foreground, plus on a 4-minute heartbeat — so even if an alarm is silently lost (force-stop, OEM cleanup, Doze coalescing), the timer self-heals on the way through.
+
+If the persistent notification *isn't* visible despite the chain running, three things commonly cause it:
 
 **1. Exact-alarm permission denied (Android 12+).** Without `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM`, Android downgrades scheduled alarms to *inexact* — they can be delayed by 10+ minutes during Doze mode. The native build declares `USE_EXACT_ALARM` (auto-granted on Android 13+ for alarm/timer apps). On Android 12 the user can revoke it. If the panel shows `exact-alarm: denied`, tap **Fix exact alarms** — it opens *Settings → Special access → Alarms & reminders → Chained Timers* — toggle it ON.
 
-**2. Aggressive battery optimization (Samsung, Xiaomi, OPPO, Huawei…).** Some manufacturers kill foreground services and app processes ahead of normal Doze, which can cancel pending alarms even with a foreground service running. The fix is OS-side, not app-side:
+**2. Battery-optimization restricting the app.** Tap **Allow background** in the Settings → Native bridge panel — it opens the system "Allow this app to run in the background" prompt. Choose *Allow* (or, equivalently, *Settings → Apps → Chained Timers → Battery → Unrestricted*). This is the single most common reason a chain goes silent on Samsung / Xiaomi / OPPO / Huawei / Vivo / OnePlus.
 
-- *Settings → Apps → Chained Timers → Battery → Unrestricted*
-- Samsung: also check *Settings → Device care → Battery → Background usage limits → Sleeping apps* and remove the app.
+**3. OEM-specific extra restrictions.** Some manufacturers add a second layer beyond Android's standard battery optimization that the standard Android API can't toggle on the user's behalf:
+
+- Samsung: *Settings → Device care → Battery → Background usage limits → Sleeping apps* and remove the app; also *Settings → Apps → Chained Timers → Battery → Unrestricted*.
 - Xiaomi (MIUI): *Security → Permissions → Autostart → enable for Chained Timers*; and *Battery saver → No restrictions*.
+- OPPO / Realme (ColorOS): *Settings → Battery → App management → Chained Timers → Allow background activity*.
+- Huawei / Honor (EMUI): *Settings → Apps → Chained Timers → Battery → Launch → tick everything*.
 
-Notifications are scheduled via `AlarmManager.setExactAndAllowWhileIdle` — the strongest "fire at this exact time, even in Doze" primitive Android exposes — and the foreground service plus partial wake lock keep the process alive so those alarms can fire on time. There is no further code-side workaround when the OS chooses to kill a foreground service entirely (which only happens on a small number of OEM Android skins with extreme battery savers).
+Notifications are scheduled via `AlarmManager.setExactAndAllowWhileIdle` — the strongest "fire at this exact time, even in Doze" primitive Android exposes — and the foreground service plus partial wake lock keep the process alive so those alarms can fire on time.
+
+### Using Chained Timers for time-critical scenarios (medication, sleep cycles, …)
+
+Read this section if you intend to rely on the timer for something where a missed alert could matter.
+
+What the app guarantees (with permissions granted and battery-optimization disabled, on stock Android):
+
+- ✅ Wall-clock-correct timer math — every segment ends at exactly the right moment by `Date.now()`.
+- ✅ A persistent system notification visible whenever a chain is running.
+- ✅ Alarm-clock-grade exact alarms scheduled in advance for every segment boundary.
+- ✅ Self-healing: alarms are re-checked on every app resume + every 4 minutes.
+- ✅ Persistence: a chain that was running survives a force-stop, OOM kill, or device reboot.
+
+What the app *cannot* guarantee, regardless of how much defensive code we add:
+
+- ❌ **Battery dead** — no app will fire an alarm after the phone has shut down.
+- ❌ **Phone in DND / Silent / Focus mode** — the OS may suppress sound on a delivered notification depending on your settings.
+- ❌ **OEM "Pause this app" / "App Standby Bucket: Restricted"** — manual user action that strips the app of all background privileges.
+- ❌ **App data cleared** by storage cleanup features.
+- ❌ **OS bugs on extreme OEM ROMs** — some custom Android builds have been observed killing foreground services anyway, or silently dropping `setExactAndAllowWhileIdle` alarms.
+
+For medication or other safety-critical timing, **always run a parallel backup**: a system-level alarm (the stock Clock app), a different physical timer, or a smartwatch reminder. No third-party Android app — including this one — can compete with stock Clock alarms for last-line-of-defence reliability.
 
 ---
 

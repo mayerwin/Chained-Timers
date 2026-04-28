@@ -56,6 +56,19 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.1.2 (release notes — 500 chars max — used ~485)
+
+```
+Defense-in-depth for time-critical chains.
+
+• Battery-optimization detection: in-app prompt to disable it when needed (the #1 cause of silent chains on Samsung / Xiaomi / OPPO / Huawei / Vivo / OnePlus)
+• Notification-health probe surfaces "channel disabled" / "permission revoked" the moment a chain starts
+• Alarm queue auto-refreshed on every app resume and every 4 minutes — heals from any silently-dropped alarm
+• Permissions re-checked on resume so OS-level changes are picked up immediately
+```
+
+---
+
 ## What's new in v1.1.0 (release notes — 500 chars max — used ~470)
 
 ```

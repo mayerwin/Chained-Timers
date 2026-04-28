@@ -1528,6 +1528,15 @@ const UI = {
       if (st.platform === 'android') {
         const fgState = st.fgService ? 'running' : (st.fgServiceAvailable ? 'idle' : 'unavailable');
         bodyText += ` · background service: ${fgState}`;
+        if (st.batteryOpt && st.batteryOpt !== 'unsupported' && st.batteryOpt !== 'unknown') {
+          bodyText += ` · battery: ${st.batteryOpt}`;
+        }
+        if (st.notifHealth) {
+          const h = st.notifHealth;
+          if (!h.appEnabled)              bodyText += '\n⚠ notifications: BLOCKED app-wide';
+          else if (!h.statusChannelEnabled)    bodyText += '\n⚠ "Chain status" channel disabled';
+          else if (!h.transitionsChannelEnabled) bodyText += '\n⚠ "Chain transitions" channel disabled';
+        }
       }
       if (ls) {
         if (ls.error) bodyText += `\nlast schedule: failed (${ls.error})`;
@@ -1541,10 +1550,28 @@ const UI = {
       const needsExactFix = (st.exactAlarm === 'denied' || st.exactAlarm === 'prompt');
       exactBtn.hidden = !needsExactFix;
 
-      // If exact alarms are denied, override badge to make the problem unmissable
-      if (needsExactFix) {
+      // Show "Allow background" if the OS has the app under battery
+      // optimization. This is the single most common reason a chain goes
+      // silent on Samsung / Xiaomi / OPPO / Huawei / Vivo / OnePlus.
+      const batteryBtn = document.getElementById('native-battery');
+      const needsBatteryFix = (st.batteryOpt === 'optimized');
+      batteryBtn.hidden = !needsBatteryFix;
+
+      // Notifications disabled is a CRITICAL failure mode — every alert
+      // is silent. Make the badge red and unmissable.
+      const notifBlocked = st.notifHealth && !st.notifHealth.ok;
+
+      if (notifBlocked) {
+        dot.className = 'native-dot is-warn';
+        badge.textContent = 'Notifications blocked';
+        badge.className = 'badge is-warn';
+      } else if (needsExactFix) {
         dot.className = 'native-dot is-warn';
         badge.textContent = 'Exact alarms denied';
+        badge.className = 'badge is-warn';
+      } else if (needsBatteryFix) {
+        dot.className = 'native-dot is-warn';
+        badge.textContent = 'Background restricted';
         badge.className = 'badge is-warn';
       }
     } else {
@@ -1753,6 +1780,12 @@ function init() {
   document.getElementById('native-exact').addEventListener('click', async () => {
     Toast.show('Opening system settings — toggle "Allow exact alarms" ON, then come back.', 'good');
     const ok = await window.ChainedNative?.requestExactAlarm();
+    setTimeout(() => UI.openSettings(), 500);
+  });
+  document.getElementById('native-battery').addEventListener('click', async () => {
+    Toast.show('Opening battery settings — choose Unrestricted (or Allow), then come back.', 'good');
+    await window.ChainedNative?.requestBatteryOpt?.();
+    // Re-render once the user comes back (visibilitychange refreshes state).
     setTimeout(() => UI.openSettings(), 500);
   });
 
@@ -1988,6 +2021,15 @@ function init() {
   // activity returns to foreground (more reliable than visibilitychange
   // on some Android skins).
   window.addEventListener('chained:appresume', refreshFromWallClock);
+
+  // Native-bridge heartbeat: every few minutes (and on every visibility
+  // change), the bridge asks the engine to re-emit chain:reschedule so
+  // the OS-side AlarmManager queue stays fresh. Defends against the long
+  // tail of "alarms silently lost" scenarios — force-stop, OEM kill,
+  // OS Doze coalescing the inexact-alarm fallback.
+  window.addEventListener('chained:nudgereschedule', () => {
+    if (Engine.isRunning) Engine._emitChainEvent('chain:reschedule');
+  });
 
   // Native bridge ↔ web bridge: surface native errors as in-app toasts,
   // and re-render Settings when the native status changes.
