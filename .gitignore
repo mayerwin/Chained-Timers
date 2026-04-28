@@ -25,6 +25,13 @@ android/captures/
 android/local.properties
 android/*.iml
 android/app/*.iml
+# Android signing artifacts. The sideload keystore is committed (see
+# android/app/build.gradle for the rationale); the upload keystore +
+# its properties file are per-developer secrets and never committed.
+publishing/android/upload.keystore
+publishing/android/keystore.properties
+# Backward-compatibility ignores for the v1.1.x layout where these
+# lived at the repo root / under android/. Safe to keep.
 android/keystore.properties
 android/release.keystore
 android/upload.keystore

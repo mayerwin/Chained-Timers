@@ -93,6 +93,6 @@ jobs:
             43:26:AA:75:83:02:31:3E:F9:42:C5:78:D0:50:A4:8F:6F:75:7F:26:D2:4C:C0:C7:A7:7A:40:2D:B2:90:D2:36
             ```
 
-            All releases are signed with the same [committed sideload keystore](https://github.com/mayerwin/Chained-Timers/blob/main/android/sideload.keystore), so subsequent versions install in-place over this one.
+            All releases are signed with the same [committed sideload keystore](https://github.com/mayerwin/Chained-Timers/blob/main/publishing/android/sideload.keystore), so subsequent versions install in-place over this one.
 
             ---

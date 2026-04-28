@@ -183,7 +183,7 @@ A pair of one-click scripts in [`publishing/android/`](publishing/android/) hand
 
 | Step | Script | What it does |
 |------|--------|--------------|
-| **1. Generate keystore** (one-time) | `publishing\android\1-generate-upload-keystore.bat` | Prompts for a password (hidden), runs `keytool` with the right DN (`C=FR`, RSA 2048, 30 000-day validity), writes `upload.keystore` to repo root and `android\keystore.properties` for Gradle. Both gitignored. |
+| **1. Generate keystore** (one-time) | `publishing\android\1-generate-upload-keystore.bat` | Prompts for a password (hidden), runs `keytool` with the right DN (`C=FR`, RSA 2048, 30 000-day validity), writes both `upload.keystore` and `keystore.properties` into `publishing\android\` next to the committed `sideload.keystore`. Both upload-key files gitignored. |
 | **2. View fingerprints** | `publishing\android\2-show-fingerprints.bat` | Prints SHA-1 + SHA-256 for the upload key (paste into Play Console → "App signing" → "Upload key certificate") and the sideload key (for the GitHub Releases page). |
 | **3. Build the AAB** (per release) | `publishing\android\3-build-play-aab.bat` | Runs `npm run cap:sync` + `gradlew bundleRelease`, signs with the upload key, prints the path of the resulting `app-release.aab`. |
 

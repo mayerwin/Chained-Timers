@@ -21,7 +21,7 @@ A copy-paste recipe. Total active human time: ~45 min spread across ~10 days (re
 | Privacy policy URL | <https://mayerwin.github.io/Chained-Timers/privacy.html> | 5.3 |
 | Support URL | <https://github.com/mayerwin/Chained-Timers/issues> | 5.3 |
 | Marketing URL (optional) | <https://mayerwin.github.io/Chained-Timers/> | 5.3 |
-| Upload keystore (you'll generate in step 2) | `upload.keystore` at repo root (gitignored) | 3 |
+| Upload keystore (you'll generate in step 2) | `publishing/android/upload.keystore` (gitignored) | 3 |
 
 ---
 
@@ -59,7 +59,7 @@ If you don't have an Android SDK at all, install **Android Studio** ([developer.
 
 ## 2. Generate the Play upload keystore (one-time, ~2 min)
 
-The sideload keystore in `android/sideload.keystore` is committed publicly and **must not** be used for the Play Store.
+The sideload keystore in [`sideload.keystore`](sideload.keystore) is committed publicly and **must not** be used for the Play Store.
 
 **Double-click [`1-generate-upload-keystore.bat`](1-generate-upload-keystore.bat).** That's it.
 

@@ -2,10 +2,10 @@
 # Generate the Play Store upload keystore (one-time setup).
 #
 # Run this ONCE before submitting the first build to Google Play.
-# Creates two files in the repo:
+# Creates two files in publishing/android/:
 #
-#   <repo>\upload.keystore               -- the actual private key
-#   <repo>\android\keystore.properties   -- password + alias for Gradle
+#   upload.keystore         -- the actual private key
+#   keystore.properties     -- password + alias for Gradle
 #
 # Both files are gitignored. If you lose them, Google Play has a key-reset
 # process but it's slow -- back them up to a password manager / encrypted
@@ -24,9 +24,8 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repo    = Resolve-Path (Join-Path $here '..\..')
-$keystore = Join-Path $repo 'upload.keystore'
-$props    = Join-Path $repo 'android\keystore.properties'
+$keystore = Join-Path $here 'upload.keystore'
+$props    = Join-Path $here 'keystore.properties'
 
 . (Join-Path $here '_resolve-jdk.ps1')
 
@@ -39,10 +38,10 @@ if (Test-Path $keystore) {
     Write-Host "  $keystore"
     Write-Host ''
     Write-Host "Refusing to overwrite. If you really want to regenerate," -ForegroundColor Yellow
-    Write-Host "delete that file (and android\keystore.properties) manually" -ForegroundColor Yellow
-    Write-Host "first -- but be aware that any Play Store listing already" -ForegroundColor Yellow
-    Write-Host "signed with the existing key will be locked out of updates" -ForegroundColor Yellow
-    Write-Host "without going through Google's key-reset process." -ForegroundColor Yellow
+    Write-Host "delete that file (and keystore.properties next to it)" -ForegroundColor Yellow
+    Write-Host "manually first -- but be aware that any Play Store listing" -ForegroundColor Yellow
+    Write-Host "already signed with the existing key will be locked out of" -ForegroundColor Yellow
+    Write-Host "updates without going through Google's key-reset process." -ForegroundColor Yellow
     exit 1
 }
 
@@ -95,10 +94,14 @@ try {
     # Write keystore.properties with the password embedded. The file is
     # gitignored; for a more locked-down setup, replace these literals
     # with environment-variable expansion in build.gradle.
+    #
+    # storeFile is just a filename -- Gradle joins it with the directory
+    # holding this properties file (publishing/android/) to find the
+    # actual keystore.
     $propsContent = @"
 # Play Store upload keystore -- DO NOT COMMIT (gitignored).
 # Read by android/app/build.gradle to sign release AABs.
-storeFile=../upload.keystore
+storeFile=upload.keystore
 storePassword=$plain1
 keyAlias=chainedtimers-upload
 keyPassword=$plain1

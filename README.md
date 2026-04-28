@@ -97,7 +97,7 @@ You'll need [Android Studio](https://developer.android.com/studio) (Hedgehog or 
 
 #### About the signing key
 
-Every CI build is signed with the same committed keystore at [`android/sideload.keystore`](android/sideload.keystore). This is intentional — Android only allows in-place app updates when successive APKs are signed with the same cryptographic key, so without a stable keystore you'd have to uninstall before every update (and lose your saved chains). The keystore password is `sideload` and lives in plaintext in `android/app/build.gradle`. This is fine for sideload distribution because:
+Every CI build is signed with the same committed keystore at [`publishing/android/sideload.keystore`](publishing/android/sideload.keystore). This is intentional — Android only allows in-place app updates when successive APKs are signed with the same cryptographic key, so without a stable keystore you'd have to uninstall before every update (and lose your saved chains). The keystore password is `sideload` and lives in plaintext in `android/app/build.gradle`. This is fine for sideload distribution because:
 
 - **The signing key isn't a secret in this trust model.** Anyone could fork the repo and build their own APK signed the same way; that doesn't help them get on your phone unless you install their APK.
 - **It's a stable identity, not an authorisation token.** Its purpose is to let Android say *"this APK and the previous one came from the same source"* — which for sideload means *"the same GitHub repo"*.
