@@ -42,22 +42,7 @@ $env:JAVA_HOME = $jdk
 $env:Path = "$jdk\bin;$env:Path"
 Write-Host "Using JDK: $jdk"
 
-# Resolve Android SDK.
-$sdkCandidates = @(
-    $env:ANDROID_HOME,
-    $env:ANDROID_SDK_ROOT,
-    "$env:LOCALAPPDATA\Android\Sdk",
-    "$env:ProgramFiles\Android\Sdk"
-) | Where-Object { $_ -and (Test-Path "$_\platform-tools") }
-
-if (-not $sdkCandidates) {
-    Write-Host ''
-    Write-Host 'Android SDK not found.' -ForegroundColor Red
-    Write-Host 'Install via Android Studio (Tools > SDK Manager) or set'
-    Write-Host 'ANDROID_HOME to your SDK folder, then re-run.'
-    exit 1
-}
-$sdk = $sdkCandidates | Select-Object -First 1
+$sdk = Resolve-AndroidSdk
 $env:ANDROID_HOME     = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
 Write-Host "Using Android SDK: $sdk"

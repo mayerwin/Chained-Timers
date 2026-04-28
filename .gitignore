@@ -33,6 +33,9 @@ keystore.properties
 
 # Publishing-time secrets (filled-in copy of publishing/secrets.template.md)
 publishing/secrets.local.md
+# Per-machine override for the Android publishing scripts (copy of
+# publishing/android/local-config.ps1.example). Holds JDK / SDK paths.
+publishing/android/local-config.ps1
 # iOS distribution credentials
 *.p12
 *.p8

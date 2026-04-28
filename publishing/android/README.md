@@ -38,6 +38,25 @@ While you wait, you can do steps 2 and 3 below.
 
 ---
 
+## 1.5 (Optional) Tell the scripts where your JDK + Android SDK live
+
+The publishing scripts auto-detect:
+- Any **JDK** at `JAVA_HOME`, in Android Studio's bundled JBR folder, or on `PATH`.
+- Any **Android SDK** at `ANDROID_HOME` / `ANDROID_SDK_ROOT` or the default `%LOCALAPPDATA%\Android\Sdk`.
+
+If your tooling is in a non-standard place (portable JDK, custom SDK install, multi-tenant machine, …), copy [`local-config.ps1.example`](local-config.ps1.example) to `local-config.ps1` (gitignored) and set the paths:
+
+```powershell
+$LocalJdkPath = "C:\Path\to\your\jdk"            # contains bin\keytool.exe
+$LocalSdkPath = "$env:LOCALAPPDATA\Android\Sdk"  # contains platform-tools\
+```
+
+The scripts dot-source this file before falling back to env-vars and standard locations, so you only need to set whichever line(s) auto-detection misses on your box.
+
+If you don't have an Android SDK at all, install **Android Studio** ([developer.android.com/studio](https://developer.android.com/studio)) and run it once — it downloads the SDK to `%LOCALAPPDATA%\Android\Sdk` automatically and the build script picks it up with no further config.
+
+---
+
 ## 2. Generate the Play upload keystore (one-time, ~2 min)
 
 The sideload keystore in `android/sideload.keystore` is committed publicly and **must not** be used for the Play Store.
@@ -45,7 +64,7 @@ The sideload keystore in `android/sideload.keystore` is committed publicly and *
 **Double-click [`1-generate-upload-keystore.bat`](1-generate-upload-keystore.bat).** That's it.
 
 The script:
-- Finds a JDK on your machine (Android Studio's bundled JBR works automatically; otherwise honours `JAVA_HOME` or anything `keytool` on PATH).
+- Finds a JDK on your machine (auto-detected — see step 1.5 if not found).
 - Prompts for a password — input is hidden (`Read-Host -AsSecureString`), then prompts again to confirm.
 - Generates a 2048-bit RSA key valid for 30 000 days, with a clean DN (`CN=Erwin Mayer, O=Erwin Mayer, L=Menoncourt, C=FR` — edit the script if you want a different identity).
 - Writes the keystore to `<repo>\upload.keystore` (gitignored) and the password / alias to `<repo>\android\keystore.properties` (also gitignored). Both files are picked up automatically by the next-step build.
@@ -69,7 +88,7 @@ The script runs `npm run cap:sync` and `gradlew bundleRelease` for you, signs wi
 android/app/build/outputs/bundle/release/app-release.aab
 ```
 
-Prerequisites the script verifies: upload keystore exists, JDK is reachable, Android SDK is reachable (set `ANDROID_HOME` if it can't find the standard `%LOCALAPPDATA%\Android\Sdk` location). It also runs `npm ci` automatically on first invocation if `node_modules/` is missing.
+Prerequisites the script verifies: upload keystore exists, JDK is reachable, Android SDK is reachable (see step 1.5 above for the `local-config.ps1` override if either isn't auto-detected). It also runs `npm ci` automatically on first invocation if `node_modules/` is missing.
 
 **Each new release**: bump `versionCode` (must increase by 1+) and `versionName` in [`android/app/build.gradle`](../../android/app/build.gradle), then re-run the build script. Step 8 below has the full per-release checklist.
 

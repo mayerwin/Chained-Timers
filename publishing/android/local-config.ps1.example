@@ -1,0 +1,30 @@
+# =====================================================================
+# Per-machine path overrides for the publishing scripts.
+#
+# To use:
+#   1. Copy this file to "local-config.ps1" (same folder).
+#   2. Edit the paths to match your machine.
+#   3. The copy is gitignored; the .example version stays committed
+#      as the template.
+#
+# Anything left as $null falls back to:
+#   - JDK : $env:JAVA_HOME, then Android Studio's bundled JBR, then PATH
+#   - SDK : $env:ANDROID_HOME / $env:ANDROID_SDK_ROOT, then
+#           $env:LOCALAPPDATA\Android\Sdk
+#
+# So you only need to set what isn't already discoverable on your box.
+# =====================================================================
+
+# JDK root (the directory that contains bin\keytool.exe).
+# Any JDK 17+ works; Android Gradle Plugin 8 prefers 17 or 21.
+$LocalJdkPath = $null
+# Example:
+# $LocalJdkPath = "C:\Program Files\Android\Android Studio\jbr"
+
+# Android SDK root (the directory that contains platform-tools\).
+# Install via Android Studio (Tools > SDK Manager) or extract Google's
+# command-line tools standalone:
+#   https://developer.android.com/studio#command-line-tools-only
+$LocalSdkPath = $null
+# Example after a default Android Studio install:
+# $LocalSdkPath = "$env:LOCALAPPDATA\Android\Sdk"
