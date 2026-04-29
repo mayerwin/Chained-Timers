@@ -74,6 +74,14 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.2.0 (release notes — 4000 chars max — used ~120)
+
+```
+Various subtler timing fixes carried over from the Android side. (The notification-action and live-countdown improvements in this release are Android-only — iOS doesn't expose those primitives to third-party apps.)
+```
+
+---
+
 ## What's new in v1.1.2 (release notes — 4000 chars max — used ~330)
 
 ```

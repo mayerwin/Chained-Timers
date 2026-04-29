@@ -86,6 +86,28 @@
   }
   window.ChainedNativeStatus.fgServiceAvailable = chainTimerAvailable;
 
+  // Notification-action -> JS plumbing. When the user taps Pause/Resume/Stop
+  // in the persistent notification, ChainTimerPlugin.handleOnNewIntent
+  // fires a "chainCommand" event with { command: 'pause' | 'resume' | 'stop' }.
+  // We re-emit it as a plain DOM event so the engine in app.js can react
+  // without taking a hard dependency on Capacitor.
+  if (chainTimerAvailable) {
+    try {
+      ChainTimer.addListener('chainCommand', (event) => {
+        const cmd = event && event.command;
+        if (cmd !== 'pause' && cmd !== 'resume' && cmd !== 'stop') return;
+        log('chainCommand from notification:', cmd);
+        try {
+          window.dispatchEvent(new CustomEvent('chained:enginecommand', {
+            detail: { command: cmd, source: 'notification' },
+          }));
+        } catch (e) { log('dispatch chained:enginecommand failed:', e); }
+      });
+    } catch (e) {
+      log('ChainTimer.addListener(chainCommand) failed:', e);
+    }
+  }
+
   window.ChainedNativeStatus.available = true;
   log(`native bridge live (${window.ChainedNativeStatus.platform})`);
 
@@ -302,13 +324,21 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
     const titlePrefix = isPaused ? '⏸' : '▶';
+    // Wall-clock moment the segment will end. Anchored to the engine's
+    // segmentStartedAtMs (already excludes paused-time), so the system
+    // chronometer in the notification can tick down to the second
+    // without further JS touchpoints. Set to 0 when paused so the
+    // notification drops the live timer line.
+    const endTimeMs = (!isPaused && segmentStartedAtMs && cur.duration)
+      ? segmentStartedAtMs + cur.duration * 1000
+      : 0;
     return {
-      title:    `${titlePrefix} ${cur.name || 'Segment'} · ${fmtDur(cur.duration)}`,
+      title:    `${titlePrefix} ${cur.name || 'Segment'}`,
       body:     `Segment ${currentIndex + 1} of ${total} · ${name || 'Chain'}`,
       largeBody: [
         `${name || 'Chain'} · Segment ${currentIndex + 1} of ${total}`,
@@ -316,6 +346,8 @@
         next ? `Next: ${next.name || 'segment'} (${fmtDur(next.duration)})` : 'Last segment',
       ].join('\n'),
       subText:  `${currentIndex + 1}/${total}`,
+      paused:   !!isPaused,
+      endTimeMs,
     };
   }
 

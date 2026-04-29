@@ -210,10 +210,64 @@ public class ChainTimerPlugin extends Plugin {
         if (large != null) intent.putExtra(ChainTimerService.EXTRA_LARGE, large);
         String sub   = call.getString("subText", null);
         if (sub   != null) intent.putExtra(ChainTimerService.EXTRA_SUB, sub);
+
+        Boolean paused = call.getBoolean("paused", false);
+        intent.putExtra(ChainTimerService.EXTRA_PAUSED, paused != null && paused);
+
+        // endTimeMs: wall-clock moment when the current segment ends.
+        // Capacitor PluginCall.getLong handles JS numbers cleanly within
+        // the safe integer range (Date.now() values are ~1.8e12 << 2^53).
+        Long endTimeMs = call.getLong("endTimeMs");
+        if (endTimeMs != null && endTimeMs > 0L) {
+            intent.putExtra(ChainTimerService.EXTRA_END_TIME_MS, endTimeMs.longValue());
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getContext().startForegroundService(intent);
         } else {
             getContext().startService(intent);
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Notification-action plumbing.
+    //
+    // The pause/resume/stop buttons in the foreground-service notification
+    // each launch MainActivity (singleTask) with EXTRA_COMMAND set. The
+    // hooks below run in two scenarios:
+    //
+    //   - handleOnNewIntent: the activity was already alive (warm reuse).
+    //   - handleOnStart    : the activity was killed, this is the cold
+    //                        start triggered by the action tap.
+    //
+    // We forward the command to JS via notifyListeners with retainUntilConsumed
+    // so the event waits if the JS listener registers slightly later.
+    // -----------------------------------------------------------------
+
+    @Override
+    public void handleOnNewIntent(Intent data) {
+        super.handleOnNewIntent(data);
+        consumeChainCommand(data);
+    }
+
+    @Override
+    public void handleOnStart() {
+        super.handleOnStart();
+        if (getActivity() != null) {
+            consumeChainCommand(getActivity().getIntent());
+        }
+    }
+
+    private void consumeChainCommand(Intent intent) {
+        if (intent == null) return;
+        String cmd = intent.getStringExtra(ChainTimerService.EXTRA_COMMAND);
+        if (cmd == null) return;
+        // Consume so the same command doesn't fire on every subsequent
+        // lifecycle event with the same intent attached.
+        intent.removeExtra(ChainTimerService.EXTRA_COMMAND);
+
+        JSObject payload = new JSObject();
+        payload.put("command", cmd);
+        notifyListeners("chainCommand", payload, true);
     }
 }

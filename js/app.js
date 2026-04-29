@@ -2031,6 +2031,27 @@ function init() {
     if (Engine.isRunning) Engine._emitChainEvent('chain:reschedule');
   });
 
+  // Pause / Resume / Stop tapped in the persistent foreground-service
+  // notification. The native bridge (js/native.js) re-fires the
+  // ChainTimerPlugin "chainCommand" event as this DOM event so we don't
+  // have to tightly couple the engine to Capacitor.
+  window.addEventListener('chained:enginecommand', (e) => {
+    const cmd = e?.detail?.command;
+    if (!cmd) return;
+    if (cmd === 'pause') {
+      if (Engine.isRunning && !Engine.isPaused) Engine.pause();
+    } else if (cmd === 'resume') {
+      if (Engine.isRunning && Engine.isPaused) Engine.resume();
+    } else if (cmd === 'stop') {
+      if (Engine.isRunning) {
+        UI.cancelPrestart();
+        Engine.stop();
+        UI.hideCompletion();
+        View.show('library');
+      }
+    }
+  });
+
   // Native bridge ↔ web bridge: surface native errors as in-app toasts,
   // and re-render Settings when the native status changes.
   window.addEventListener('chained:toast', (e) => {

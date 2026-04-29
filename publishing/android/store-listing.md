@@ -56,6 +56,18 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.2.0 (release notes — 500 chars max — used ~470)
+
+```
+Pause, Resume, and Stop directly from the persistent notification — no need to unlock and open the app between segments.
+
+Live time-remaining countdown in the notification. The system clock ticks the segment down to 0:00 in the notification shade, so a glance at the lock screen tells you how long is left.
+
+(Plus all the v1.1.x reliability work: foreground service, exact alarms, battery-optimization detection, 4-min alarm-queue heartbeat.)
+```
+
+---
+
 ## What's new in v1.1.2 (release notes — 500 chars max — used ~485)
 
 ```

@@ -42,10 +42,20 @@ public class ChainTimerService extends Service {
     public static final String ACTION_UPDATE = "com.mayerwin.chainedtimers.action.UPDATE";
     public static final String ACTION_STOP   = "com.mayerwin.chainedtimers.action.STOP";
 
-    public static final String EXTRA_TITLE     = "title";
-    public static final String EXTRA_BODY      = "body";
-    public static final String EXTRA_LARGE     = "largeBody";
-    public static final String EXTRA_SUB       = "subText";
+    public static final String EXTRA_TITLE       = "title";
+    public static final String EXTRA_BODY        = "body";
+    public static final String EXTRA_LARGE       = "largeBody";
+    public static final String EXTRA_SUB         = "subText";
+    public static final String EXTRA_PAUSED      = "paused";
+    public static final String EXTRA_END_TIME_MS = "endTimeMs";
+
+    // Forwarded by notification action buttons to MainActivity. The
+    // ChainTimerPlugin reads the extra in handleOnNewIntent / handleOnStart
+    // and notifies JS via the "chainCommand" event.
+    public static final String EXTRA_COMMAND = "chainCommand";
+    public static final String COMMAND_PAUSE  = "pause";
+    public static final String COMMAND_RESUME = "resume";
+    public static final String COMMAND_STOP   = "stop";
 
     public static final String CHANNEL_ID = "chain-running";
     private static final int NOTIFICATION_ID = 7000;
@@ -80,8 +90,10 @@ public class ChainTimerService extends Service {
         final String body      = strOr(intent, EXTRA_BODY,  "");
         final String largeBody = strOr(intent, EXTRA_LARGE, body);
         final String subText   = strOr(intent, EXTRA_SUB,   null);
+        final boolean paused   = intent != null && intent.getBooleanExtra(EXTRA_PAUSED, false);
+        final long endTimeMs   = intent != null ? intent.getLongExtra(EXTRA_END_TIME_MS, 0L) : 0L;
 
-        Notification n = buildNotification(title, body, largeBody, subText);
+        Notification n = buildNotification(title, body, largeBody, subText, paused, endTimeMs);
 
         if (Build.VERSION.SDK_INT >= 34) {
             // API 34 (Android 14)+ requires a foregroundServiceType. We
@@ -125,7 +137,10 @@ public class ChainTimerService extends Service {
         nm.createNotificationChannel(ch);
     }
 
-    private Notification buildNotification(String title, String body, String largeBody, String subText) {
+    private Notification buildNotification(
+            String title, String body, String largeBody, String subText,
+            boolean paused, long endTimeMs) {
+        // Tap the notification body itself -> open the app on its current view.
         Intent appIntent = new Intent(this, MainActivity.class);
         appIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
@@ -141,12 +156,54 @@ public class ChainTimerService extends Service {
             .setContentIntent(pi)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE);
         if (subText != null) b.setSubText(subText);
+
+        // Live countdown: when not paused and we know when the segment
+        // ends in wall-clock terms, anchor a chronometer to that moment
+        // and let Android tick it down to 0:00. setChronometerCountDown
+        // is API 24+; everything else is older. Without an end time
+        // (e.g. paused state, or when the JS side hasn't computed it yet)
+        // we fall back to no timestamp.
+        if (!paused && endTimeMs > 0L) {
+            b.setUsesChronometer(true);
+            b.setShowWhen(true);
+            b.setWhen(endTimeMs);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                b.setChronometerCountDown(true);
+            }
+        } else {
+            b.setUsesChronometer(false);
+            b.setShowWhen(false);
+        }
+
+        // Action buttons. Tap routes through MainActivity (singleTask) so
+        // the JS Engine stays the source of truth for pause/resume/stop;
+        // the plugin's handleOnNewIntent picks up the extra and notifies
+        // JS via the "chainCommand" event.
+        b.addAction(
+            paused ? android.R.drawable.ic_media_play : android.R.drawable.ic_media_pause,
+            paused ? "Resume" : "Pause",
+            commandPendingIntent(paused ? COMMAND_RESUME : COMMAND_PAUSE, 11)
+        );
+        b.addAction(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            "Stop",
+            commandPendingIntent(COMMAND_STOP, 12)
+        );
+
         return b.build();
+    }
+
+    private PendingIntent commandPendingIntent(String command, int requestCode) {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        intent.putExtra(EXTRA_COMMAND, command);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getActivity(this, requestCode, intent, flags);
     }
 
     @SuppressLint("WakelockTimeout")
