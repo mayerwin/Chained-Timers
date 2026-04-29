@@ -56,6 +56,18 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.2.2 (release notes — 500 chars max — used ~430)
+
+```
+Smaller polish-and-correctness pass over v1.2.x, found by a fresh code audit:
+
+• Reliability probes (notifications-blocked / battery-restricted toasts) now only fire on a fresh chain start, not on every skip / pause / resume / heartbeat.
+• Stopping a chain from the notification leaves you on whatever view you were on, instead of force-jumping to the library.
+• Pending alarms are now cancelled BEFORE the foreground service tears down (closes a microsecond race where a transition could have fired during stop).
+```
+
+---
+
 ## What's new in v1.2.1 (release notes — 500 chars max — used ~410)
 
 ```

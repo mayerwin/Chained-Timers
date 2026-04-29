@@ -246,20 +246,26 @@
   }
 
   async function cancelAll() {
-    await stopService();
+    // Order matters: cancel pre-scheduled AlarmManager alarms FIRST,
+    // THEN stop the foreground service. If we stopped the service first
+    // there'd be a brief window where the FGS notification is gone but
+    // a transition alarm could still fire and confuse the user with
+    // a "Next: X" pop-up while the chain is being cancelled.
     const ids = [...scheduledIds];
     if (statusActive) ids.push(STATUS_ID);
-    if (!ids.length) return;
-    try {
-      await LocalNotifications.cancel({
-        notifications: ids.map(id => ({ id })),
-      });
-      log(`cancelled ${ids.length} notifications`);
-    } catch (e) {
-      log('cancel failed:', e);
+    if (ids.length) {
+      try {
+        await LocalNotifications.cancel({
+          notifications: ids.map(id => ({ id })),
+        });
+        log(`cancelled ${ids.length} notifications`);
+      } catch (e) {
+        log('cancel failed:', e);
+      }
     }
     scheduledIds = [];
     statusActive = false;
+    await stopService();
   }
 
   // Post (or replace) the persistent "▶ now playing" notification on the
@@ -311,16 +317,26 @@
   // naturally — both the foreground service (so the wake lock is released
   // and the ongoing notification disappears) and the LocalNotifications
   // fallback row, if either was used. Distinct from cancelAll, which is
-  // called on user-initiated stop and also kills pending transition alarms.
+  // called on user-initiated stop and ALSO cancels pending transition
+  // alarms; here those alarms already fired (the chain ended naturally),
+  // they're gone from the OS pending queue, but our in-memory tracking
+  // needs the explicit reset so the next chain start re-runs the
+  // reliability probes (gated by wasFreshStart in scheduleAll).
+  //
+  // The just-fired "✓ Chain complete" alarm stays in the user's tray
+  // intentionally — _complete() calls stop({preserveNotifications:true})
+  // and only the sticky "▶ Now playing" indicator is cleared here.
   async function cancelStatus() {
-    await stopService();
-    if (!statusActive) return;
-    try {
-      await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
-    } catch (e) {
-      log('cancelStatus failed:', e);
+    scheduledIds = [];
+    if (statusActive) {
+      try {
+        await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
+      } catch (e) {
+        log('cancelStatus failed:', e);
+      }
+      statusActive = false;
     }
-    statusActive = false;
+    await stopService();
   }
 
   // ---------- Foreground service control plane ----------
@@ -367,7 +383,10 @@
         await ChainTimer.start(content);
         serviceRunning = true;
       }
-      window.ChainedNativeStatus.fgService = true;
+      if (!window.ChainedNativeStatus.fgService) {
+        window.ChainedNativeStatus.fgService = true;
+        notifyStatusChanged();
+      }
       return true;
     } catch (e) {
       log('ChainTimer service call failed:', e);
@@ -380,6 +399,7 @@
     try { await ChainTimer.stop(); } catch (e) { log('ChainTimer.stop failed:', e); }
     serviceRunning = false;
     window.ChainedNativeStatus.fgService = false;
+    notifyStatusChanged();
   }
 
   // FGS-only update path. Used for natural segment advances where the
@@ -480,6 +500,15 @@
     }
     await ensureChannel();
 
+    // Snapshot "is this a fresh chain start?" BEFORE the cancel block
+    // wipes scheduledIds. Used below to gate the noisy reliability probes
+    // (notif-health + battery-opt toasts) so they only fire on the first
+    // schedule of a fresh run -- not on every skip / pause / resume /
+    // heartbeat. True on initial chain:start, true on cold-start
+    // restoreIfActive (no prior scheduledIds, no live service), false on
+    // every mid-chain reschedule.
+    const wasFreshStart = !scheduledIds.length && !statusActive && !serviceRunning;
+
     // Cancel pre-scheduled alarms but don't tear down the foreground
     // service — startOrUpdateService below will replace its notification
     // in place. Stopping the FGS would briefly drop the wake lock and
@@ -507,9 +536,10 @@
     // the in-tray sticky LocalNotification so the user still sees status.
     if (!fgsActive) await postStatus(detail);
 
-    // Reliability probes — only for fresh starts (first schedule call;
-    // re-schedules during a chain don't need to re-probe).
-    if (!isPaused && !scheduledIds.length) {
+    // Reliability probes — only on the first schedule of a fresh chain
+    // start (or restore after kill). Mid-chain reschedules from skip /
+    // pause / resume / heartbeat skip these to avoid toast spam.
+    if (!isPaused && wasFreshStart) {
       // Notification health: any of the three flags being false means
       // the user will miss alerts silently. This is unrecoverable in-app
       // — we can only surface it loudly so they fix it in OS settings.

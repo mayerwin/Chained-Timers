@@ -2060,7 +2060,12 @@ function init() {
         UI.cancelPrestart();
         Engine.stop();
         UI.hideCompletion();
-        View.show('library');
+        // Only force-navigate when the user was on the run view; if they
+        // were in the editor / library / settings when they tapped Stop
+        // from the notification, leave them where they were.
+        if (document.body.dataset.view === 'run') {
+          View.show('library');
+        }
       }
     }
   });
