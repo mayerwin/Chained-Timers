@@ -56,6 +56,17 @@ Open source: github.com/mayerwin/Chained-Timers
 
 ---
 
+## What's new in v1.2.1 (release notes — 500 chars max — used ~410)
+
+```
+Tighter background reliability for v1.2 (pause/stop in notification, live countdown):
+
+• Live "now playing" notification now refreshes on every natural segment boundary, so the chronometer always tracks the *current* segment instead of staying stuck at the previous one.
+• Service uses START_NOT_STICKY so an OS-killed background service can't restart with stale content; reopening the app cleanly re-establishes it.
+```
+
+---
+
 ## What's new in v1.2.0 (release notes — 500 chars max — used ~470)
 
 ```

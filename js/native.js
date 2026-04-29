@@ -12,11 +12,16 @@
    always see (without a sound ping) what segment is running and what's
    coming next.
 
-   The web Engine drives the bridge via four CustomEvents:
+   The web Engine drives the bridge via five CustomEvents:
      - chain:start       → schedule all upcoming segment-end notifications
                             and post the sticky now-playing row
      - chain:reschedule  → cancel + re-schedule (after skip / resume /
                             pause / restored from persistence)
+     - chain:fgsupdate   → refresh the now-playing notification only
+                            (after natural segment advance, when the
+                            alarm queue is still correct from chain:start
+                            and we just want the chronometer / title to
+                            track the new segment)
      - chain:cancel      → cancel everything (after stop)
      - chain:complete    → clear only the now-playing row (chain ended
                             naturally; the just-fired "✓ Chain complete"
@@ -377,6 +382,19 @@
     window.ChainedNativeStatus.fgService = false;
   }
 
+  // FGS-only update path. Used for natural segment advances where the
+  // pre-scheduled alarm queue is still correct (their absolute fire
+  // times never moved) and only the persistent "now playing" notification
+  // — current title, chronometer end-time, position counter — needs to
+  // catch up to the new segment. Skips the cancel + re-schedule round-trip
+  // that scheduleAll() does, which is critical for short-segment chains
+  // (Box Breath: 4-second segments would otherwise hammer AlarmManager
+  // with hundreds of cancel/reschedule pairs over a 13-minute run).
+  async function refreshFgsOnly(detail) {
+    const fgsActive = await startOrUpdateService(detail);
+    if (!fgsActive) await postStatus(detail);
+  }
+
   // ---------- Reliability probes ----------
   // For medication-grade use cases the user MUST be exempt from battery
   // optimisation: even with a foreground service + wake lock + exact
@@ -657,10 +675,14 @@
     if (type === 'schedule')       return serialize(() => scheduleAll(detail));
     if (type === 'cancel')         return serialize(() => cancelAll());
     if (type === 'cancel-status')  return serialize(() => cancelStatus());
+    if (type === 'fgs-update')     return serialize(() => refreshFgsOnly(detail));
   }
 
   window.addEventListener('chain:start',      e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
   window.addEventListener('chain:reschedule', e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
+  // Natural segment advance: alarms still valid, just refresh the FGS
+  // notification (title, chronometer, action button). No alarm churn.
+  window.addEventListener('chain:fgsupdate',  e => preWarmDone ? dispatch('fgs-update', e.detail) : queuedEvents.push({ type: 'fgs-update', detail: e.detail }));
   window.addEventListener('chain:cancel',     ()  => preWarmDone ? dispatch('cancel')           : queuedEvents.push({ type: 'cancel' }));
   // Chain finished naturally: clear only the sticky status row, leave the
   // "✓ Chain complete" alarm that just fired in the tray for the user.

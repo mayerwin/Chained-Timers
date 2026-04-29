@@ -1,6 +1,6 @@
 {
   "name": "chained-timers",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "The interval forge — a small, fast, installable PWA that sequences timers into named chains. Native-shell builds via Capacitor.",
   "private": true,
   "license": "MIT",

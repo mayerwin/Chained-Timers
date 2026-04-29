@@ -73,7 +73,17 @@ public class ChainTimerService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        final String action = intent != null ? intent.getAction() : ACTION_START;
+        // Defensive: a null intent here means the OS is auto-restarting us
+        // (only possible with START_STICKY, which we don't return). If it
+        // ever happens we have no chain content to display and JS is gone,
+        // so the right move is to bail out cleanly rather than post a
+        // stale "Chain running" notification with the wake lock attached.
+        if (intent == null) {
+            stopRun();
+            return START_NOT_STICKY;
+        }
+
+        final String action = intent.getAction();
 
         if (ACTION_STOP.equals(action)) {
             stopRun();
@@ -90,8 +100,8 @@ public class ChainTimerService extends Service {
         final String body      = strOr(intent, EXTRA_BODY,  "");
         final String largeBody = strOr(intent, EXTRA_LARGE, body);
         final String subText   = strOr(intent, EXTRA_SUB,   null);
-        final boolean paused   = intent != null && intent.getBooleanExtra(EXTRA_PAUSED, false);
-        final long endTimeMs   = intent != null ? intent.getLongExtra(EXTRA_END_TIME_MS, 0L) : 0L;
+        final boolean paused   = intent.getBooleanExtra(EXTRA_PAUSED, false);
+        final long endTimeMs   = intent.getLongExtra(EXTRA_END_TIME_MS, 0L);
 
         Notification n = buildNotification(title, body, largeBody, subText, paused, endTimeMs);
 
@@ -109,7 +119,13 @@ public class ChainTimerService extends Service {
             acquireWakeLock();
         }
         running = true;
-        return START_STICKY;
+
+        // START_NOT_STICKY: if the OS kills us under memory pressure, do
+        // NOT auto-restart with a null intent. JS state is lost too at
+        // that point; the right path back is the user reopening the app,
+        // which calls Engine.restoreIfActive -> chain:reschedule and
+        // re-establishes the FGS with current chain content.
+        return START_NOT_STICKY;
     }
 
     private void stopRun() {

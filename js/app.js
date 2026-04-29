@@ -591,6 +591,13 @@ const Engine = {
         advanced = true;
       } else break;
     }
+    // If we advanced past one or more segments, the foreground-service
+    // notification (and its chronometer) is stale. Refresh it once at
+    // the end — the alarm queue stays untouched because future alarms
+    // were pre-set at chain:start and remain correct.
+    if (advanced && this.isRunning) {
+      this._emitChainEvent('chain:fgsupdate');
+    }
     return advanced;
   },
 
@@ -696,8 +703,14 @@ const Engine = {
     this._persist();
     this.onSegmentChange?.();
     this._loop();
-    // Only manual user-driven skips need to re-issue the OS schedule.
-    if (reason === 'skip') this._emitChainEvent('chain:reschedule');
+    // Only manual user-driven skips need to re-issue the OS schedule
+    // (their fire times moved). For natural advances the alarm queue
+    // is still correct from chain:start, but the foreground notification
+    // and its live countdown are stale — emit a lightweight FGS-only
+    // refresh that doesn't touch the alarm queue. 'catchup' batches its
+    // FGS refresh once at the end of the catch-up loop in _catchup.
+    if (reason === 'skip')      this._emitChainEvent('chain:reschedule');
+    else if (reason === 'auto') this._emitChainEvent('chain:fgsupdate');
   },
 
   pause() {
