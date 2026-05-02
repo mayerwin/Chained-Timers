@@ -1,5 +1,5 @@
 {
-  "appId": "com.mayerwin.chainedtimers",
+  "appId": "com.github.chainedtimers",
   "appName": "Chained Timers",
   "webDir": "dist",
   "bundledWebRuntime": false,

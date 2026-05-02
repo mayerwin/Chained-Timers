@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Base application theme. -->
     <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
@@ -13,6 +13,34 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!--
+          App is dark-themed and edge-to-edge (targetSdk 35+ enforces this).
+          Without these overrides Android 15+ paints a translucent contrast
+          scrim behind the status / navigation bars when it can't tell that
+          our content is already dark — which manifests as the light grey
+          band the user reported above the "CHAINED TIMERS" header.
+
+          - statusBarColor / navigationBarColor : transparent so the WebView
+            body background (#0E0D0B) shows through.
+          - windowLightStatusBar = false : light icons on dark background.
+          - enforceStatus/NavigationBarContrast = false (API 29+) : tells
+            Android NOT to add the auto-scrim; we vouch for our own contrast.
+        -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="29">false</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="29">false</item>
+        <!--
+          windowBackground = our dark app background instead of the
+          AppCompat default. Without this, when the system insets push
+          the WebView down (Android 15+ enforced edge-to-edge double-
+          insets the WebView container by another statusBarHeight on
+          top of the system bar inset itself), the activity background
+          shows through as a white band above the WebView content.
+        -->
+        <item name="android:windowBackground">@color/appBg</item>
     </style>
 
 

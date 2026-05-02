@@ -82,11 +82,13 @@ The Gradle build is wired to fall back to the sideload key if `keystore.properti
 
 **Double-click [`3-build-play-aab.bat`](3-build-play-aab.bat).**
 
-The script runs `npm run cap:sync` and `gradlew bundleRelease` for you, signs with the upload key (from step 2), and prints the output path:
+The script runs `npm run cap:sync` and `gradlew bundleRelease` for you, signs with the upload key (from step 2), then copies the resulting AAB next to the rest of the publishing material:
 
 ```
-android/app/build/outputs/bundle/release/app-release.aab
+publishing/android/chained-timers-v<versionName>-play.aab
 ```
+
+(Gradle's deep output `android/app/build/outputs/bundle/release/app-release.aab` is left in place for incremental rebuilds; the staged copy is purely a convenience so you don't have to dig for it when uploading to Play Console. The staged `.aab` is gitignored.)
 
 Prerequisites the script verifies: upload keystore exists, JDK is reachable, Android SDK is reachable (see step 1.5 above for the `local-config.ps1` override if either isn't auto-detected). It also runs `npm ci` automatically on first invocation if `node_modules/` is missing.
 
@@ -201,7 +203,7 @@ Click **Save** at the bottom.
 Left sidebar → **Test and release → Testing → Internal testing**.
 
 ### 6.2 Create new release
-- **App bundle**: upload `android/app/build/outputs/bundle/release/app-release.aab` (built in step 3).
+- **App bundle**: upload `publishing/android/chained-timers-v<versionName>-play.aab` (built in step 3).
 - The Console will show a green check if the signature is valid.
 - **Release name**: `1.0.0` (auto-fills from versionName).
 - **Release notes** (per language, English by default): paste from [`store-listing.md`](store-listing.md) §"What's new in v1.0.0".
@@ -243,7 +245,7 @@ Left sidebar → **Test and release → Production → Create new release**.
 - You'll receive an email when approved or if changes are required.
 
 ### 7.3 Once live
-- Listing URL will be `https://play.google.com/store/apps/details?id=com.mayerwin.chainedtimers`.
+- Listing URL will be `https://play.google.com/store/apps/details?id=com.github.chainedtimers`.
 - Update the README's "Install" section to link there once live.
 
 ---

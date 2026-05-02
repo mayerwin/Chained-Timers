@@ -30,6 +30,20 @@ android/app/*.iml
 # its properties file are per-developer secrets and never committed.
 publishing/android/upload.keystore
 publishing/android/keystore.properties
+# Build artifacts staged in publishing/ by 3-build-play-aab.ps1 (and the
+# iOS counterpart). The originals stay under android/app/build/outputs/
+# and ios/App/build/, but those deep paths are awkward to find when
+# uploading to the stores -- the publishing scripts copy a versioned
+# filename here for convenience. Always reproducible from `gradlew
+# bundleRelease` / `xcodebuild`, never committed.
+publishing/android/*.aab
+publishing/android/*.apk
+publishing/ios/*.ipa
+publishing/ios/*.xcarchive/
+# FGS_SPECIAL_USE demo screen recording uploaded to Play Console alongside
+# the AAB. Reproducible from `adb shell screenrecord` against an emulator
+# with the app sideloaded; not worth committing the binary on every push.
+publishing/android/fgs-demo.mp4
 # Backward-compatibility ignores for the v1.1.x layout where these
 # lived at the repo root / under android/. Safe to keep.
 android/keystore.properties

@@ -555,13 +555,31 @@ const Engine = {
       // forward on resume), so fireAt = segmentStartedAtWall + duration
       // is the correct wall-clock moment.
       const segmentStartedAtMs = this.segmentStartedAtWall + this.pausedDuration;
+      // pausedAtMs: the wall-clock moment of pause, frozen since then.
+      // Anchored time the native side needs to compute "remaining at the
+      // moment of pause" without drifting as Date.now() keeps marching
+      // forward (which would silently zero the displayed remaining after
+      // any non-trivial pause, e.g. across an app restart).
+      const pausedAtMs = this.isPaused ? this.pausedAtWall : 0;
+      // Mirror the user's audio preferences so the native service can
+      // play the same Audio.chime / Audio.finale / Audio.tick cues via
+      // SoundPool while the WebView is asleep — otherwise backgrounded
+      // chains would skip those cues entirely. soundEnabled gates ALL
+      // service-side audio; tickEnabled additionally requires the
+      // "Final-tick" toggle to honour the same in-app gating.
+      const settings = Store.getSettings();
+      const soundEnabled = settings.sound !== false;
+      const tickEnabled  = soundEnabled && settings.finalTick !== false;
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           name: this.chain?.name,
           segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
           currentIndex: this.currentIndex,
           segmentStartedAtMs,
+          pausedAtMs,
           isPaused: this.isPaused,
+          tickEnabled,
+          soundEnabled,
         },
       }));
     } catch {}
@@ -580,7 +598,7 @@ const Engine = {
   // restoration. Uses 'catchup' so we don't replay every missed chime/voice
   // back-to-back (the user wasn't listening) and don't re-issue OS schedules
   // (those were pre-set at chain:start with absolute fire times).
-  _catchup() {
+  _catchup(opts = {}) {
     if (!this.isRunning || this.isPaused) return false;
     let advanced = false;
     while (this.isRunning && !this.isPaused) {
@@ -595,7 +613,12 @@ const Engine = {
     // notification (and its chronometer) is stale. Refresh it once at
     // the end — the alarm queue stays untouched because future alarms
     // were pre-set at chain:start and remain correct.
-    if (advanced && this.isRunning) {
+    //
+    // opts.silent skips this emit. Used when an action method (skipNext /
+    // pause / etc.) is about to dispatch its own chain:reschedule with
+    // the post-action state — the catchup is just an internal sync and
+    // we don't want to send TWO updates back-to-back to the FGS.
+    if (!opts.silent && advanced && this.isRunning) {
       this._emitChainEvent('chain:fgsupdate');
     }
     return advanced;
@@ -611,12 +634,24 @@ const Engine = {
 
       const elapsedMs = this._elapsedMs();
 
-      // If the WebView was frozen long enough to span an entire segment
-      // boundary, walk forward through every segment whose wall-clock
+      // If the WebView was frozen long enough to span MULTIPLE segment
+      // boundaries, walk forward through every segment whose wall-clock
       // duration has elapsed. Without this, a single tick would only
       // advance one segment and snap the next to "just starting".
+      //
+      // Important: only switch to catchup mode when more than ONE segment
+      // is past — i.e. the *next* segment's whole duration also elapsed.
+      // For a normal foreground tick that just crossed the *current*
+      // segment's boundary, fall through to the regular _advance('auto')
+      // below so the chime / voice / "Chain complete" overlay actually
+      // fire. Previously this branch always took the catchup path and
+      // silently swallowed those cues, including for the last-segment
+      // end, leaving the run view stuck at "00:00" with no overlay.
       if (!this.isPaused && elapsedMs >= seg.duration * 1000) {
-        if (this._catchup()) {
+        const nextSeg = this.segments[this.currentIndex + 1];
+        const overshootMs = elapsedMs - seg.duration * 1000;
+        const multipleBoundariesPast = nextSeg && overshootMs >= nextSeg.duration * 1000;
+        if (multipleBoundariesPast && this._catchup()) {
           this.onSegmentChange?.();
           // _advance kicks _loop again, but it cancelled rafId first;
           // bail here so the new loop owns the next frame.
@@ -684,13 +719,20 @@ const Engine = {
       return;
     }
 
-    // Segment transition cues — only when the user is actually present.
+    // Segment transition cues — only when the user is actually present
+    // AND the transition is automatic. A user-initiated skip doesn't need
+    // a "transition happened" chime/vibe: the user just tapped Next or
+    // Previous and already knows. Voice still announces the new segment
+    // since that's useful context, not a confirmation cue.
+    const isUserSkip = reason === 'skip';
     if (reason !== 'catchup') {
-      if (Store.getSettings().sound)   Audio.chime();
-      if (Store.getSettings().vibrate) Vibe.segmentEnd();
+      if (!isUserSkip && Store.getSettings().sound)   Audio.chime();
+      if (!isUserSkip && Store.getSettings().vibrate) Vibe.segmentEnd();
       const nextSeg = this.segments[this.currentIndex];
       if (Store.getSettings().voice && nextSeg) Voice.speak(nextSeg.name);
-      Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
+      if (!isUserSkip) {
+        Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
+      }
     }
 
     this.segmentStartedAtWall = nextStartWall;
@@ -715,13 +757,30 @@ const Engine = {
 
   pause() {
     if (!this.isRunning || this.isPaused) return;
+    // Sync to wall clock first. The native FGS service may have advanced
+    // segments in the background; without this catch-up we'd freeze the
+    // clock on whatever segment JS last observed (pre-background) instead
+    // of the one the user is currently looking at in the notification.
+    this._catchup({ silent: true });
+    if (!this.isRunning) return;
     this.isPaused = true;
     this.pausedAtWall = Date.now();
     document.querySelector('.view-run')?.classList.add('is-paused');
     document.querySelector('.view-run')?.classList.remove('is-warning');
     Wake.release();
     cancelAnimationFrame(this.rafId);
-    this.onTick?.(this.segments[this.currentIndex], null, null);
+    // Re-render the run-view clock with the actual remaining time at the
+    // moment of pause. Without this the UI reads onTick(seg, null, null)
+    // as "no remaining info" and falls back to seg.duration — which makes
+    // the clock visibly JUMP from e.g. 00:42 up to the segment's full
+    // duration the instant Pause is tapped, looking like the button is
+    // broken and the timer froze at the wrong value.
+    const seg = this.segments[this.currentIndex];
+    if (seg) {
+      const elapsedSec = this._elapsedMs() / 1000;
+      const remainingSec = Math.max(0, seg.duration - elapsedSec);
+      this.onTick?.(seg, remainingSec, elapsedSec);
+    }
     this._persist();
     // Re-emit so the native bridge cancels future transition alarms
     // (they'd fire at the wrong wall-clock moments while paused) but
@@ -747,10 +806,21 @@ const Engine = {
 
   skipNext() {
     if (!this.isRunning) return;
+    // Catch up to wall clock first so we skip from the segment the user
+    // currently sees (in the notification or run view) — not the one JS
+    // last observed before the WebView was backgrounded. Without this,
+    // tapping "Next" on a notification showing 9/16 would advance from
+    // JS's stale 7/16 to 8/16 instead of 9/16 → 10/16.
+    if (!this.isPaused) this._catchup({ silent: true });
+    if (!this.isRunning) return;
     this._advance('skip');
   },
 
   skipPrev() {
+    if (!this.isRunning) return;
+    // Same wall-clock sync as skipNext: jump back from where the user
+    // currently sees us, not from where JS last observed.
+    if (!this.isPaused) this._catchup({ silent: true });
     if (!this.isRunning) return;
     const restartCurrent = () => {
       const now = Date.now();
@@ -799,11 +869,19 @@ const Engine = {
   _complete(reason = 'auto') {
     const total = this.segments.reduce((s, x) => s + x.duration, 0);
     this.stop({ preserveNotifications: true });
-    // The "Chain complete" transition alarm has either just fired or is
-    // about to (it was pre-scheduled at chain:start). We keep that one in
-    // the tray but the sticky "▶ Now playing" indicator no longer makes
-    // sense, so dismiss it.
-    window.dispatchEvent(new CustomEvent('chain:complete'));
+    // Hand off chain end to the native shell. With the FGS plugin, the
+    // service replaces its persistent notification with a single
+    // "✓ Chain complete" heads-up and stops itself; on the OS-fallback
+    // path the LocalNotifications status row is cleared. Either way the
+    // user ends up with one notification for chain end, not a stack.
+    window.dispatchEvent(new CustomEvent('chain:complete', {
+      detail: {
+        name: this.chain?.name,
+        segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
+        currentIndex: this.segments.length - 1,
+        totalSeconds: total,
+      },
+    }));
     // Catchup completion happens silently: the chain ended while the user
     // was away, the OS already fired the "Chain complete" notification at
     // the correct wall-clock moment, and we don't want to replay the
@@ -919,8 +997,15 @@ const Engine = {
     // re-sweeps and re-schedules from the *current* position.
     this._emitChainEvent('chain:reschedule');
     if (!this.isPaused) this._loop();
-    // Render the paused/running clock once even when no rAF is running.
-    this.onTick?.(this.segments[this.currentIndex], null, null);
+    // Render the paused/running clock once even when no rAF is running,
+    // with real remaining/elapsed values so the clock doesn't snap to
+    // the segment's full duration on cold-start restoration.
+    const restoredSeg = this.segments[this.currentIndex];
+    if (restoredSeg) {
+      const elapsedSec = this._elapsedMs() / 1000;
+      const remainingSec = Math.max(0, restoredSeg.duration - elapsedSec);
+      this.onTick?.(restoredSeg, remainingSec, elapsedSec);
+    }
     return true;
   },
 };
@@ -2017,12 +2102,29 @@ function init() {
   // The engine is fully wall-clock driven, so this is purely a "wake the
   // rAF loop and refresh the UI" call. _catchup walks past every segment
   // whose duration elapsed during the freeze.
+  // After a wall-clock catchup that ended the chain (e.g. the app was
+  // backgrounded across the last segment), get the user off the now-stale
+  // run view. Without this they're stuck looking at the segment+remaining
+  // values frozen from the moment they backgrounded the app, and every
+  // in-app control silently does nothing because isRunning flipped to
+  // false — exactly the "pause button doesn't work, timer looks frozen"
+  // symptom. The OS-fired "✓ Chain complete" notification already cued
+  // the user; no point replaying the in-app overlay now.
+  function bailOutOfStaleRunView() {
+    if (Engine.isRunning) return;
+    if (document.body.dataset.view !== 'run') return;
+    UI.hideCompletion();
+    View.show('library');
+  }
+
   function refreshFromWallClock() {
     if (!Engine.isRunning || Engine.isPaused) return;
     Engine._catchup();
     if (Engine.isRunning) {
       Engine._loop();              // re-prime rAF if it was cancelled
       UI.updateRunSegmentInfo();
+    } else {
+      bailOutOfStaleRunView();
     }
   }
   document.addEventListener('visibilitychange', () => {
@@ -2041,7 +2143,18 @@ function init() {
   // tail of "alarms silently lost" scenarios — force-stop, OEM kill,
   // OS Doze coalescing the inexact-alarm fallback.
   window.addEventListener('chained:nudgereschedule', () => {
-    if (Engine.isRunning) Engine._emitChainEvent('chain:reschedule');
+    if (!Engine.isRunning) { bailOutOfStaleRunView(); return; }
+    // Catch up to wall clock FIRST. If the chain elapsed past its end
+    // while the WebView was paused, _catchup → _complete sets isRunning
+    // false and we skip the reschedule entirely. Without this we'd
+    // re-up the FGS service with stale state right before
+    // refreshFromWallClock catches it, and the subsequent
+    // chain:complete event would then post a duplicate
+    // "✓ Chain complete" notification on top of the one the service
+    // already posted when it self-completed in the background.
+    if (!Engine.isPaused) Engine._catchup();
+    if (!Engine.isRunning) { bailOutOfStaleRunView(); return; }
+    Engine._emitChainEvent('chain:reschedule');
   });
 
   // Pause / Resume / Stop tapped in the persistent foreground-service
@@ -2055,6 +2168,10 @@ function init() {
       if (Engine.isRunning && !Engine.isPaused) Engine.pause();
     } else if (cmd === 'resume') {
       if (Engine.isRunning && Engine.isPaused) Engine.resume();
+    } else if (cmd === 'skip-next') {
+      if (Engine.isRunning) Engine.skipNext();
+    } else if (cmd === 'skip-prev') {
+      if (Engine.isRunning) Engine.skipPrev();
     } else if (cmd === 'stop') {
       if (Engine.isRunning) {
         UI.cancelPrestart();

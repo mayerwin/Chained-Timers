@@ -81,7 +81,7 @@ Xcode-managed by default. If you ever export it:
 ```
 File:        Apple_Distribution.p12   (do NOT commit, keep in password manager)
 Password:    <password chosen at export>
-Bundle IDs:  com.mayerwin.chainedtimers
+Bundle IDs:  com.github.chainedtimers
 ```
 
 ### App Store Connect API key (for fastlane / xcodebuild --apiKey)

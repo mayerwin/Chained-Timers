@@ -185,7 +185,7 @@ A pair of one-click scripts in [`publishing/android/`](publishing/android/) hand
 |------|--------|--------------|
 | **1. Generate keystore** (one-time) | `publishing\android\1-generate-upload-keystore.bat` | Prompts for a password (hidden), runs `keytool` with the right DN (`C=FR`, RSA 2048, 30 000-day validity), writes both `upload.keystore` and `keystore.properties` into `publishing\android\` next to the committed `sideload.keystore`. Both upload-key files gitignored. |
 | **2. View fingerprints** | `publishing\android\2-show-fingerprints.bat` | Prints SHA-1 + SHA-256 for the upload key (paste into Play Console → "App signing" → "Upload key certificate") and the sideload key (for the GitHub Releases page). |
-| **3. Build the AAB** (per release) | `publishing\android\3-build-play-aab.bat` | Runs `npm run cap:sync` + `gradlew bundleRelease`, signs with the upload key, prints the path of the resulting `app-release.aab`. |
+| **3. Build the AAB** (per release) | `publishing\android\3-build-play-aab.bat` | Runs `npm run cap:sync` + `gradlew bundleRelease`, signs with the upload key, copies the AAB to `publishing\android\chained-timers-v<versionName>-play.aab`. |
 
 The scripts find a JDK automatically (Android Studio's bundled JBR, JAVA_HOME,
 or anything on PATH); double-click to run. The keystore + properties file live
@@ -282,7 +282,7 @@ In Xcode:
 
 1. Select the **App** target → **Signing & Capabilities**.
 2. **Team**: select your paid Apple Developer team. Check **Automatically manage signing**.
-3. **Bundle Identifier**: `com.mayerwin.chainedtimers` (already set in `capacitor.config.json`). Apple requires this to be unique across the App Store — if taken, change to e.g. `com.<yourname>.chainedtimers` and update `capacitor.config.json` to match.
+3. **Bundle Identifier**: `com.github.chainedtimers` (already set in `capacitor.config.json`). Apple requires this to be unique across the App Store — if taken, change to e.g. `com.<yourname>.chainedtimers` and update `capacitor.config.json` to match.
 4. **Capabilities** (click + Capability):
    - *Background Modes* → tick *Audio, AirPlay, and Picture in Picture* if you want the silent-audio keep-alive trick to work on iOS (controversial, may trip App Review — see *Common reviewer rejections* below).
    - *Push Notifications* — NOT needed (we use local notifications).
@@ -312,7 +312,7 @@ When the Archive completes, the **Organizer** window opens.
 ### Distribute via App Store Connect
 
 1. In Organizer: select the archive → **Distribute App** → **App Store Connect** → **Upload**. Xcode handles signing automatically.
-2. Open <https://appstoreconnect.apple.com>, **My Apps → +** → register `com.mayerwin.chainedtimers`.
+2. Open <https://appstoreconnect.apple.com>, **My Apps → +** → register `com.github.chainedtimers`.
 3. Fill out the listing:
    - Name, subtitle (30 chars), description, keywords, support URL, marketing URL, privacy policy URL.
    - Screenshots: at minimum, **iPhone 6.7"** (1290×2796). Add **iPhone 5.5"** (1242×2208) for older device coverage.
@@ -351,17 +351,24 @@ Once both are live, the unified release flow per version:
 #    - android/app/build.gradle    versionCode 2, versionName "1.0.1"
 #    - ios/App/App.xcodeproj       MARKETING_VERSION = 1.0.1, CURRENT_PROJECT_VERSION = 2
 
-# 2. Tag and push — CI builds the sideload APK and attaches to GitHub Release
+# 2. Stamp the new version into index.html + sw.js for cache busting on
+#    GitHub Pages — without this, returning visitors keep getting the
+#    old JS/CSS from their browser + service-worker cache.
+npm run version:stamp
+
+# 3. Tag and push — CI builds the sideload APK and attaches to GitHub Release
 git tag v1.0.1
 git push --tags
 
-# 3. Build the Play AAB locally
-cd android && ./gradlew bundleRelease
-# Upload android/app/build/outputs/bundle/release/app-release.aab to Play Console
+# 4. Build the Play AAB locally (lands in publishing/android/)
+publishing\android\3-build-play-aab.bat
+# Upload publishing/android/chained-timers-v<versionName>-play.aab to Play Console
 
-# 4. Build the iOS Archive in Xcode → upload to App Store Connect
+# 5. Build the iOS IPA (lands in publishing/ios/), then upload via Transporter
+./publishing/ios/3-build-app-store-ipa.sh
+# Or do it from Xcode: Product → Archive → Distribute → App Store Connect.
 
-# 5. Submit both for review.
+# 6. Submit both for review.
 ```
 
 You can automate steps 3 & 4 in CI, but Play upload requires a service-account JSON and App Store Connect upload requires an app-specific password — both are private secrets that should live in GitHub Actions secrets, not the repo.
@@ -373,7 +380,7 @@ You can automate steps 3 & 4 in CI, but Play upload requires a service-account J
 - ✅ Sideload APK signed with stable keystore (no Play key yet)
 - ✅ AndroidManifest declares `USE_EXACT_ALARM` + `SCHEDULE_EXACT_ALARM` + `FOREGROUND_SERVICE_SPECIAL_USE` (Play permission declaration form will be needed for all three — see `publishing/android/permissions-declaration.md`)
 - ✅ Foreground service (`ChainTimerService`) keeps the timer engine ticking and alarms exempt from Doze for the duration of every chain
-- ✅ `applicationId` / `bundleId` set to `com.mayerwin.chainedtimers` for both
+- ✅ `applicationId` / `bundleId` set to `com.github.chainedtimers` for both
 - ✅ Privacy policy text drafted in this document (not yet hosted)
 - ✅ Icons rendered at all PWA / Android launcher densities
 - ✅ Web app + screenshots ready as marketing material

@@ -1,12 +1,19 @@
 # =====================================================================
 # Build the Play Store AAB.
 #
-# Outputs:  android\app\build\outputs\bundle\release\app-release.aab
+# Final output:
+#   publishing\android\chained-timers-v<versionName>-play.aab
+#
+# (Gradle's own deep output -- android\app\build\outputs\bundle\release\
+# app-release.aab -- is left in place for incremental rebuilds; we just
+# copy the artifact next to the rest of the publishing material so it's
+# easy to find when uploading to Play Console.)
 #
 # Steps:
 #   1. npm run build:www        (copy index.html, css, js, icons -> dist)
 #   2. npx cap sync android     (sync dist + plugins into the Android project)
 #   3. android\gradlew.bat bundleRelease   (compile + sign with upload key)
+#   4. Copy the AAB to publishing\android\ with a versioned filename.
 #
 # Prerequisites:
 #   - publishing\android\1-generate-upload-keystore.bat has been run
@@ -99,10 +106,25 @@ if (-not (Test-Path $aab)) {
     exit 1
 }
 
-$size = [math]::Round((Get-Item $aab).Length / 1KB, 1)
+# Copy the AAB next to the rest of the publishing material with a
+# versioned filename, so it's easy to find when uploading to Play
+# Console. The version number is parsed from android/app/build.gradle's
+# `versionName` line -- single source of truth, no duplication needed.
+$buildGradle = Join-Path $repo 'android\app\build.gradle'
+$versionName = (Select-String -Path $buildGradle -Pattern '^\s*versionName\s+"([^"]+)"' -List).Matches[0].Groups[1].Value
+if (-not $versionName) {
+    Write-Host ''
+    Write-Host "Could not parse versionName from $buildGradle." -ForegroundColor Red
+    exit 1
+}
+
+$staged = Join-Path $here "chained-timers-v$versionName-play.aab"
+Copy-Item -Force $aab $staged
+
+$size = [math]::Round((Get-Item $staged).Length / 1KB, 1)
 Write-Host ''
 Write-Host 'Done.' -ForegroundColor Green
-Write-Host "  AAB    : $aab"
+Write-Host "  AAB    : $staged"
 Write-Host "  Size   : $size KB"
 Write-Host ''
 Write-Host 'Next:'

@@ -20,7 +20,8 @@ A copy-paste recipe. Total active human time: ~90 min spread across ~3 days (rev
 | Privacy policy URL | <https://mayerwin.github.io/Chained-Timers/privacy.html> | 6.3 |
 | Support URL | <https://github.com/mayerwin/Chained-Timers/issues> | 6.3 |
 | Marketing URL (optional) | <https://mayerwin.github.io/Chained-Timers/> | 6.3 |
-| Bundle identifier | `com.mayerwin.chainedtimers` (already set) | 5.2 |
+| Bundle identifier | `com.github.chainedtimers` (already set) | 5.2 |
+| App Store IPA build script | [`3-build-app-store-ipa.sh`](3-build-app-store-ipa.sh) + [`ExportOptions.plist`](ExportOptions.plist) | 7.2 |
 
 ---
 
@@ -94,7 +95,7 @@ Drag-and-drop [`icon-1024.png`](icon-1024.png) onto the **App Store iOS** 1024×
 2. **Signing & Capabilities** tab.
 3. Tick **Automatically manage signing**.
 4. **Team**: select your paid Apple Developer team from the dropdown.
-5. **Bundle Identifier**: `com.mayerwin.chainedtimers`. If Xcode says "this identifier is already registered to another team," it means someone else owns it — change it to e.g. `com.<yourname>.chainedtimers` and update `capacitor.config.json`'s `appId` to match, then run `npm run cap:sync` again.
+5. **Bundle Identifier**: `com.github.chainedtimers`. If Xcode says "this identifier is already registered to another team," it means someone else owns it — change it to e.g. `com.<yourname>.chainedtimers` and update `capacitor.config.json`'s `appId` to match, then run `npm run cap:sync` again.
 
 Xcode will provision the signing certificates automatically. If it complains, click **Try Again** — usually a transient cert-fetch issue.
 
@@ -116,8 +117,8 @@ Xcode will provision the signing certificates automatically. If it complains, cl
 - **Platform**: iOS
 - **Name**: `Chained Timers` (this becomes the App Store listing title)
 - **Primary language**: English (U.S.)
-- **Bundle ID**: select `com.mayerwin.chainedtimers` from the dropdown (it appears once Xcode has registered an explicit App ID, which it does automatically when you build).
-  - If it doesn't appear, go to <https://developer.apple.com/account/resources/identifiers/list> → **+** → App IDs → App → name "Chained Timers", bundle ID `com.mayerwin.chainedtimers` (Explicit), enable Capabilities: **Push Notifications** is NOT needed (we use local notifications). Save.
+- **Bundle ID**: select `com.github.chainedtimers` from the dropdown (it appears once Xcode has registered an explicit App ID, which it does automatically when you build).
+  - If it doesn't appear, go to <https://developer.apple.com/account/resources/identifiers/list> → **+** → App IDs → App → name "Chained Timers", bundle ID `com.github.chainedtimers` (Explicit), enable Capabilities: **Push Notifications** is NOT needed (we use local notifications). Save.
 - **SKU**: `chained-timers-v1` (internal identifier, never shown to users)
 - **User Access**: Full Access (default)
 - Click **Create**.
@@ -207,29 +208,38 @@ Paste from [`store-listing.md`](store-listing.md) §"What's new in v1.0.0".
 
 ## 7. Archive & upload the build (~10 min)
 
-In Xcode:
+You can do this from Xcode's GUI or from the command line. The CLI path is the iOS counterpart of [`publishing/android/3-build-play-aab.bat`](../android/3-build-play-aab.bat) — it lands a versioned IPA next to the rest of the publishing material instead of leaving it buried under Xcode's DerivedData.
 
-### 7.1 Build settings
+### 7.1 Set version & build numbers (either path)
+**App** target → **General** → **Identity**:
+- **Display Name**: Chained Timers
+- **Bundle Identifier**: com.github.chainedtimers
+- **Version** (`MARKETING_VERSION`): 1.0.0
+- **Build** (`CURRENT_PROJECT_VERSION`): 1 (must be a unique increasing number for each upload — bump to 2, 3, ... for subsequent uploads of the same version)
+
+### 7.2 Path A — command line (recommended)
+
+```bash
+./publishing/ios/3-build-app-store-ipa.sh
+```
+
+The script runs `npm run cap:sync`, archives via `xcodebuild archive`, and exports a signed IPA to:
+
+```
+publishing/ios/chained-timers-v<MARKETING_VERSION>.ipa
+publishing/ios/chained-timers-v<MARKETING_VERSION>.xcarchive
+```
+
+(Both are gitignored.) Signing uses [`ExportOptions.plist`](ExportOptions.plist) with `signingStyle = automatic`; if you're on a multi-team account, uncomment the `teamID` line and set your 10-char team ID once.
+
+Then upload the `.ipa` via [Transporter](https://apps.apple.com/app/transporter/id1450874784) or **Xcode → Window → Organizer → Distribute App** (the Organizer can open archives from any folder via *File → Import*).
+
+### 7.3 Path B — Xcode GUI
+
 1. Top toolbar: change **Destination** to **Any iOS Device (arm64)**.
-2. **App** target → **General** → **Identity**:
-   - **Display Name**: Chained Timers
-   - **Bundle Identifier**: com.mayerwin.chainedtimers
-   - **Version**: 1.0.0
-   - **Build**: 1 (must be a unique increasing number for each upload — bump to 2, 3, ... for subsequent uploads of the same version)
-
-### 7.2 Archive
-- **Product → Archive**.
-- Wait ~3-5 min for the archive to build. The Organizer window opens automatically when done.
-
-### 7.3 Validate (optional but recommended)
-- In the Organizer, select the new archive → **Validate App**.
-- Distribution method: **App Store Connect**. Click through the prompts (use automatic signing).
-- Validation runs ~1-2 min. If errors appear, fix them and re-archive.
-
-### 7.4 Distribute
-- **Distribute App** → **App Store Connect** → **Upload**.
-- Click through the prompts (use automatic signing).
-- Upload takes 5-15 min depending on connection. When done, Apple processes the build for ~10-30 min.
+2. **Product → Archive**. Wait ~3-5 min; the Organizer opens automatically when done.
+3. (Optional) **Validate App** first. Distribution method: **App Store Connect**. ~1-2 min.
+4. **Distribute App** → **App Store Connect** → **Upload**. Upload takes 5-15 min depending on connection. Apple then processes the build for ~10-30 min.
 
 ### 7.5 Attach the build to the version
 - Back in App Store Connect → **iOS App → 1.0 Prepare for Submission**.
@@ -305,7 +315,8 @@ npm run serve &
 npm run screenshots:store
 npm run publishing:refresh
 
-# 3. Build a new archive and upload (Xcode: Product → Archive → Distribute → App Store Connect)
+# 3. Build a new archive and upload (CLI: ./publishing/ios/3-build-app-store-ipa.sh
+#    -- IPA lands in publishing/ios/. Or GUI: Xcode → Product → Archive → Distribute.)
 
 # 4. Tag the release (triggers GitHub-Releases sideload APK build)
 git tag v1.0.1 && git push --tags

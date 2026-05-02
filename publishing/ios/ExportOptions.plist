@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for `xcodebuild -exportArchive`, used by
+  publishing/ios/3-build-app-store-ipa.sh.
+
+  method = app-store-connect    -> produces an upload-ready IPA
+  signingStyle = automatic      -> Xcode fetches / refreshes profiles
+                                   on demand (mirrors Distribute App GUI)
+  destination = export          -> just write the .ipa, do not upload
+                                   (keeps the script offline-safe)
+
+  teamID:
+    Set this to your Apple Developer team ID (10-char alphanumeric,
+    visible at https://developer.apple.com/account/#MembershipDetailsCard
+    or via `security find-identity -p codesigning -v`).
+    Leaving it empty is fine for a single-team account: Xcode picks the
+    only available team automatically. Required for multi-team accounts.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>stripSwiftSymbols</key>
+    <true/>
+    <!--
+    <key>teamID</key>
+    <string>YOURTEAMID</string>
+    -->
+</dict>
+</plist>

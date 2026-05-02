@@ -1,6 +1,6 @@
 {
   "name": "chained-timers",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "The interval forge — a small, fast, installable PWA that sequences timers into named chains. Native-shell builds via Capacitor.",
   "private": true,
   "license": "MIT",
@@ -21,7 +21,9 @@
     "cap:ios":         "npm run cap:sync && npx cap open ios",
     "cap:add:android":   "npm run build:www && npx cap add android && node tools/generate-android-icons.mjs",
     "cap:add:ios":       "npm run build:www && npx cap add ios",
-    "icons:android":     "node tools/generate-android-icons.mjs"
+    "icons:android":     "node tools/generate-android-icons.mjs",
+    "audio:render":      "node tools/render-audio.mjs",
+    "version:stamp":     "node tools/version-stamp.mjs"
   },
   "dependencies": {
     "@capacitor/core":                "^8.3.1",

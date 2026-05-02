@@ -1,6 +1,8 @@
-package com.mayerwin.chainedtimers;
+package com.github.chainedtimers;
 
 import android.os.Bundle;
+
+import androidx.core.view.WindowCompat;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -10,6 +12,16 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ChainTimerPlugin.class);
         super.onCreate(savedInstanceState);
+        // Android 14/15 (targetSdk 35+) enforces edge-to-edge but the
+        // AppCompat decor view still applies a `fitsSystemWindows` inset
+        // to its content frame on top of the system bar insets, which
+        // pushes the WebView down by another `statusBarHeight` and
+        // exposes the activity windowBackground as a band above the
+        // WebView. setDecorFitsSystemWindows(false) tells the framework
+        // to deliver the raw insets to our WebView (Capacitor's bridge
+        // forwards them to CSS via env(safe-area-inset-*)) instead of
+        // reserving space for them at the decor level.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     }
 
     /**

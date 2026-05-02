@@ -22,14 +22,14 @@ if (keystorePropertiesFile.exists()) {
 def hasPlayKey = keystoreProperties['storeFile'] != null
 
 android {
-    namespace = "com.mayerwin.chainedtimers"
+    namespace = "com.github.chainedtimers"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.mayerwin.chainedtimers"
+        applicationId "com.github.chainedtimers"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 7
-        versionName "1.2.2"
+        versionCode 8
+        versionName "1.3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

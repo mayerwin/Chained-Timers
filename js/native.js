@@ -69,14 +69,20 @@
     return;
   }
 
-  // Register the custom Android foreground-service plugin. Capacitor's
-  // registerPlugin returns a proxy whose method calls dispatch through
-  // the JS↔native bridge; if no native implementation is registered (e.g.
-  // an older APK installed before this build, or running on iOS) every
-  // call rejects — we wrap each one in try/catch and treat unavailability
-  // as a clean fallback to the LocalNotifications status row.
-  let ChainTimer = null;
-  if (isAndroid && typeof window.Capacitor.registerPlugin === 'function') {
+  // Register the custom Android foreground-service plugin. The plugin is
+  // declared natively via `registerPlugin(ChainTimerPlugin.class)` in
+  // MainActivity and gets auto-exposed at `Capacitor.Plugins.ChainTimer`
+  // by the bridge. We also call `registerPlugin('ChainTimer')` as a
+  // fallback for setups (or stale WebView caches) where the auto-exposed
+  // instance hasn't materialised yet — the JS proxy returned by that call
+  // dispatches through the same JS↔native bridge.
+  //
+  // If neither path produces a working object (e.g. an older APK installed
+  // before this build, or running on iOS) every call would reject — we
+  // wrap each one in try/catch and treat unavailability as a clean
+  // fallback to the LocalNotifications status row.
+  let ChainTimer = (Plugins && Plugins.ChainTimer) || null;
+  if (isAndroid && !ChainTimer && typeof window.Capacitor.registerPlugin === 'function') {
     try { ChainTimer = window.Capacitor.registerPlugin('ChainTimer'); }
     catch (e) { log('registerPlugin(ChainTimer) failed:', e); }
   }
@@ -85,10 +91,15 @@
   let chainTimerAvailable = false;
   if (ChainTimer && typeof window.Capacitor.isPluginAvailable === 'function') {
     chainTimerAvailable = !!window.Capacitor.isPluginAvailable('ChainTimer');
-    if (!chainTimerAvailable) {
-      log('ChainTimer plugin not registered natively (rebuild the APK)');
-    }
   }
+  // Last-resort: if the plugin object exists but isPluginAvailable returns
+  // false (Capacitor 8 has surprised us with this when the plugin is
+  // registered via @CapacitorPlugin but the registry hasn't flushed), fall
+  // through and trust the proxy — the worst case is one rejected bridge
+  // call that the catch handler in startOrUpdateService converts to a
+  // graceful fallback to postStatus().
+  if (!chainTimerAvailable && ChainTimer) chainTimerAvailable = true;
+  log(`ChainTimer plugin: available=${chainTimerAvailable} (Plugins.ChainTimer=${!!(Plugins && Plugins.ChainTimer)}, isPluginAvailable=${typeof window.Capacitor.isPluginAvailable === 'function' ? window.Capacitor.isPluginAvailable('ChainTimer') : 'n/a'})`);
   window.ChainedNativeStatus.fgServiceAvailable = chainTimerAvailable;
 
   // Notification-action -> JS plumbing. When the user taps Pause/Resume/Stop
@@ -100,7 +111,8 @@
     try {
       ChainTimer.addListener('chainCommand', (event) => {
         const cmd = event && event.command;
-        if (cmd !== 'pause' && cmd !== 'resume' && cmd !== 'stop') return;
+        if (cmd !== 'pause' && cmd !== 'resume' && cmd !== 'stop'
+            && cmd !== 'skip-prev' && cmd !== 'skip-next') return;
         log('chainCommand from notification:', cmd);
         try {
           window.dispatchEvent(new CustomEvent('chained:enginecommand', {
@@ -210,8 +222,24 @@
       window.ChainedNativeStatus.channelReady = true;
       return true; // iOS does not use channels
     }
-    const tasks = [
-      LocalNotifications.createChannel({
+    const tasks = [];
+    // The chain-transitions channel is only used on the OS-fallback path
+    // (no ChainTimerPlugin available — older builds, or some other
+    // unusual case). On modern Android with the plugin, the FGS service
+    // owns its own chain-active + chain-finale channels with the
+    // bundled chime / finale sounds; recreating chain-transitions here
+    // every launch just leaves a stale entry in System Settings →
+    // Notifications until the service's next ensureChannel deletes it
+    // again.
+    // Both chain-transitions and chain-status are only used by the
+    // OS-fallback path (no ChainTimerPlugin available — older builds,
+    // or some unusual configuration). On modern Android with the plugin
+    // the FGS service owns chain-active + chain-finale with the bundled
+    // chime / finale sounds and never schedules a LocalNotifications
+    // alarm. Skipping these here keeps System Settings → Notifications
+    // limited to the channels actually in use.
+    if (!chainTimerAvailable) {
+      tasks.push(LocalNotifications.createChannel({
         id:           CHANNEL_ID,
         name:         'Chain transitions',
         description:  'Fires when one segment ends and the next begins',
@@ -221,8 +249,8 @@
         lights:       true,
         lightColor:   '#F5B042',
         sound:        undefined,    // default channel sound
-      }).catch(e => log('createChannel transitions failed:', e)),
-      LocalNotifications.createChannel({
+      }).catch(e => log('createChannel transitions failed:', e)));
+      tasks.push(LocalNotifications.createChannel({
         id:           STATUS_CHANNEL_ID,
         name:         'Chain status',
         description:  'Persistent indicator of the currently-running segment',
@@ -231,8 +259,8 @@
         vibration:    false,
         lights:       false,
         sound:        undefined,
-      }).catch(e => log('createChannel status failed:', e)),
-    ];
+      }).catch(e => log('createChannel status failed:', e)));
+    }
     await Promise.all(tasks);
     window.ChainedNativeStatus.channelReady = true;
     notifyStatusChanged();
@@ -313,26 +341,71 @@
     }
   }
 
-  // Clear the persistent "now playing" indicator after a chain ends
-  // naturally — both the foreground service (so the wake lock is released
-  // and the ongoing notification disappears) and the LocalNotifications
-  // fallback row, if either was used. Distinct from cancelAll, which is
-  // called on user-initiated stop and ALSO cancels pending transition
-  // alarms; here those alarms already fired (the chain ended naturally),
-  // they're gone from the OS pending queue, but our in-memory tracking
-  // needs the explicit reset so the next chain start re-runs the
-  // reliability probes (gated by wasFreshStart in scheduleAll).
+  // Chain ended naturally. Two cleanups, depending on which path posted
+  // the persistent indicator:
   //
-  // The just-fired "✓ Chain complete" alarm stays in the user's tray
-  // intentionally — _complete() calls stop({preserveNotifications:true})
-  // and only the sticky "▶ Now playing" indicator is cleared here.
-  async function cancelStatus() {
+  //   - FGS path (modern Android with ChainTimerPlugin): hand off to
+  //     ChainTimer.complete() so the service replaces its persistent
+  //     notification in place with the "✓ Chain complete" heads-up,
+  //     releases the wake lock, and stops itself. The user ends up
+  //     with exactly ONE notification at chain end.
+  //
+  //   - Fallback path (older builds, iOS): the persistent row was
+  //     posted via LocalNotifications and the per-segment "Chain
+  //     complete" alarm has either just fired or is firing now —
+  //     just clear the sticky "▶ Now playing" entry.
+  //
+  // Distinct from cancelAll, which is for user-initiated stop and ALSO
+  // cancels pending transition alarms; here the chain ended naturally
+  // so any pending alarms for THIS chain are already past their fire
+  // time and will be cleaned up in-memory below.
+  async function completeStatus(detail) {
     scheduledIds = [];
+    if (chainTimerAvailable) {
+      // Probe the service's actual state. JS-side serviceRunning is just
+      // a hint: when the service self-completed (background tick reached
+      // chain end while the WebView was suspended) it stopped silently
+      // and posted its "✓ Chain complete" notification — we never got
+      // told. Calling ChainTimer.complete() again here would re-post a
+      // fresh duplicate the moment the user taps the existing one to
+      // open the app (Android auto-cancels the tapped notification, then
+      // we'd put another one straight back). Skip it if the service is
+      // already gone — the in-tray entry is enough.
+      let stillRunning = serviceRunning;
+      try {
+        const r = await ChainTimer.isRunning();
+        stillRunning = !!(r && r.running);
+      } catch (e) {
+        log('ChainTimer.isRunning failed:', e);
+      }
+      if (stillRunning) {
+        const content = detail ? buildStatusContent(detail) : null;
+        // Foreground rAF reached chain end → JS already played
+        // Audio.finale() through Web Audio. Tell the service to post
+        // the "✓ Chain complete" notification SILENTLY (it's still a
+        // tray record, but no second sound on top of the in-app one).
+        // The service's autonomous chain-end path (background tick
+        // detecting end while the WebView was asleep) keeps alerting
+        // — that's the only path where this is the user's only cue.
+        const completePayload = Object.assign({}, content || {}, { silent: true });
+        try {
+          await ChainTimer.complete(completePayload);
+        } catch (e) {
+          log('ChainTimer.complete failed:', e);
+          // Best-effort fallback so the tray doesn't stay sticky.
+          try { await ChainTimer.stop(); } catch {}
+        }
+      }
+      serviceRunning = false;
+      window.ChainedNativeStatus.fgService = false;
+      notifyStatusChanged();
+      return;
+    }
     if (statusActive) {
       try {
         await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
       } catch (e) {
-        log('cancelStatus failed:', e);
+        log('completeStatus cancel failed:', e);
       }
       statusActive = false;
     }
@@ -345,19 +418,36 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
     const titlePrefix = isPaused ? '⏸' : '▶';
     // Wall-clock moment the segment will end. Anchored to the engine's
-    // segmentStartedAtMs (already excludes paused-time), so the system
-    // chronometer in the notification can tick down to the second
-    // without further JS touchpoints. Set to 0 when paused so the
-    // notification drops the live timer line.
+    // segmentStartedAtMs (already excludes paused-time). The native
+    // service uses this both to render the static MM:SS in its title
+    // and to schedule its own per-second tick / segment auto-advance.
     const endTimeMs = (!isPaused && segmentStartedAtMs && cur.duration)
       ? segmentStartedAtMs + cur.duration * 1000
       : 0;
+    // Authoritative remaining at the pause transition — given to the
+    // service so it can keep displaying the correct frozen value if it
+    // re-renders the notification before resume. Reference time is
+    // pausedAtMs (frozen at the moment of pause), NOT Date.now() —
+    // otherwise the value drifts as wall-clock advances during the
+    // pause and silently reaches 0 across e.g. an app restart.
+    const refMs = pausedAtMs || Date.now();
+    const pausedRemainingMs = (isPaused && segmentStartedAtMs && cur.duration)
+      ? Math.max(0, cur.duration * 1000 - (refMs - segmentStartedAtMs))
+      : 0;
+    // Compact plan payload — { n: name, d: duration in seconds } per
+    // segment. The service self-advances through this list so the
+    // notification keeps ticking and disappears at chain end even
+    // when the WebView (and therefore JS) is paused or killed.
+    const planJson = JSON.stringify(segments.map(s => ({
+      n: s.name || 'Segment',
+      d: Math.max(0, s.duration | 0),
+    })));
     return {
       title:    `${titlePrefix} ${cur.name || 'Segment'}`,
       body:     `Segment ${currentIndex + 1} of ${total} · ${name || 'Chain'}`,
@@ -369,6 +459,19 @@
       subText:  `${currentIndex + 1}/${total}`,
       paused:   !!isPaused,
       endTimeMs,
+      pausedRemainingMs,
+      chainName: name || 'Chain',
+      planJson,
+      segmentStartedAtMs: segmentStartedAtMs || 0,
+      tickEnabled: !!tickEnabled,
+      soundEnabled: !!soundEnabled,
+      // Chain position — surfaced to the FGS so it can render the
+      // overall-chain progress bar and gate the skip-prev / skip-next
+      // notification action buttons (we hide whichever has no target).
+      segmentIndex: currentIndex,
+      segmentTotal: total,
+      hasPrev:      currentIndex > 0,
+      hasNext:      currentIndex < total - 1,
     };
   }
 
@@ -571,6 +674,19 @@
       return;
     }
 
+    // When the foreground-service plugin is alive, it owns every alert
+    // for the run (per-tick text, segment-boundary sound, "✓ Chain
+    // complete" final notification). Pre-scheduling parallel
+    // LocalNotifications would just clutter the tray with one extra
+    // entry per segment. Skip them on this path; only the OS-fallback
+    // path (older builds without ChainTimerPlugin, or iOS) still
+    // pre-schedules per-segment alarms below.
+    if (fgsActive) {
+      window.ChainedNativeStatus.lastSchedule = { count: 0, error: null, when: Date.now(), fgsOwned: true };
+      notifyStatusChanged();
+      return;
+    }
+
     const startWall = segmentStartedAtMs || Date.now();
     const notifs = [];
     let cumMs = 0;
@@ -603,7 +719,12 @@
         title,
         body,
         largeBody,
-        summaryText: `${i + 2}/${segments.length}`,
+        // Subtext shows "<position>/<total>". For the chain-complete entry
+        // (last index), fix the off-by-one that was producing "5/4" by
+        // using the chain length on both sides instead of i+2.
+        summaryText: isLast
+          ? `${segments.length}/${segments.length}`
+          : `${i + 2}/${segments.length}`,
         schedule:   { at: fireAt, allowWhileIdle: true },
         smallIcon:  'ic_stat_icon',
         iconColor:  '#F5B042',
@@ -704,7 +825,7 @@
   function dispatch(type, detail) {
     if (type === 'schedule')       return serialize(() => scheduleAll(detail));
     if (type === 'cancel')         return serialize(() => cancelAll());
-    if (type === 'cancel-status')  return serialize(() => cancelStatus());
+    if (type === 'complete')       return serialize(() => completeStatus(detail));
     if (type === 'fgs-update')     return serialize(() => refreshFgsOnly(detail));
   }
 
@@ -714,9 +835,10 @@
   // notification (title, chronometer, action button). No alarm churn.
   window.addEventListener('chain:fgsupdate',  e => preWarmDone ? dispatch('fgs-update', e.detail) : queuedEvents.push({ type: 'fgs-update', detail: e.detail }));
   window.addEventListener('chain:cancel',     ()  => preWarmDone ? dispatch('cancel')           : queuedEvents.push({ type: 'cancel' }));
-  // Chain finished naturally: clear only the sticky status row, leave the
-  // "✓ Chain complete" alarm that just fired in the tray for the user.
-  window.addEventListener('chain:complete',   ()  => preWarmDone ? dispatch('cancel-status')    : queuedEvents.push({ type: 'cancel-status' }));
+  // Chain finished naturally: hand off to the FGS service (or cleanup
+  // the LocalNotifications fallback) so a single "✓ Chain complete"
+  // notification replaces the persistent row in place.
+  window.addEventListener('chain:complete',   e => preWarmDone ? dispatch('complete', e?.detail) : queuedEvents.push({ type: 'complete', detail: e?.detail }));
 
   // Pre-warm: request permission + create channel + check exact-alarm
   // grant up front, before any chain starts, so the OS dialog isn't

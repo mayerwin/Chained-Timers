@@ -448,7 +448,13 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   box-shadow: 0 8px 18px -4px rgba(245,176,66,0.4), 0 0 0 4px var(--bg);
   transition: transform 200ms cubic-bezier(.2,.7,.25,1);
   padding: 0;
+  /* Override flex-direction:column inherited from .tab so the single SVG
+     child is centred both axes (the column default of justify-content:
+     flex-start was leaving the + glued to the top of the circle). */
+  justify-content: center;
+  gap: 0;
 }
+.tab-fab > svg { width: 30px; height: 30px; stroke-width: 2.2; }
 .tab-fab:hover  { color: #1A0F00; transform: scale(1.06); }
 .tab-fab:active { transform: scale(0.94); }
 
