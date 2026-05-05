@@ -96,6 +96,59 @@ Prerequisites the script verifies: upload keystore exists, JDK is reachable, And
 
 ---
 
+## 3.5 Automated publish (optional, ~5 min one-time setup)
+
+[`4-publish-to-play.bat`](4-publish-to-play.bat) builds the AAB AND uploads it to Play Console in one shot via the Google Play Developer API, so you don't have to drag-and-drop `.aab` files into the browser. Skip this section entirely if you'd rather click through the manual flow each release.
+
+### 3.5.1 Create a service account (one-time)
+
+The Google Play Developer API requires a service account with a JSON key — *not* your developer email and password.
+
+1. **Open Play Console → Setup → API access** (left sidebar). Accept the API terms if prompted.
+2. Click **Create new service account**. The Console redirects to **Google Cloud Console → IAM & Admin → Service Accounts → Create**:
+   - **Name**: `chained-timers-publisher`
+   - **Description**: `gradle-play-publisher uploads`
+   - Skip the optional "Grant this service account access to project" step — Play Console scopes the access itself in step 3 below.
+   - Click **Done**.
+3. Back in **Google Cloud Console → IAM & Admin → Service Accounts**, click the new account → **Keys** tab → **Add key → Create new key → JSON → Create**. The browser downloads `chained-timers-publisher-<hash>.json`.
+4. Save it to:
+   ```
+   publishing/android/play-service-account.json
+   ```
+   (gitignored — never commit this file.)
+5. Back in **Play Console → Setup → API access**, find the service account in the list (it auto-appears once linked). Click **Grant access**:
+   - **App permissions**: select Chained Timers, set **Release manager**.
+   - **Account permissions**: tick **Release apps to production, exclude devices, use Play App Signing**, and **Create, edit, and delete draft apps**.
+   - Click **Invite user** to confirm.
+
+### 3.5.2 First-ever upload still has to be manual
+
+Play Console **doesn't accept API uploads until the app has at least one AAB uploaded manually** (it's their way of confirming you really own the listing). So the very first release goes through [`3-build-play-aab.bat`](3-build-play-aab.bat) and the manual *Internal testing → Create new release* flow described in step 6 below. Subsequent releases can use the automated script.
+
+### 3.5.3 Per-release flow
+
+After step 3.5.2 is done once:
+
+1. Bump `versionCode` (must increase) and `versionName` in [`android/app/build.gradle`](../../android/app/build.gradle).
+2. Update the release notes at [`android/app/src/main/play/release-notes/en-US/default.txt`](../../android/app/src/main/play/release-notes/en-US/default.txt) (max ~500 chars per locale).
+3. Double-click [`4-publish-to-play.bat`](4-publish-to-play.bat).
+
+The script runs `npm run cap:sync`, then `gradlew publishBundle`. The latter builds the signed AAB and uploads it to Play Console under the `internal` track by default, with status `completed` (immediate rollout to internal testers).
+
+To release to a different track:
+
+```powershell
+$env:PLAY_TRACK = 'production'         # internal | alpha | beta | production
+$env:PLAY_RELEASE_STATUS = 'completed' # completed | draft | inProgress | halted
+publishing\android\4-publish-to-play.bat
+```
+
+`draft` is the safest first try for production: the upload lands in Play Console as an unsubmitted draft, so you can sanity-check the listing in the browser before clicking *Submit for review*.
+
+If `versionCode` matches an already-uploaded build, the script fails fast with a clear error — bump the code and retry.
+
+---
+
 ## 4. Once the Play Console account is verified — set up the app shell
 
 1. Open <https://play.google.com/console>, click **Create app**.
@@ -256,13 +309,27 @@ Left sidebar → **Test and release → Production → Create new release**.
    - `android/app/build.gradle` — `versionCode` (must increase by ≥1) and `versionName`
    - `package.json` — `"version"`
    - (Also iOS — see [`../ios/README.md`](../ios/README.md).)
-2. **Refresh publishing assets** if the UI changed:
-   - `npm run smoke` regenerates the in-repo screenshots, then `npm run publishing:refresh` copies the relevant ones into `publishing/`.
-3. **Build the new AAB**: double-click [`3-build-play-aab.bat`](3-build-play-aab.bat).
-4. **Tag the GitHub release** (this triggers the GitHub-Actions sideload-APK build automatically):
+2. **Stamp** `index.html` + `sw.js` for GitHub-Pages cache busting:
+   ```
+   npm run version:stamp
+   ```
+3. **Update release notes** at [`android/app/src/main/play/release-notes/en-US/default.txt`](../../android/app/src/main/play/release-notes/en-US/default.txt).
+4. **Refresh publishing assets** if the UI changed:
+   - `npm run screenshots:store` regenerates the store-listing screenshots into `publishing/{android,ios}/screenshots/`.
+5. **Tag the GitHub release** (triggers the sideload-APK build):
    ```
    git tag vX.Y.Z && git push --tags
    ```
-5. **Upload to Play Console**: *Test and release → Production → Create new release → Upload `.aab`*. Refresh screenshots in *Main store listing → Graphics* if they changed. Paste release notes from the new `What's new in vX.Y.Z` block in [`store-listing.md`](store-listing.md). *Save → Review release → Start rollout to Production*.
+6. **Push to Play Console**, either:
+   - **Automated** (if `publishing/android/play-service-account.json` is set up — see §3.5):
+     ```
+     publishing\android\4-publish-to-play.bat
+     ```
+     Defaults to `internal` track. Set `$env:PLAY_TRACK = 'production'` to release straight to prod.
+   - **Manual**:
+     ```
+     publishing\android\3-build-play-aab.bat
+     ```
+     Then *Test and release → Production → Create new release → Upload `.aab`*. Paste release notes. *Save → Review → Start rollout*.
 
 Updates with no new permissions usually clear Play review in <24 h.

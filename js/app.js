@@ -1739,7 +1739,13 @@ const UI = {
   updateRunClock(seg, remainingSec, elapsedSec) {
     if (!seg) return;
     const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
-    document.getElementById('run-clock').textContent = fmt(r);
+    // Ceiling the displayed second so the clock flips to "00:03" at the
+    // SAME instant Audio.tick fires (which keys off Math.ceil too).
+    // fmt() rounds — it would flip the digit half a second EARLIER than
+    // the tick, making the sound feel like it's chasing the visual.
+    // The notification path uses ceiling for both the displayed remaining
+    // and the tick trigger, so we mirror that here for parity.
+    document.getElementById('run-clock').textContent = fmt(Math.ceil(r));
 
     // ring (use inline style — CSS class values otherwise override presentation attrs)
     const ring = document.getElementById('run-ring-fill');

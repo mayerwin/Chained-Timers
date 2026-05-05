@@ -360,9 +360,15 @@ npm run version:stamp
 git tag v1.0.1
 git push --tags
 
-# 4. Build the Play AAB locally (lands in publishing/android/)
+# 4. Push to Play Console — pick ONE:
+
+# (a) Automated (one-time service-account setup, see publishing/android/README.md §3.5):
+publishing\android\4-publish-to-play.bat
+# Track defaults to `internal`. Set $env:PLAY_TRACK='production' for the live track.
+
+# (b) Manual: build only, upload via the Play Console browser UI:
 publishing\android\3-build-play-aab.bat
-# Upload publishing/android/chained-timers-v<versionName>-play.aab to Play Console
+# Then upload publishing/android/chained-timers-v<versionName>-play.aab to Play Console
 
 # 5. Build the iOS IPA (lands in publishing/ios/), then upload via Transporter
 ./publishing/ios/3-build-app-store-ipa.sh

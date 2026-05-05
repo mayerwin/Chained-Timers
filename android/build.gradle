@@ -9,6 +9,13 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'com.google.gms:google-services:4.4.4'
+        // gradle-play-publisher — uploads the AAB + creates a Play Console
+        // release via the Google Play Developer API. Activated in
+        // android/app/build.gradle only when
+        // publishing/android/play-service-account.json is present, so the
+        // default build flow (assembleDebug, bundleRelease) doesn't depend
+        // on it. The wrapper is publishing/android/4-publish-to-play.ps1.
+        classpath 'com.github.triplet.gradle:play-publisher:3.10.1'
 
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files

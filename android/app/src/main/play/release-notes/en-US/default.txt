@@ -1,0 +1,5 @@
+v1.3.2 — automated Play release flow + tighter audio-visual sync
+
+• In-app run clock now flips digits at the same instant the 3-2-1 tick plays — was ~0.5s ahead of the sound, making the audio feel late.
+• New 4-publish-to-play.bat builds + uploads the AAB to Play Console in one shot via the Google Play Developer API; one-time service-account setup documented in publishing/android/README.md §3.5.
+• Manual upload flow (3-build-play-aab.bat) still supported — pick whichever you prefer per release.

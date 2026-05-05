@@ -28,8 +28,8 @@ android {
         applicationId "com.github.chainedtimers"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.3.1"
+        versionCode 10
+        versionName "1.3.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -107,6 +107,49 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// ----------------------------------------------------------------------
+// gradle-play-publisher (publishing/android/4-publish-to-play.ps1).
+//
+// We only apply the plugin when the service-account JSON is present.
+// That keeps `assembleDebug`, `bundleRelease`, the GitHub-Actions
+// sideload pipeline, and any fresh-checkout build working without the
+// developer ever creating a service account — it's only needed for the
+// people who actually push to Play Console.
+//
+// The same pattern as `hasPlayKey` above for the upload keystore:
+// silent fall-through when missing, never a hard error.
+//
+// `track` defaults to `internal` for safety. Override per invocation:
+//   $env:PLAY_TRACK='production'; .\gradlew.bat publishBundle
+// `releaseStatus` defaults to `completed`; flip to `draft` if you want
+// the upload to land in Play Console without auto-submitting for review.
+// ----------------------------------------------------------------------
+def playServiceAccountFile = new File(keystoresDir, 'play-service-account.json')
+if (hasPlayKey && playServiceAccountFile.exists()) {
+    apply plugin: 'com.github.triplet.play'
+
+    play {
+        serviceAccountCredentials.set(playServiceAccountFile)
+        track.set(System.getenv('PLAY_TRACK') ?: 'internal')
+        releaseStatus.set(
+            com.github.triplet.gradle.androidpublisher.ReleaseStatus.valueOf(
+                (System.getenv('PLAY_RELEASE_STATUS') ?: 'COMPLETED').toUpperCase()
+            )
+        )
+        defaultToAppBundles.set(true)
+        // false = upload only, don't promote across tracks. The script
+        // calls `publishBundle` directly when we want a release; no need
+        // for implicit cross-track behaviour.
+        commit.set(true)
+        // Tolerant of "version code N already published" — fail fast so
+        // the script can tell the user they forgot to bump versionCode
+        // instead of the request silently no-oping.
+        resolutionStrategy.set(
+            com.github.triplet.gradle.androidpublisher.ResolutionStrategy.FAIL
+        )
+    }
+}
 
 try {
     def servicesJSON = file('google-services.json')
