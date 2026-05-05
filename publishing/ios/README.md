@@ -89,6 +89,21 @@ In Xcode's Project Navigator (left sidebar): `App → App → Assets.xcassets �
 
 Drag-and-drop [`icon-1024.png`](icon-1024.png) onto the **App Store iOS** 1024×1024 slot. Xcode 14+ auto-derives every smaller size you need (no manual resizing).
 
+### 4.2.5 Add the bundled notification sounds
+
+The web app's `Audio.chime` / `Audio.finale` are pre-rendered to `chime.wav` and `finale.wav` by [`tools/render-audio.mjs`](../../tools/render-audio.mjs). On Android, Gradle picks them up from `android/app/src/main/res/raw/` automatically; on iOS, the local-notifications plugin needs them in the app bundle so per-segment alerts (and the chain-end alert) play the same sound the WebView would play in foreground.
+
+```bash
+# From the repo root, with ios/ already scaffolded by step 3:
+npm run audio:render
+# This now copies chime.wav + finale.wav into ios/App/App/ alongside Info.plist.
+# (tick.wav is also copied, but unused on iOS — see PUBLISHING.md "Audio cues" notes.)
+```
+
+Then in Xcode's Project Navigator: **right-click `App` (the inner App folder, not the outer App target) → Add Files to "App"…**, select `chime.wav` and `finale.wav`, ensure **"Copy items if needed"** is unchecked (the files already live in `ios/App/App/`) and **"Add to targets: App"** is ticked. They'll appear in **Build Phases → Copy Bundle Resources** automatically.
+
+> Skipping this step is safe — iOS just falls back to the default notification sound. But for parity with the web/Android in-app cues, do it.
+
 ### 4.3 Sign the app
 
 1. Click the **App** target (top of Project Navigator).

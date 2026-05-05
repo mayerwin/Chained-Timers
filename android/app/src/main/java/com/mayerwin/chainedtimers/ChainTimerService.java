@@ -169,6 +169,10 @@ public class ChainTimerService extends Service {
     private static final int NOTIFICATION_ID_COMPLETE = 7001;
     private static final String WAKELOCK_TAG = "ChainedTimers::ChainRun";
     private static final long TICK_INTERVAL_MS = 1000L;
+    // How long to keep the service alive after kicking off the chain-end
+    // finale through SoundPool. finale.wav is ~0.95s; we add a small
+    // margin so audio-thread latency doesn't clip the last note.
+    private static final long FINALE_TAIL_MS   = 1500L;
 
     private static volatile boolean running = false;
 
@@ -543,13 +547,32 @@ public class ChainTimerService extends Service {
         // notification post (channel sound is null). Same gating as the
         // notification: we only alert at all when the user isn't already
         // hearing Audio.finale through the in-app Web Audio path.
-        if (alert && !isAppForegroundSafe()) playFinale();
+        boolean playedFinale = alert && !isAppForegroundSafe();
+        if (playedFinale) playFinale();
 
-        releaseWakeLock();
         // Removes the FGS notification (id 7000); the chain-complete entry
         // (id 7001) we just posted persists independently.
         stopForeground(STOP_FOREGROUND_REMOVE);
-        stopSelf();
+
+        // Defer stopSelf so onDestroy doesn't release the SoundPool while
+        // the finale arpeggio (~0.95s, plus a small tail of audio-thread
+        // latency) is still playing. Without this delay the audio is
+        // pre-empted and the user only hears the 3-2-1 ticks; the finale
+        // never reaches their ears even though playFinale() returned. The
+        // mid-chain chime didn't have this problem because the service
+        // keeps ticking after a boundary, so SoundPool isn't torn down.
+        //
+        // Keep the wake lock held until stopSelf so the CPU can't drop into
+        // a deep sleep that would suspend the audio thread mid-arpeggio.
+        if (playedFinale) {
+            tickHandler.postDelayed(() -> {
+                releaseWakeLock();
+                stopSelf();
+            }, FINALE_TAIL_MS);
+        } else {
+            releaseWakeLock();
+            stopSelf();
+        }
     }
 
     private void ensureChannel() {

@@ -729,6 +729,15 @@
         smallIcon:  'ic_stat_icon',
         iconColor:  '#F5B042',
         channelId:  CHANNEL_ID,
+        // Custom sounds — same waveforms as in-app Audio.chime / Audio.finale
+        // so the audio cue is the same regardless of which path delivered it.
+        // iOS picks these up from the app bundle (see ios/App/App/Resources/);
+        // on the Android *fallback* path (no FGS plugin) the channel sound
+        // wins, but pre-scheduling them this way means the iOS branch is
+        // covered by the same code path. The Android FGS branch never runs
+        // this loop (gated by `if (fgsActive) return;` above) — it plays
+        // chime / finale through SoundPool from R.raw.* directly.
+        sound:      isLast ? 'finale.wav' : 'chime.wav',
         ongoing:    false,
         autoCancel: true,
       });

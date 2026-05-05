@@ -22,7 +22,17 @@ const SAMPLE_RATE      = 44100;
 const BITS_PER_SAMPLE  = 16;
 const NUM_CHANNELS     = 1;
 const REPO_ROOT        = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const RAW_DIR          = path.join(REPO_ROOT, 'android/app/src/main/res/raw');
+// Android: Gradle picks WAVs up from res/raw automatically. The service
+// references them as R.raw.chime / R.raw.finale / R.raw.tick.
+const ANDROID_RAW_DIR  = path.join(REPO_ROOT, 'android/app/src/main/res/raw');
+// iOS: the @capacitor/local-notifications plugin looks for `sound:` files
+// in the app bundle. We mirror the same WAVs into ios/App/App/ so a
+// `cap:sync ios` + Xcode "Add Files to App" step makes the per-segment
+// chime / finale chime sound match what Android plays. (`tick` isn't
+// used on iOS — there's no equivalent of the FGS for per-second
+// playback in background; the WebView's Audio.tick covers the
+// foreground case and that's all iOS gets.)
+const IOS_APP_DIR      = path.join(REPO_ROOT, 'ios/App/App');
 
 // Render a single Audio.beep() into the buffer at startSec.
 //
@@ -159,16 +169,35 @@ async function writeWav(samples, filePath) {
   console.log(`✓ ${path.relative(REPO_ROOT, filePath)} (${sizeKb.toFixed(1)} KB)`);
 }
 
-await fs.mkdir(RAW_DIR, { recursive: true });
+await fs.mkdir(ANDROID_RAW_DIR, { recursive: true });
+
+// Mirror WAVs into ios/App/App/ when the iOS Capacitor project exists.
+// On iOS the WAVs still need to be added to the Xcode project's "Copy
+// Bundle Resources" build phase manually after `cap:add:ios` — Xcode
+// doesn't auto-discover loose files in the app folder. PUBLISHING.md
+// documents the one-time Xcode step.
+async function pathExists(p) {
+  try { await fs.stat(p); return true; } catch { return false; }
+}
+const includeIos = await pathExists(IOS_APP_DIR);
+
+async function writeAll(samples, name) {
+  await writeWav(samples, path.join(ANDROID_RAW_DIR, name));
+  if (includeIos) await writeWav(samples, path.join(IOS_APP_DIR, name));
+}
 
 const chime = renderChime();
 normalize(chime);
-await writeWav(chime, path.join(RAW_DIR, 'chime.wav'));
+await writeAll(chime, 'chime.wav');
 
 const finale = renderFinale();
 normalize(finale);
-await writeWav(finale, path.join(RAW_DIR, 'finale.wav'));
+await writeAll(finale, 'finale.wav');
 
 const tick = renderTick();
 normalize(tick);
-await writeWav(tick, path.join(RAW_DIR, 'tick.wav'));
+await writeAll(tick, 'tick.wav');
+
+if (!includeIos) {
+  console.log(`(ios/ not present — skipped iOS bundle copies; run again after \`npx cap add ios\`)`);
+}
