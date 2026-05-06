@@ -26,10 +26,11 @@ android/local.properties
 android/*.iml
 android/app/*.iml
 # Android signing artifacts. The sideload keystore is committed (see
-# android/app/build.gradle for the rationale); the upload keystore +
-# its properties file are per-developer secrets and never committed.
-publishing/android/upload.keystore
-publishing/android/keystore.properties
+# android/app/build.gradle for the rationale); the upload keystore,
+# its properties file, and the Play Developer API service-account JSON
+# are per-developer secrets and live under publishing/android/secrets/
+# which is gitignored wholesale.
+publishing/android/secrets/
 # Build artifacts staged in publishing/ by 3-build-play-aab.ps1 (and the
 # iOS counterpart). The originals stay under android/app/build/outputs/
 # and ios/App/build/, but those deep paths are awkward to find when
@@ -44,14 +45,6 @@ publishing/ios/*.xcarchive/
 # the AAB. Reproducible from `adb shell screenrecord` against an emulator
 # with the app sideloaded; not worth committing the binary on every push.
 publishing/android/fgs-demo.mp4
-# Backward-compatibility ignores for the v1.1.x layout where these
-# lived at the repo root / under android/. Safe to keep.
-android/keystore.properties
-android/release.keystore
-android/upload.keystore
-upload.keystore
-keystore.properties
-
 # Publishing-time secrets (filled-in copy of publishing/secrets.template.md)
 publishing/secrets.local.md
 # Per-machine override for the Android publishing scripts (copy of
@@ -61,8 +54,6 @@ publishing/android/local-config.ps1
 *.p12
 *.p8
 AuthKey_*.p8
-# Play Console service account
-play-service-account*.json
 
 # iOS — generated/build files
 ios/App/build/

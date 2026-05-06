@@ -34,10 +34,11 @@ Write-Host '=== Build Play Store AAB ===' -ForegroundColor Cyan
 Write-Host ''
 
 # --- Sanity checks ---
-$keystore = Join-Path $here 'upload.keystore'
-$props    = Join-Path $here 'keystore.properties'
+$secretsDir = Join-Path $here 'secrets'
+$keystore   = Join-Path $secretsDir 'upload.keystore'
+$props      = Join-Path $secretsDir 'keystore.properties'
 if (-not (Test-Path $keystore) -or -not (Test-Path $props)) {
-    Write-Host 'Upload keystore not found in publishing\android\.' -ForegroundColor Red
+    Write-Host 'Upload keystore not found in publishing\android\secrets\.' -ForegroundColor Red
     Write-Host 'Run this first:'
     Write-Host '  publishing\android\1-generate-upload-keystore.bat'
     exit 1

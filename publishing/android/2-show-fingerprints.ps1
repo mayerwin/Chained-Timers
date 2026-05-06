@@ -9,10 +9,12 @@
 #     the APK before sideloading)
 #   - Anywhere else you want to vouch for "this APK is genuinely mine"
 #
-# Both keystores live in publishing/android/. The upload-key password
-# is read from publishing/android/keystore.properties (which
-# 1-generate-upload-keystore.ps1 wrote). The sideload-key password is
-# the committed plaintext "sideload" -- that's intentional; see
+# sideload.keystore lives in publishing/android/ (committed, public).
+# upload.keystore + keystore.properties live in
+# publishing/android/secrets/ (gitignored). The upload-key password is
+# read from secrets/keystore.properties (written by
+# 1-generate-upload-keystore.ps1). The sideload-key password is the
+# committed plaintext "sideload" -- that's intentional; see
 # android/app/build.gradle for the rationale.
 # =====================================================================
 
@@ -58,9 +60,10 @@ function Show-Fingerprint([string]$label, [string]$keystore, [string]$alias, [st
     }
 }
 
-# Upload key -- read password from keystore.properties.
-$uploadKs    = Join-Path $here 'upload.keystore'
-$uploadProps = Join-Path $here 'keystore.properties'
+# Upload key -- read password from secrets/keystore.properties.
+$secretsDir  = Join-Path $here 'secrets'
+$uploadKs    = Join-Path $secretsDir 'upload.keystore'
+$uploadProps = Join-Path $secretsDir 'keystore.properties'
 if (Test-Path $uploadProps) {
     $kvs = @{}
     Get-Content $uploadProps | Where-Object { $_ -match '^\s*[^#].*?=' } | ForEach-Object {

@@ -21,7 +21,7 @@ A copy-paste recipe. Total active human time: ~45 min spread across ~10 days (re
 | Privacy policy URL | <https://mayerwin.github.io/Chained-Timers/privacy.html> | 5.3 |
 | Support URL | <https://github.com/mayerwin/Chained-Timers/issues> | 5.3 |
 | Marketing URL (optional) | <https://mayerwin.github.io/Chained-Timers/> | 5.3 |
-| Upload keystore (you'll generate in step 2) | `publishing/android/upload.keystore` (gitignored) | 3 |
+| Upload keystore (you'll generate in step 2) | `publishing/android/secrets/upload.keystore` (gitignored) | 3 |
 
 ---
 
@@ -104,7 +104,7 @@ Prerequisites the script verifies: upload keystore exists, JDK is reachable, And
 
 The Google Play Developer API requires a service account with a JSON key — *not* your developer email and password.
 
-1. **Open Play Console → Setup → API access** (left sidebar). Accept the API terms if prompted.
+1. **Open the Play Console at the developer-account level** (top-left "All apps" link if you're inside an app), then in the left sidebar scroll to the bottom: **Setup → API access** (some accounts label it *Settings* instead of *Setup*). Direct URL: <https://play.google.com/console/u/0/api-access>. Accept the API terms if prompted.
 2. Click **Create new service account**. The Console redirects to **Google Cloud Console → IAM & Admin → Service Accounts → Create**:
    - **Name**: `chained-timers-publisher`
    - **Description**: `gradle-play-publisher uploads`
@@ -113,7 +113,7 @@ The Google Play Developer API requires a service account with a JSON key — *no
 3. Back in **Google Cloud Console → IAM & Admin → Service Accounts**, click the new account → **Keys** tab → **Add key → Create new key → JSON → Create**. The browser downloads `chained-timers-publisher-<hash>.json`.
 4. Save it to:
    ```
-   publishing/android/play-service-account.json
+   publishing/android/secrets/play-service-account.json
    ```
    (gitignored — never commit this file.)
 5. Back in **Play Console → Setup → API access**, find the service account in the list (it auto-appears once linked). Click **Grant access**:
@@ -321,7 +321,7 @@ Left sidebar → **Test and release → Production → Create new release**.
    git tag vX.Y.Z && git push --tags
    ```
 6. **Push to Play Console**, either:
-   - **Automated** (if `publishing/android/play-service-account.json` is set up — see §3.5):
+   - **Automated** (if `publishing/android/secrets/play-service-account.json` is set up — see §3.5):
      ```
      publishing\android\4-publish-to-play.bat
      ```

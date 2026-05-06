@@ -1,10 +1,11 @@
 # =====================================================================
 # Build + upload the Play Store AAB to a chosen Google Play track.
 #
-# What it does:
-#   1. npm run cap:sync          (build web assets + sync into android/)
-#   2. gradlew bundleRelease     (compile the signed AAB)
-#   3. gradlew publishBundle     (upload to Play Console + create release)
+# This is a thin wrapper on top of 3-build-play-aab.ps1: that script
+# handles the npm cap:sync + signed `gradlew bundleRelease` + AAB-staging
+# steps; we run those as-is, then run `gradlew publishBundle` (added by
+# the gradle-play-publisher plugin) which uploads the already-built AAB
+# to Play Console and creates a release on the chosen track.
 #
 # Track defaults to `internal` for safety. Override:
 #   $env:PLAY_TRACK = 'production'
@@ -17,13 +18,14 @@
 # Prerequisites (one-time, see publishing/android/README.md §"Automated
 # publish" for the full walkthrough):
 #   1. publishing\android\1-generate-upload-keystore.bat has been run.
-#   2. The first AAB has been uploaded to Play Console MANUALLY (the
-#      Play Console requires a manual first upload before it will accept
-#      API uploads — they call this "claim the listing").
-#   3. A Google Cloud service account exists with role "Service Account
-#      User", and is granted "Release manager" access to this app in
-#      Play Console → Setup → API access. The JSON key is saved at
-#      publishing\android\play-service-account.json (gitignored).
+#   2. The first AAB has been uploaded to Play Console MANUALLY (Play
+#      Console requires this before it accepts API uploads -- they call
+#      it "claim the listing").
+#   3. A Google Cloud service account exists, granted "Release manager"
+#      access to this app in Play Console -> Setup -> API access. The
+#      JSON key is saved at:
+#        publishing\android\secrets\play-service-account.json
+#      (gitignored alongside upload.keystore + keystore.properties).
 #   4. Each publish requires versionCode in android/app/build.gradle to
 #      be HIGHER than the last uploaded version, otherwise the API
 #      rejects it.
@@ -42,18 +44,11 @@ Write-Host ''
 Write-Host '=== Publish to Google Play ===' -ForegroundColor Cyan
 Write-Host ''
 
-# --- Sanity checks ---
-$keystore       = Join-Path $here 'upload.keystore'
-$props          = Join-Path $here 'keystore.properties'
-$serviceAccount = Join-Path $here 'play-service-account.json'
-
-if (-not (Test-Path $keystore) -or -not (Test-Path $props)) {
-    Write-Host 'Upload keystore not found in publishing\android\.' -ForegroundColor Red
-    Write-Host 'Run this first:'
-    Write-Host '  publishing\android\1-generate-upload-keystore.bat'
-    exit 1
-}
-
+# --- Sanity checks specific to the publish step ---
+# (3-build-play-aab.ps1 will run its own keystore checks; we only
+# need to add the service-account + release-notes check here.)
+$secretsDir     = Join-Path $here 'secrets'
+$serviceAccount = Join-Path $secretsDir 'play-service-account.json'
 if (-not (Test-Path $serviceAccount)) {
     Write-Host 'Play service-account JSON not found:' -ForegroundColor Red
     Write-Host "  $serviceAccount"
@@ -71,7 +66,7 @@ Write-Host "Release status : $status"
 $notesFile = Join-Path $repo 'android\app\src\main\play\release-notes\en-US\default.txt'
 if (-not (Test-Path $notesFile)) {
     Write-Host ''
-    Write-Host "Release notes file missing — Play Console requires per-release notes:" -ForegroundColor Red
+    Write-Host "Release notes file missing -- Play Console requires per-release notes:" -ForegroundColor Red
     Write-Host "  $notesFile"
     Write-Host 'Create it with the human-readable changelog for this version.'
     exit 1
@@ -84,74 +79,42 @@ if ($noteSize -lt 1) {
 Write-Host "Release notes  : $notesFile ($noteSize bytes)"
 Write-Host ''
 
-# --- Resolve toolchain ---
+# --- Step 1: build the AAB by delegating to 3-build-play-aab.ps1 ---
+# That script does the full env setup (JDK, SDK, npm cap:sync) and runs
+# `gradlew bundleRelease`. We re-run the env setup ourselves below so the
+# `gradlew publishBundle` invocation in step 2 can find the same JDK
+# (PowerShell child-script env doesn't propagate back to the parent).
+$buildScript = Join-Path $here '3-build-play-aab.ps1'
+& $buildScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '3-build-play-aab.ps1 failed; aborting upload.' -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+# --- Step 2: upload the AAB via gradle-play-publisher ---
+# `publishBundle` depends on `bundleRelease` which step 1 just ran, so
+# Gradle marks it UP-TO-DATE and the task only runs the upload itself.
 . (Join-Path $here '_resolve-jdk.ps1')
 $jdk = Resolve-Jdk
 $env:JAVA_HOME = $jdk
 $env:Path = "$jdk\bin;$env:Path"
-Write-Host "Using JDK: $jdk"
-
 $sdk = Resolve-AndroidSdk
 $env:ANDROID_HOME     = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
-Write-Host "Using Android SDK: $sdk"
+
+$env:PLAY_TRACK          = $track
+$env:PLAY_RELEASE_STATUS = $status.ToUpper()
+
+Write-Host ''
+Write-Host 'Uploading AAB to Play Console (gradle publishBundle)...' -ForegroundColor Cyan
 Write-Host ''
 
-# Resolve npm (see 3-build-play-aab.ps1 for why we use npm.cmd directly).
-$npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-if (-not $npm) {
-    Write-Host 'npm.cmd not found on PATH.' -ForegroundColor Red
-    Write-Host 'Install Node.js (https://nodejs.org) and re-run.'
-    exit 1
-}
-
-# --- Step 1+2: build web assets + cap sync ---
-Push-Location $repo
+Push-Location (Join-Path $repo 'android')
 try {
-    if (-not (Test-Path 'node_modules')) {
-        Write-Host 'Installing npm dependencies (one-time)...' -ForegroundColor Cyan
-        & $npm ci --no-fund --no-audit
-        if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-    }
-
-    Write-Host 'Building web assets and syncing Capacitor...' -ForegroundColor Cyan
-    & $npm run cap:sync
-    if ($LASTEXITCODE -ne 0) { throw 'cap sync failed' }
-
-    # --- Step 3: gradle bundleRelease + publishBundle ---
-    # publishBundle depends on bundleRelease, so a single invocation does
-    # both: compiles the signed AAB and uploads it to Play Console.
-    Write-Host ''
-    Write-Host 'Building + uploading AAB (gradle publishBundle)...' -ForegroundColor Cyan
-    Write-Host '(first run takes 1-3 min; subsequent runs are under 30s + upload time)'
-    Write-Host ''
-
-    $env:PLAY_TRACK          = $track
-    $env:PLAY_RELEASE_STATUS = $status.ToUpper()
-
-    Push-Location (Join-Path $repo 'android')
-    try {
-        & .\gradlew.bat publishBundle --console=plain
-        if ($LASTEXITCODE -ne 0) { throw "gradle publishBundle failed (exit $LASTEXITCODE)" }
-    }
-    finally { Pop-Location }
+    & .\gradlew.bat publishBundle --console=plain
+    if ($LASTEXITCODE -ne 0) { throw "gradle publishBundle failed (exit $LASTEXITCODE)" }
 }
 finally { Pop-Location }
-
-# Stage a copy of the AAB next to the rest of the publishing material,
-# same as 3-build-play-aab.ps1 does — useful for rollback / archival.
-$aab = Join-Path $repo 'android\app\build\outputs\bundle\release\app-release.aab'
-if (Test-Path $aab) {
-    $buildGradle = Join-Path $repo 'android\app\build.gradle'
-    $versionName = (Select-String -Path $buildGradle -Pattern '^\s*versionName\s+"([^"]+)"' -List).Matches[0].Groups[1].Value
-    if ($versionName) {
-        $staged = Join-Path $here "chained-timers-v$versionName-play.aab"
-        Copy-Item -Force $aab $staged
-        $size = [math]::Round((Get-Item $staged).Length / 1KB, 1)
-        Write-Host ''
-        Write-Host "Staged AAB     : $staged ($size KB)"
-    }
-}
 
 Write-Host ''
 Write-Host 'Done.' -ForegroundColor Green
@@ -159,7 +122,7 @@ Write-Host "  Uploaded to track : $track"
 Write-Host "  Status            : $status"
 Write-Host ''
 if ($status -eq 'draft') {
-    Write-Host 'Release is in DRAFT — open Play Console to submit it for review.'
+    Write-Host 'Release is in DRAFT -- open Play Console to submit it for review.'
 } elseif ($track -eq 'internal') {
     Write-Host 'Internal testers will see the new version in their app within ~minutes.'
 } elseif ($track -eq 'production') {

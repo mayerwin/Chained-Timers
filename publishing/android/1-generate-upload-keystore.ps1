@@ -2,14 +2,14 @@
 # Generate the Play Store upload keystore (one-time setup).
 #
 # Run this ONCE before submitting the first build to Google Play.
-# Creates two files in publishing/android/:
+# Creates two files in publishing/android/secrets/ (created if needed):
 #
 #   upload.keystore         -- the actual private key
 #   keystore.properties     -- password + alias for Gradle
 #
-# Both files are gitignored. If you lose them, Google Play has a key-reset
-# process but it's slow -- back them up to a password manager / encrypted
-# vault BEFORE you forget.
+# The whole secrets/ directory is gitignored. If you lose those files,
+# Google Play has a key-reset process but it's slow -- back them up to a
+# password manager / encrypted vault BEFORE you forget.
 #
 # Distinguished Name uses the Play-Console-friendly convention:
 #   CN=<your name>, O=<your name>, L=<city>, C=FR
@@ -23,9 +23,14 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-$here    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$keystore = Join-Path $here 'upload.keystore'
-$props    = Join-Path $here 'keystore.properties'
+$here       = Split-Path -Parent $MyInvocation.MyCommand.Path
+$secretsDir = Join-Path $here 'secrets'
+$keystore   = Join-Path $secretsDir 'upload.keystore'
+$props      = Join-Path $secretsDir 'keystore.properties'
+
+if (-not (Test-Path $secretsDir)) {
+    New-Item -ItemType Directory -Path $secretsDir -Force | Out-Null
+}
 
 . (Join-Path $here '_resolve-jdk.ps1')
 
@@ -91,13 +96,14 @@ try {
         -keypass:env  CT_KEYSTORE_PW
     if ($LASTEXITCODE -ne 0) { throw "keytool failed with exit code $LASTEXITCODE" }
 
-    # Write keystore.properties with the password embedded. The file is
-    # gitignored; for a more locked-down setup, replace these literals
-    # with environment-variable expansion in build.gradle.
+    # Write keystore.properties with the password embedded. The whole
+    # secrets/ directory is gitignored; for a more locked-down setup,
+    # replace these literals with environment-variable expansion in
+    # build.gradle.
     #
     # storeFile is just a filename -- Gradle joins it with the directory
-    # holding this properties file (publishing/android/) to find the
-    # actual keystore.
+    # holding this properties file (publishing/android/secrets/) to find
+    # the actual keystore.
     $propsContent = @"
 # Play Store upload keystore -- DO NOT COMMIT (gitignored).
 # Read by android/app/build.gradle to sign release AABs.
