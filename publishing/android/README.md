@@ -104,22 +104,27 @@ Prerequisites the script verifies: upload keystore exists, JDK is reachable, And
 
 The Google Play Developer API requires a service account with a JSON key — *not* your developer email and password.
 
-1. **Open the Play Console at the developer-account level** (top-left "All apps" link if you're inside an app), then in the left sidebar scroll to the bottom: **Setup → API access** (some accounts label it *Settings* instead of *Setup*). Direct URL: <https://play.google.com/console/u/0/api-access>. Accept the API terms if prompted.
-2. Click **Create new service account**. The Console redirects to **Google Cloud Console → IAM & Admin → Service Accounts → Create**:
+1. **Create the service account in Google Cloud Console.** Open <https://console.cloud.google.com/iam-admin/serviceaccounts>, pick (or create) any project — the name is just for organisation, Play Console no longer requires the project to be linked — then **Create service account**:
    - **Name**: `chained-timers-publisher`
    - **Description**: `gradle-play-publisher uploads`
-   - Skip the optional "Grant this service account access to project" step — Play Console scopes the access itself in step 3 below.
+   - Skip the optional "Grant this service account access to project" step — Play Console scopes the access itself in step 4 below.
    - Click **Done**.
-3. Back in **Google Cloud Console → IAM & Admin → Service Accounts**, click the new account → **Keys** tab → **Add key → Create new key → JSON → Create**. The browser downloads `chained-timers-publisher-<hash>.json`.
-4. Save it to:
+2. **Download the JSON key.** Click the new service account → **Keys** tab → **Add key → Create new key → JSON → Create**. The browser downloads `chained-timers-publisher-<hash>.json`. Save it to:
    ```
    publishing/android/secrets/play-service-account.json
    ```
    (gitignored — never commit this file.)
-5. Back in **Play Console → Setup → API access**, find the service account in the list (it auto-appears once linked). Click **Grant access**:
-   - **App permissions**: select Chained Timers, set **Release manager**.
-   - **Account permissions**: tick **Release apps to production, exclude devices, use Play App Signing**, and **Create, edit, and delete draft apps**.
-   - Click **Invite user** to confirm.
+3. **Enable the AndroidPublisher API** for that GCP project at <https://console.developers.google.com/apis/api/androidpublisher.googleapis.com/overview>. (If you see an **Enable** button, click it; if it already says **Manage**, you're done.)
+4. **Invite the service account into Play Console.** Open <https://play.google.com/console/users-and-permissions> (developer-account level — the old "Setup → API access" page; the sidebar may also call it *Users and permissions* under the gear icon → *Developer account*). Click **Invite new users**:
+   - **Email address**: paste the service account's `…@…iam.gserviceaccount.com` email (visible on the GCP Service Accounts page, or as `client_email` inside the JSON file).
+   - **Account permissions** tab: leave everything unchecked (least privilege — per-app perms below are enough).
+   - **App permissions** tab → **Add app** → select **Chained Timers** → tick:
+     - **View app information and download bulk reports (read-only)**
+     - **Manage production releases**
+     - **Manage testing track releases**
+   - Click **Apply** → **Invite user** → **Send invitation**. Service-account access is immediate; no email confirmation is required.
+
+> Most "403 PERMISSION_DENIED" errors from `4-publish-to-play.bat` come from skipping the **Add app** step (granting only account-level perms is not enough), or from inviting a different service-account email than the one in `play-service-account.json`. The `client_email` field in the JSON is the source of truth.
 
 ### 3.5.2 First-ever upload still has to be manual
 
@@ -131,15 +136,17 @@ After step 3.5.2 is done once:
 
 1. Bump `versionCode` (must increase) and `versionName` in [`android/app/build.gradle`](../../android/app/build.gradle).
 2. Update the release notes at [`android/app/src/main/play/release-notes/en-US/default.txt`](../../android/app/src/main/play/release-notes/en-US/default.txt) (max ~500 chars per locale).
-3. Double-click [`4-publish-to-play.bat`](4-publish-to-play.bat).
+3. Double-click one of:
+   - [`4-publish-to-play.bat`](4-publish-to-play.bat) — uploads to **Internal testing + Closed testing** (tracks `internal,alpha`). Day-to-day choice.
+   - [`5-publish-to-play-production.bat`](5-publish-to-play-production.bat) — same, plus **Production** (tracks `internal,alpha,production`). Use once you've cleared Google's pre-launch requirements (Closed testing-track residency etc.).
 
-The script runs `npm run cap:sync`, then `gradlew publishBundle`. The latter builds the signed AAB and uploads it to Play Console under the `internal` track by default, with status `completed` (immediate rollout to internal testers).
+Under the hood: Google's Play Developer API only accepts one upload per `versionCode`, so the script uploads once via `gradlew publishBundle` and copies the same artifact onto the remaining tracks via `gradlew promoteArtifact`. Status defaults to `completed` (immediate rollout).
 
-To release to a different track:
+To override the track list or release status per invocation:
 
 ```powershell
-$env:PLAY_TRACK = 'production'         # internal | alpha | beta | production
-$env:PLAY_RELEASE_STATUS = 'completed' # completed | draft | inProgress | halted
+$env:PLAY_TRACKS = 'alpha'             # comma-separated, in upload-then-promote order
+$env:PLAY_RELEASE_STATUS = 'draft'     # completed | draft | inProgress | halted
 publishing\android\4-publish-to-play.bat
 ```
 
@@ -323,9 +330,9 @@ Left sidebar → **Test and release → Production → Create new release**.
 6. **Push to Play Console**, either:
    - **Automated** (if `publishing/android/secrets/play-service-account.json` is set up — see §3.5):
      ```
-     publishing\android\4-publish-to-play.bat
+     publishing\android\4-publish-to-play.bat              # Internal + Closed testing
+     publishing\android\5-publish-to-play-production.bat   # adds Production
      ```
-     Defaults to `internal` track. Set `$env:PLAY_TRACK = 'production'` to release straight to prod.
    - **Manual**:
      ```
      publishing\android\3-build-play-aab.bat
