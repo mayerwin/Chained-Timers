@@ -246,8 +246,10 @@ public class ChainTimerPlugin extends Plugin {
      *
      * Returns the strongest possible "this will silently fail" signals:
      *   - appEnabled: app-level POST_NOTIFICATIONS grant + global toggle
-     *   - statusChannelEnabled: our persistent "now playing" channel ON
-     *   - transitionsChannelEnabled: our segment-end channel ON
+     *   - transitionsChannelEnabled: persistent + boundary-alert channel ON
+     *                                 (CHANNEL_ID — display name "Chain transitions")
+     *   - completeChannelEnabled:    chain-end heads-up channel ON
+     *                                 (CHANNEL_FINALE — display name "Chain complete")
      *
      * If any of these is false the chain runs but the user gets nothing —
      * essential for medication-grade reliability checks.
@@ -260,18 +262,18 @@ public class ChainTimerPlugin extends Plugin {
         boolean appEnabled = nmc.areNotificationsEnabled();
         ret.put("appEnabled", appEnabled);
 
-        boolean statusOn = true;
         boolean transitionsOn = true;
+        boolean completeOn    = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = ctx.getSystemService(NotificationManager.class);
             if (nm != null) {
-                statusOn      = isChannelOn(nm, ChainTimerService.CHANNEL_ID);
-                transitionsOn = isChannelOn(nm, "chain-transitions");
+                transitionsOn = isChannelOn(nm, ChainTimerService.CHANNEL_ID);
+                completeOn    = isChannelOn(nm, ChainTimerService.CHANNEL_FINALE);
             }
         }
-        ret.put("statusChannelEnabled",      statusOn);
         ret.put("transitionsChannelEnabled", transitionsOn);
-        ret.put("ok", appEnabled && statusOn && transitionsOn);
+        ret.put("completeChannelEnabled",    completeOn);
+        ret.put("ok", appEnabled && transitionsOn && completeOn);
         call.resolve(ret);
     }
 

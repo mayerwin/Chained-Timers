@@ -147,11 +147,18 @@ public class ChainTimerService extends Service {
     // for low-latency, in-sync audio. The notification-channel pipeline
     // adds 200–500ms before the channel sound starts, which makes the
     // chain-end finale lag visibly behind the last 3-second tick.
-    public static final String CHANNEL_ID         = "chain-fg";
+    // Channel IDs are *-v2 (bumped from "chain-fg" / "chain-end") so existing
+    // users on the v1.3.0–v1.3.2 binaries get fresh channels with alarm-class
+    // AudioAttributes + bypass-DND on first run after upgrade. Channel
+    // settings are immutable from the app once created, so a v1 channel
+    // would otherwise retain its old notification-stream classification
+    // until the user manually wiped data. The old IDs are appended to
+    // LEGACY_CHANNELS below for one-time deletion on next service start.
+    public static final String CHANNEL_ID         = "chain-fg-v2";
     // Separate channel for chain-end so the heads-up popup is freshly
     // triggered on a new id (Android only fires heads-up on first post
     // for an id, not on updates). Also silent at the channel level.
-    public static final String CHANNEL_FINALE     = "chain-end";
+    public static final String CHANNEL_FINALE     = "chain-end-v2";
     // Pre-v1.3 + pre-SoundPool channels we delete on first run so users
     // don't end up with multiple overlapping entries in System Settings
     // → Notifications. Safe from the service's path because if we're
@@ -162,7 +169,9 @@ public class ChainTimerService extends Service {
         "chain-transitions",   // v1.2 HIGH boundary-alert channel (LocalNotifications)
         "chain-status",        // v1.2 LOW persistent indicator (LocalNotifications)
         "chain-active",        // v1.3.0 had chime.wav as channel sound — now via SoundPool
-        "chain-finale"         // v1.3.0 had finale.wav as channel sound — now via SoundPool
+        "chain-finale",        // v1.3.0 had finale.wav as channel sound — now via SoundPool
+        "chain-fg",            // v1.3.0–v1.3.2 — replaced by chain-fg-v2 (alarm-class audio + bypass DND)
+        "chain-end"            // v1.3.0–v1.3.2 — replaced by chain-end-v2 (alarm-class audio + bypass DND)
     };
 
     private static final int NOTIFICATION_ID          = 7000;
@@ -519,7 +528,12 @@ public class ChainTimerService extends Service {
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setOngoing(false)
-                .setCategory(NotificationCompat.CATEGORY_STATUS);
+                // CATEGORY_ALARM so the chain-end heads-up + lock-screen entry
+                // bypass DND under the default Android DND policy (alarms
+                // allowed). Without this, the finale would be the cue that
+                // most often gets silenced — exactly when the user has the
+                // phone face-down expecting the chain to wake them.
+                .setCategory(NotificationCompat.CATEGORY_ALARM);
 
             // Even on the autonomous service-tick path (where alert=true)
             // we suppress the channel sound if the app turned out to be
@@ -587,6 +601,15 @@ public class ChainTimerService extends Service {
             try { nm.deleteNotificationChannel(legacy); } catch (Throwable ignored) {}
         }
 
+        // Alarm-class audio attributes — used on both channels so the system
+        // classifies them under the ALARM stream for vibration/light handling
+        // and DND policy decisions (channel sound is null; SoundPool handles
+        // playback through this same stream).
+        AudioAttributes alarmAttrs = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             NotificationChannel ch = new NotificationChannel(
                 CHANNEL_ID,
@@ -601,7 +624,18 @@ public class ChainTimerService extends Service {
             // No channel sound — chime is played via SoundPool from R.raw.chime
             // for low-latency, in-sync audio (the OS notification pipeline
             // adds 200–500ms which lags behind the SoundPool-played ticks).
-            ch.setSound(null, null);
+            // The AudioAttributes still tell the system this channel belongs
+            // to the alarm stream (matters for DND classification on some
+            // OEM ROMs even when sound is null).
+            ch.setSound(null, alarmAttrs);
+            // Best-effort DND bypass. The system silently ignores this for
+            // apps without ACCESS_NOTIFICATION_POLICY (we don't request it),
+            // but the notification-level CATEGORY_ALARM + USAGE_ALARM audio
+            // already give us alarm-through-DND behaviour under the default
+            // DND policy. This call is a free win where it is honoured (e.g.
+            // when the user has granted Notification policy access to the app
+            // for any reason).
+            ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
 
@@ -618,8 +652,11 @@ public class ChainTimerService extends Service {
             ch.enableVibration(true);
             // No channel sound — finale is played via SoundPool from
             // R.raw.finale so it lands immediately after the last tick
-            // instead of trailing the channel-pipeline latency.
-            ch.setSound(null, null);
+            // instead of trailing the channel-pipeline latency. Alarm-stream
+            // AudioAttributes are kept here for the same DND-classification
+            // reason as the chain-fg channel above.
+            ch.setSound(null, alarmAttrs);
+            ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
     }
@@ -675,7 +712,13 @@ public class ChainTimerService extends Service {
             .setOngoing(true)
             .setShowWhen(false)
             .setUsesChronometer(false)
-            .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
+            // CATEGORY_ALARM (not _STOPWATCH) so Android's DND filter treats
+            // this as an alarm: the default DND policy allows alarms through,
+            // so the boundary heads-up + lock-screen entry still appear when
+            // the phone is in DND or silent mode. Paired with the SoundPool's
+            // USAGE_ALARM routing, the chain rings exactly like an alarm
+            // clock with no user-side "Override DND" toggle required.
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE);
 
         // Per-tick re-posts must NEVER alert: the channel is HIGH so the
@@ -903,8 +946,20 @@ public class ChainTimerService extends Service {
     private void ensureSoundPool() {
         if (soundPool != null) return;
         try {
+            // USAGE_ALARM routes playback through the ALARM stream, which is
+            // never muted by the ringer being silent, by DND/"Do Not Disturb"
+            // mode, or by the Notification-stream volume slider. This matches
+            // the user's mental model: this is an interval timer, it behaves
+            // like an alarm clock — when a segment boundary fires, the chime
+            // must ring even if the phone is on silent or in DND, with zero
+            // user intervention (no per-channel "Override DND" toggle, no
+            // Notification-policy permission prompt). Switching this away
+            // from USAGE_NOTIFICATION_EVENT was the fix for chains going
+            // silent in DND and the user thinking notifications were broken
+            // even after disabling DND (the real problem was just that the
+            // last cue silently passed during DND).
             AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build();
             soundPool = new android.media.SoundPool.Builder()

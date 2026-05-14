@@ -1631,9 +1631,9 @@ const UI = {
         }
         if (st.notifHealth) {
           const h = st.notifHealth;
-          if (!h.appEnabled)              bodyText += '\n⚠ notifications: BLOCKED app-wide';
-          else if (!h.statusChannelEnabled)    bodyText += '\n⚠ "Chain status" channel disabled';
+          if (!h.appEnabled)                     bodyText += '\n⚠ notifications: BLOCKED app-wide';
           else if (!h.transitionsChannelEnabled) bodyText += '\n⚠ "Chain transitions" channel disabled';
+          else if (!h.completeChannelEnabled)    bodyText += '\n⚠ "Chain complete" channel disabled';
         }
       }
       if (ls) {

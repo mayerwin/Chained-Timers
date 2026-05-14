@@ -49,7 +49,7 @@
     fgService: false,          // true while the Android foreground service holds the wake lock
     fgServiceAvailable: false, // false on older APK builds without the ChainTimerPlugin
     batteryOpt: 'unknown',     // 'exempt' | 'optimized' | 'unsupported' | 'unknown'
-    notifHealth: null,         // { appEnabled, statusChannelEnabled, transitionsChannelEnabled, ok }
+    notifHealth: null,         // { appEnabled, transitionsChannelEnabled, completeChannelEnabled, ok }
   };
 
   if (!isNative()) {
@@ -649,9 +649,9 @@
       const health = await refreshNotifHealth();
       if (health && !health.ok) {
         const parts = [];
-        if (!health.appEnabled)              parts.push('app notifications OFF');
-        if (!health.statusChannelEnabled)    parts.push('"Chain status" channel OFF');
+        if (!health.appEnabled)                parts.push('app notifications OFF');
         if (!health.transitionsChannelEnabled) parts.push('"Chain transitions" channel OFF');
+        if (!health.completeChannelEnabled)    parts.push('"Chain complete" channel OFF');
         toast(`⚠ Critical: ${parts.join(' · ')} — open OS Settings → Apps → Chained Timers → Notifications and re-enable.`, 'warn');
       }
 

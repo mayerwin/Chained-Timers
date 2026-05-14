@@ -1,5 +1,5 @@
-v1.3.2 — automated Play release flow + tighter audio-visual sync
+v1.3.3 — chain rings through Do Not Disturb like an alarm clock
 
-• In-app run clock now flips digits at the same instant the 3-2-1 tick plays — was ~0.5s ahead of the sound, making the audio feel late.
-• New 4-publish-to-play.bat builds + uploads the AAB to Play Console in one shot via the Google Play Developer API; one-time service-account setup documented in publishing/android/README.md §3.5.
-• Manual upload flow (3-build-play-aab.bat) still supported — pick whichever you prefer per release.
+• Segment-boundary chimes and the chain-end finale now route through the alarm audio stream, so the chain keeps ringing when the phone is on silent or in Do Not Disturb — no per-app override required.
+• Notifications are tagged as alarms so heads-up + lock-screen entries still appear under DND default policy.
+• Fixed the notification-health probe: it was checking a deleted legacy channel and silently reporting "OK" even when the user had muted the real ones. Settings now warns accurately when a chain channel is disabled.
