@@ -1,5 +1,5 @@
-v1.3.3 — chain rings through Do Not Disturb like an alarm clock
+v1.3.3 — chain rings through Do Not Disturb like an alarm
 
-• Segment-boundary chimes and the chain-end finale now route through the alarm audio stream, so the chain keeps ringing when the phone is on silent or in Do Not Disturb — no per-app override required.
-• Notifications are tagged as alarms so heads-up + lock-screen entries still appear under DND default policy.
-• Fixed the notification-health probe: it was checking a deleted legacy channel and silently reporting "OK" even when the user had muted the real ones. Settings now warns accurately when a chain channel is disabled.
+• Boundary chimes and the chain-end finale now route through the alarm audio stream, so chains keep ringing on silent or in Do Not Disturb — no per-app override needed.
+• Notifications tagged as alarms so heads-up + lock-screen entries still appear under default DND policy.
+• Fixed: notification-health probe was reporting "OK" while checking a deleted channel.
