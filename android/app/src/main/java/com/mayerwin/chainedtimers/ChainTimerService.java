@@ -130,10 +130,10 @@ public class ChainTimerService extends Service {
     // through Web Audio and the tray entry is just a visual record.
     public static final String EXTRA_SILENT                = "silent";
     // User's "play tick on last 3 seconds" preference (sound && finalTick).
-    // The service plays tick.wav via SoundPool in the background since
-    // the WebView's Audio.tick() can't play once the WebView is paused;
-    // gating on this respects the same Settings toggle the in-app cue
-    // honours.
+    // The service plays final3.wav (three 660Hz pulses pre-mixed at exact
+    // 1-second offsets) via SoundPool in the background since the WebView's
+    // Audio.finalThree() can't play once the WebView is paused; gating on
+    // this respects the same Settings toggle the in-app cue honours.
     public static final String EXTRA_TICK_ENABLED          = "tickEnabled";
     // User's master "Sound" preference. Mirrors Store.getSettings().sound
     // and gates ALL SoundPool playback (chime, finale, tick) so the
@@ -209,11 +209,13 @@ public class ChainTimerService extends Service {
     // JS-driven UPDATEs sync this back to curIndex so they don't trigger
     // a duplicate alert in foreground.
     private int prevAlertIndex = -1;
-    // Last segment-remaining-second we played a tick.wav for, scoped to
-    // a (curIndex, secondsRemaining) pair so each of the last 3 seconds
-    // of every segment ticks at most once.
-    private int lastTickedAtIndex     = -1;
-    private long lastTickedRemaining  = -1L;
+    // Segment index for which we've already kicked off the concatenated
+    // 3-2-1 final3.wav playback. Set when remaining first drops into the
+    // ≤3s window; cleared on every segment change so the next segment
+    // gets its own play. Single-shot per segment — the WAV itself
+    // contains all three pulses at exact 1-second offsets, so the OS
+    // audio thread guarantees gap-free spacing.
+    private int finalThreeStartedAtIndex = -1;
     // User's "play tick in last 3 seconds" preference, mirrored from JS.
     private boolean tickEnabled = true;
 
@@ -225,9 +227,9 @@ public class ChainTimerService extends Service {
     // chain-end finale visibly lag behind the SoundPool-played 3-second
     // ticks; routing all three through SoundPool keeps the cadence tight.
     private android.media.SoundPool soundPool;
-    private int tickSoundId   = 0;
-    private int chimeSoundId  = 0;
-    private int finaleSoundId = 0;
+    private int chimeSoundId      = 0;
+    private int finaleSoundId     = 0;
+    private int finalThreeSoundId = 0;
     // Mirrors the user's master "Sound" toggle. Gates SoundPool playback
     // so the service respects the same Settings switch as the in-app
     // Web Audio path.
@@ -423,18 +425,21 @@ public class ChainTimerService extends Service {
         // only audio cue at the boundary in background.
         if (boundaryAlert) playChime();
 
-        // Last-3-second tick. The JS engine plays Audio.tick() on each of
-        // remaining = 3, 2, 1 in foreground; we mirror that here when the
-        // app isn't visible so the user hears the same cue with the screen
-        // off. SoundPool plays directly without re-posting the persistent
-        // notification.
+        // Last-3-second cue. We fire final3.wav ONCE per segment, the
+        // moment remaining first drops into the ≤3s window. The WAV is
+        // pre-rendered with three 660Hz pulses at exact 1.000s offsets,
+        // so the OS audio thread plays them gap-free — no Handler /
+        // SoundPool / per-tick jitter. Previously we triggered tick.wav
+        // three separate times from this loop (once per second of the
+        // last 3) and users reported audibly irregular spacing; the
+        // wall-clock jitter compounded across three calls. One play =
+        // one timing contract, owned by the audio hardware.
         Segment cur = plan.get(curIndex);
         long remainingSec = computeRemainingSec(cur);
         if (tickEnabled && !inForeground && remainingSec >= 1L && remainingSec <= 3L) {
-            if (curIndex != lastTickedAtIndex || remainingSec != lastTickedRemaining) {
-                lastTickedAtIndex    = curIndex;
-                lastTickedRemaining  = remainingSec;
-                playTick();
+            if (finalThreeStartedAtIndex != curIndex) {
+                finalThreeStartedAtIndex = curIndex;
+                playFinalThree();
             }
         }
 
@@ -897,8 +902,7 @@ public class ChainTimerService extends Service {
                 pausedRemainingMs = 0L;
                 paused = false;
                 prevAlertIndex = curIndex;        // user-driven, no boundary alert
-                lastTickedAtIndex = -1;
-                lastTickedRemaining = -1L;
+                finalThreeStartedAtIndex = -1;
                 tickHandler.removeCallbacks(tickRunnable);
                 scheduleNextTick();
                 updated = true;
@@ -924,8 +928,7 @@ public class ChainTimerService extends Service {
             pausedRemainingMs = 0L;
             paused = false;
             prevAlertIndex = curIndex;
-            lastTickedAtIndex = -1;
-            lastTickedRemaining = -1L;
+            finalThreeStartedAtIndex = -1;
             tickHandler.removeCallbacks(tickRunnable);
             scheduleNextTick();
             updated = true;
@@ -966,12 +969,12 @@ public class ChainTimerService extends Service {
                 .setMaxStreams(2)
                 .setAudioAttributes(attrs)
                 .build();
-            tickSoundId   = soundPool.load(this, R.raw.tick,   1);
-            chimeSoundId  = soundPool.load(this, R.raw.chime,  1);
-            finaleSoundId = soundPool.load(this, R.raw.finale, 1);
+            chimeSoundId      = soundPool.load(this, R.raw.chime,   1);
+            finaleSoundId     = soundPool.load(this, R.raw.finale,  1);
+            finalThreeSoundId = soundPool.load(this, R.raw.final3,  1);
         } catch (Throwable ignored) {
             soundPool = null;
-            tickSoundId = chimeSoundId = finaleSoundId = 0;
+            chimeSoundId = finaleSoundId = finalThreeSoundId = 0;
         }
     }
 
@@ -980,9 +983,9 @@ public class ChainTimerService extends Service {
         try { soundPool.play(soundId, 1f, 1f, 1, 0, 1f); } catch (Throwable ignored) {}
     }
 
-    private void playTick()   { playSample(tickSoundId); }
-    private void playChime()  { playSample(chimeSoundId); }
-    private void playFinale() { playSample(finaleSoundId); }
+    private void playChime()      { playSample(chimeSoundId); }
+    private void playFinale()     { playSample(finaleSoundId); }
+    private void playFinalThree() { playSample(finalThreeSoundId); }
 
     @SuppressLint("WakelockTimeout")
     private void acquireWakeLock() {
@@ -1020,7 +1023,7 @@ public class ChainTimerService extends Service {
         if (soundPool != null) {
             try { soundPool.release(); } catch (Throwable ignored) {}
             soundPool = null;
-            tickSoundId = 0;
+            chimeSoundId = finaleSoundId = finalThreeSoundId = 0;
         }
         super.onDestroy();
     }

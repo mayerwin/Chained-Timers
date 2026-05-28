@@ -667,7 +667,11 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 .segment-row {
   position: relative;
   display: grid;
-  grid-template-columns: 28px 1fr auto auto;
+  /* 5 columns: handle · body · duration-or-loops · voice · remove.
+     The voice slot collapses to zero when no SpeechSynthesis is present
+     (no voice button appended → empty cell, gap auto-folds via the
+     auto column tracks sizing to content). */
+  grid-template-columns: 28px 1fr auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 12px 12px 12px 6px;
@@ -770,6 +774,21 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   transition: background 140ms, color 140ms;
 }
 .segment-remove:hover { background: rgba(226,72,58,0.1); color: var(--warn); }
+
+/* Per-segment TTS announce toggle. Speaker icon ON; slashed (muted) OFF. */
+.segment-voice {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  color: var(--accent);
+  transition: background 140ms, color 140ms;
+}
+.segment-voice:hover { background: rgba(245,176,66,0.10); }
+.segment-voice .voice-slash { opacity: 0; transition: opacity 140ms; }
+.segment-voice.is-off { color: var(--ink-faint); }
+.segment-voice.is-off .voice-wave-1,
+.segment-voice.is-off .voice-wave-2 { opacity: 0; }
+.segment-voice.is-off .voice-slash { opacity: 1; }
 
 /* sub-chain row variant */
 .segment-sub {

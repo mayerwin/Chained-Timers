@@ -1,18 +1,36 @@
-// Render the in-app Audio.chime / Audio.finale tones to WAV files that the
-// Android notification channels can play. Keeping the source of truth in
-// js/app.js and re-rendering here means a chain transition or chain end
-// makes the same sound whether the cue comes from Web Audio (foreground)
-// or from the notification channel (background).
+// Render the in-app Audio.chime / Audio.finale / Audio.finalThree tones to
+// WAV files that the Android notification channels can play. Keeping the
+// source of truth in js/app.js and re-rendering here means a chain
+// transition, chain end, or 3-2-1 countdown makes the same sound whether
+// the cue comes from Web Audio (foreground) or from the notification
+// channel (background).
 //
 // Output:
 //   android/app/src/main/res/raw/chime.wav   — segment-boundary chime
 //   android/app/src/main/res/raw/finale.wav  — chain-complete finale
+//   android/app/src/main/res/raw/final3.wav  — concatenated 3-2-1 ticks
+//                                              (three 660Hz pulses at
+//                                              exact 1-second offsets)
+//
+// Why final3.wav and not three tick.wav plays:
+//   v1.3.2 played tick.wav three times via SoundPool at 1s intervals
+//   triggered from the FGS service's per-tick handler. Wall-clock jitter
+//   (Handler.postDelayed drift, SoundPool's audio thread queueing,
+//   Android's per-call latency) produced AUDIBLY IRREGULAR spacing — not
+//   a metronome 1.000s apart but something like 0.97s / 1.03s / 0.98s.
+//   Concatenating the three pulses into ONE pre-rendered WAV moves the
+//   timing guarantee out of the JS/Java tick loop and into the OS audio
+//   thread, which plays back at the WAV's sample-rate precision. Same
+//   reasoning applies to Web Audio: one start() with three scheduled
+//   oscillators beats three separate calls 1s apart, because the Web
+//   Audio scheduler also runs on the audio thread.
 //
 // Run via:
 //   node tools/render-audio.mjs
 //
 // build-www.mjs / cap sync don't depend on it; run it once after editing
-// Audio.chime / Audio.finale in js/app.js, then commit the WAVs.
+// Audio.chime / Audio.finale / Audio.finalThree in js/app.js, then
+// commit the WAVs.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,15 +41,15 @@ const BITS_PER_SAMPLE  = 16;
 const NUM_CHANNELS     = 1;
 const REPO_ROOT        = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Android: Gradle picks WAVs up from res/raw automatically. The service
-// references them as R.raw.chime / R.raw.finale / R.raw.tick.
+// references them as R.raw.chime / R.raw.finale / R.raw.final3.
 const ANDROID_RAW_DIR  = path.join(REPO_ROOT, 'android/app/src/main/res/raw');
 // iOS: the @capacitor/local-notifications plugin looks for `sound:` files
 // in the app bundle. We mirror the same WAVs into ios/App/App/ so a
 // `cap:sync ios` + Xcode "Add Files to App" step makes the per-segment
-// chime / finale chime sound match what Android plays. (`tick` isn't
-// used on iOS — there's no equivalent of the FGS for per-second
-// playback in background; the WebView's Audio.tick covers the
-// foreground case and that's all iOS gets.)
+// chime / finale sound match what Android plays. (`final3` isn't used on
+// iOS — there's no equivalent of the FGS for in-background playback;
+// the WebView's Audio.finalThree covers the foreground case and that's
+// all iOS gets.)
 const IOS_APP_DIR      = path.join(REPO_ROOT, 'ios/App/App');
 
 // Render a single Audio.beep() into the buffer at startSec.
@@ -108,15 +126,19 @@ function renderFinale() {
   return samples;
 }
 
-// Audio.tick — 660 Hz square pulse, 80ms. Played by the JS engine on
-// each of the last 3 seconds of every segment. The Android service
-// plays this same waveform via SoundPool while the WebView is asleep
-// (notification-channel sounds would re-post the notification every
-// second and look terrible).
-function renderTick() {
-  const totalSec = 0.18;
+// Audio.finalThree — three 660 Hz square pulses at exact 1-second offsets,
+// 0.0 / 1.0 / 2.0. Pre-rendered so the FGS service can fire it as a single
+// SoundPool play when remaining time first drops into the last-3s window,
+// instead of triggering tick.wav three times from the per-second tick
+// handler (which produced audibly irregular spacing — Handler/audio-thread
+// jitter compounded across three calls). Total length ~3.18s so the final
+// pulse's release tail isn't clipped.
+function renderFinalThree() {
+  const totalSec = 3.18;
   const samples  = new Float32Array(Math.ceil(totalSec * SAMPLE_RATE));
   renderBeep(samples, 0.00, { freq: 660, duration: 0.08, volume: 0.18, type: 'square' });
+  renderBeep(samples, 1.00, { freq: 660, duration: 0.08, volume: 0.18, type: 'square' });
+  renderBeep(samples, 2.00, { freq: 660, duration: 0.08, volume: 0.18, type: 'square' });
   return samples;
 }
 
@@ -194,9 +216,15 @@ const finale = renderFinale();
 normalize(finale);
 await writeAll(finale, 'finale.wav');
 
-const tick = renderTick();
-normalize(tick);
-await writeAll(tick, 'tick.wav');
+// Concatenated 3-2-1 ticks: peak-normalized at the same level as the
+// per-pulse beep so loudness matches what the legacy tick.wav playback
+// produced. Three 660Hz pulses pre-mixed at exact 1-second offsets in
+// one ~3.18s WAV — replaces the v1.3.2-era tick.wav that the FGS used
+// to fire three times per segment (which produced audibly irregular
+// spacing under Handler / SoundPool jitter).
+const final3 = renderFinalThree();
+normalize(final3);
+await writeAll(final3, 'final3.wav');
 
 if (!includeIos) {
   console.log(`(ios/ not present — skipped iOS bundle copies; run again after \`npx cap add ios\`)`);

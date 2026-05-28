@@ -332,9 +332,33 @@ const Audio = {
     setTimeout(() => this.beep({ freq: 1320, duration: 0.28, volume: 0.22, type: 'sine' }), 120);
   },
 
-  // final-3-second tick
-  tick() {
-    this.beep({ freq: 660, duration: 0.08, volume: 0.18, type: 'square' });
+  // 3-2-1 countdown — three 660Hz square pulses scheduled in ONE call
+  // via the Web Audio scheduler at the precise audio-clock moments
+  // t+0.000, t+1.000, t+2.000. Before v1.3.4 these fired as three
+  // separate Audio.tick() calls from the engine's rAF loop, with the
+  // spacing depending on whichever rAF frame happened to cross each
+  // Math.ceil boundary — and the user reported the spacing felt
+  // irregular. Scheduling all three at once moves the timing guarantee
+  // out of the JS event loop and into the audio thread, which plays
+  // them gap-free at sample-rate precision (same approach as concatenated
+  // final3.wav in the native FGS path). Total scheduled length ~2.08s.
+  finalThree() {
+    this.ensure();
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const t   = t0 + i;
+      const osc = this.ctx.createOscillator();
+      const g   = this.ctx.createGain();
+      osc.type  = 'square';
+      osc.frequency.setValueAtTime(660, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.18, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.13);
+    }
   },
 
   // start chime
@@ -363,8 +387,16 @@ const Audio = {
 // ============================================================
 
 const Voice = {
+  // True when the platform exposes the Web Speech synthesis API. Used by
+  // the editor UI to hide the per-segment speaker button (a control that
+  // toggles a setting nothing on this device can honour would just be a
+  // dead button).
+  supported() {
+    return typeof window !== 'undefined' && 'speechSynthesis' in window;
+  },
+
   speak(text) {
-    if (!('speechSynthesis' in window)) return;
+    if (!this.supported()) return;
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -374,7 +406,59 @@ const Voice = {
       window.speechSynthesis.speak(u);
     } catch (e) { /* noop */ }
   },
+
+  // Browsers (especially Chrome) load the voice list ASYNCHRONOUSLY after
+  // first access. The first call to speak() may also incur a noticeable
+  // cold-start delay while the platform TTS engine spins up. We trigger
+  // both at app boot so the very first real speak() (typically at the
+  // boundary between segment 1 and segment 2) is instant — which is what
+  // the user feels as "audio that doesn't lag the first time the timer
+  // runs." Silent warm-up utterance is cancelled immediately so the user
+  // never hears it, but it forces the platform pipeline to initialize.
+  _warmed: false,
+  warmup() {
+    if (!this.supported() || this._warmed) return;
+    this._warmed = true;
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices || voices.length === 0) {
+        // Chrome path — voices populate later, on 'voiceschanged'.
+        window.speechSynthesis.addEventListener('voiceschanged', () => { /* now ready */ }, { once: true });
+      }
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      u.rate   = 10;
+      window.speechSynthesis.speak(u);
+      window.speechSynthesis.cancel();
+    } catch (e) { /* noop */ }
+  },
+
+  // Per-chain warmup. The Web Speech API does NOT cache rendered audio
+  // per phrase (browsers re-synthesize on every speak), so "pre-caching"
+  // each segment name isn't possible at the spec level. What we CAN
+  // ensure is that the synthesis pipeline itself is hot — voices loaded,
+  // native TTS bridge attached — before the first real speak fires (at
+  // the boundary between segment 1 and segment 2). One silent utterance
+  // is enough to wake the engine; we don't need one per segment. Run
+  // even when boot-time warmup already happened, because the pipeline
+  // can cool off during idle.
+  warmupForChain(/* segments */) {
+    if (!this.supported()) return;
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      u.rate   = 10;
+      window.speechSynthesis.speak(u);
+      window.speechSynthesis.cancel();
+    } catch (e) { /* noop */ }
+  },
 };
+
+// Boot-time TTS warmup. Idempotent.
+if (typeof window !== 'undefined') {
+  // Defer one tick so we don't compete with the app's initial paint.
+  setTimeout(() => Voice.warmup(), 0);
+}
 
 // ============================================================
 // Vibration helpers
@@ -386,7 +470,9 @@ const Vibe = {
     try { navigator.vibrate(pattern); } catch {}
   },
   segmentEnd() { this.do([60, 60, 60, 60, 200]); },
-  finalTick()  { this.do(40); },
+  // Three 40ms pulses at exact 1-second offsets, matching Audio.finalThree.
+  // Pattern: 40ms ON / 960ms OFF / 40ms ON / 960ms OFF / 40ms ON.
+  finalTick()  { this.do([40, 960, 40, 960, 40]); },
   start()      { this.do(120); },
   finale()     { this.do([90, 80, 90, 80, 240]); },
 };
@@ -508,7 +594,7 @@ const Engine = {
   onSegmentChange: null,
   onComplete: null,
   totalElapsed: 0,          // accumulated elapsed ms across all completed segments
-  finalTickedAt: -1,        // segment second at which we last fired final-tick
+  finalThreeFiredFor: -1,   // currentIndex for which we already triggered the 3-2-1 burst
   warningOn: false,
 
   startChain(chain) {
@@ -526,11 +612,16 @@ const Engine = {
     const now = Date.now();
     this.segmentStartedAtWall = now;
     this.pausedAtWall = now;
-    this.finalTickedAt = -1;
+    this.finalThreeFiredFor = -1;
     this.warningOn = false;
 
     if (Store.getSettings().sound)   { Audio.unlock(); Audio.start(); }
     if (Store.getSettings().vibrate) Vibe.start();
+    // Force a TTS warm-up before the first real announcement (which fires
+    // when segment 1 ends). Idempotent — the boot-time warmup may have
+    // already run, but the synth engine can lose its warm state during
+    // long idle periods, so do it again here. Cheap belt-and-braces.
+    if (Store.getSettings().voice) Voice.warmupForChain(this.segments);
     if (Store.getSettings().wake)    Wake.acquire();
     if (Store.getSettings().voice)   Voice.speak(this.segments[0].name);
 
@@ -562,8 +653,8 @@ const Engine = {
       // any non-trivial pause, e.g. across an app restart).
       const pausedAtMs = this.isPaused ? this.pausedAtWall : 0;
       // Mirror the user's audio preferences so the native service can
-      // play the same Audio.chime / Audio.finale / Audio.tick cues via
-      // SoundPool while the WebView is asleep — otherwise backgrounded
+      // play the same Audio.chime / Audio.finale / Audio.finalThree cues
+      // via SoundPool while the WebView is asleep — otherwise backgrounded
       // chains would skip those cues entirely. soundEnabled gates ALL
       // service-side audio; tickEnabled additionally requires the
       // "Final-tick" toggle to honour the same in-app gating.
@@ -662,11 +753,16 @@ const Engine = {
       const remainingSec = Math.max(0, seg.duration - elapsedMs / 1000);
       const remainingInt = Math.ceil(remainingSec);
 
-      // Final-3-second tick (when not paused)
+      // Final-3-second burst (when not paused). One-shot per segment: the
+      // moment remaining first drops into ≤3s we fire the whole 3-2-1
+      // sequence as a single scheduled audio + vibration pattern. The Web
+      // Audio scheduler then plays the three pulses at exact +0/+1/+2s
+      // on the audio thread, immune to rAF / setTimeout / GC jitter that
+      // produced audibly irregular spacing in v1.3.3 and earlier.
       if (!this.isPaused && Store.getSettings().finalTick) {
-        if (remainingInt <= 3 && remainingInt >= 1 && remainingInt !== this.finalTickedAt) {
-          this.finalTickedAt = remainingInt;
-          if (Store.getSettings().sound) Audio.tick();
+        if (remainingInt <= 3 && remainingInt >= 1 && this.finalThreeFiredFor !== this.currentIndex) {
+          this.finalThreeFiredFor = this.currentIndex;
+          if (Store.getSettings().sound)   Audio.finalThree();
           if (Store.getSettings().vibrate) Vibe.finalTick();
         }
       }
@@ -729,7 +825,11 @@ const Engine = {
       if (!isUserSkip && Store.getSettings().sound)   Audio.chime();
       if (!isUserSkip && Store.getSettings().vibrate) Vibe.segmentEnd();
       const nextSeg = this.segments[this.currentIndex];
-      if (Store.getSettings().voice && nextSeg) Voice.speak(nextSeg.name);
+      // Per-segment voice flag (seg.voice) gates announcement on top of
+      // the global "voice" setting. Undefined ⇒ ON (legacy chains saved
+      // before the per-segment toggle existed). Explicit `false` ⇒ silent
+      // for that segment specifically.
+      if (Store.getSettings().voice && nextSeg && nextSeg.voice !== false) Voice.speak(nextSeg.name);
       if (!isUserSkip) {
         Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
       }
@@ -738,7 +838,7 @@ const Engine = {
     this.segmentStartedAtWall = nextStartWall;
     this.pausedAtWall = now;
     this.pausedDuration = 0;
-    this.finalTickedAt = -1;
+    this.finalThreeFiredFor = -1;
     this.warningOn = false;
     document.querySelector('.view-run')?.classList.remove('is-warning');
 
@@ -827,7 +927,7 @@ const Engine = {
       this.segmentStartedAtWall = now;
       this.pausedAtWall = now;
       this.pausedDuration = 0;
-      this.finalTickedAt = -1;
+      this.finalThreeFiredFor = -1;
     };
     if (this.currentIndex === 0) {
       restartCurrent();
@@ -973,7 +1073,7 @@ const Engine = {
     this.isPaused = !!snap.isPaused;
     this.isRunning = true;
     this.totalElapsed = Number(snap.totalElapsed) || 0;
-    this.finalTickedAt = -1;
+    this.finalThreeFiredFor = -1;
     this.warningOn = false;
 
     // Walk past any segments whose duration has already elapsed in real
@@ -1056,6 +1156,10 @@ const Editor = {
       name: '',
       duration: 60,
       color: this.draft.color,
+      // voice: undefined → treated as ON. Stored explicitly only when the
+      // user has toggled the per-segment speaker icon to OFF, so legacy
+      // chains saved before this field existed keep their original
+      // behaviour (announce names) automatically.
     });
   },
 
@@ -1420,6 +1524,48 @@ const UI = {
       li.appendChild(dur);
     }
 
+    // Per-segment TTS toggle — appears immediately left of the trash.
+    // Hidden entirely when the platform has no SpeechSynthesis (older
+    // WebViews / locked-down OS images), since a control that toggles a
+    // setting nothing on this device can honour is just confusing. Both
+    // a regular segment and a subchain row get the button so a subchain
+    // can also be silenced (Voice.speak fires on advance into either).
+    if (Voice.supported()) {
+      const voiceBtn = document.createElement('button');
+      voiceBtn.className = 'segment-voice';
+      // Two visual states drawn from one SVG:
+      //   ON  — speaker icon
+      //   OFF — speaker icon with a diagonal slash, like the system "mute"
+      // The OFF state is rendered via the `.is-off` CSS class so we don't
+      // re-create the SVG markup on toggle (avoids a tiny flash and keeps
+      // the focus state intact for keyboard users).
+      const voiceOn = seg.voice !== false;
+      voiceBtn.classList.toggle('is-off', !voiceOn);
+      voiceBtn.setAttribute('aria-pressed', String(voiceOn));
+      voiceBtn.setAttribute('aria-label', voiceOn ? 'Announce this segment' : 'Do not announce this segment');
+      voiceBtn.setAttribute('title', voiceOn ? 'Announcing on segment start' : 'Silent on segment start');
+      voiceBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 9v6h4l5 4V5L8 9H4z"/>
+          <path class="voice-wave-1" d="M16 8.5a4.5 4.5 0 0 1 0 7"/>
+          <path class="voice-wave-2" d="M18.5 6a8 8 0 0 1 0 12"/>
+          <path class="voice-slash" d="M3.5 3.5l17 17"/>
+        </svg>`;
+      voiceBtn.addEventListener('click', () => {
+        const nextOn = seg.voice === false; // currently OFF → flip to ON
+        if (nextOn) {
+          delete seg.voice; // back to "undefined" = ON, keeps storage minimal
+        } else {
+          seg.voice = false;
+        }
+        voiceBtn.classList.toggle('is-off', !nextOn);
+        voiceBtn.setAttribute('aria-pressed', String(nextOn));
+        voiceBtn.setAttribute('aria-label', nextOn ? 'Announce this segment' : 'Do not announce this segment');
+        voiceBtn.setAttribute('title', nextOn ? 'Announcing on segment start' : 'Silent on segment start');
+      });
+      li.appendChild(voiceBtn);
+    }
+
     const removeBtn = document.createElement('button');
     removeBtn.className = 'segment-remove';
     removeBtn.setAttribute('aria-label', 'Remove segment');
@@ -1740,7 +1886,8 @@ const UI = {
     if (!seg) return;
     const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
     // Ceiling the displayed second so the clock flips to "00:03" at the
-    // SAME instant Audio.tick fires (which keys off Math.ceil too).
+    // SAME instant Audio.finalThree's first pulse fires (the engine arms
+    // the 3-2-1 burst on Math.ceil(remainingSec) == 3 — same calculation).
     // fmt() rounds — it would flip the digit half a second EARLIER than
     // the tick, making the sound feel like it's chasing the visual.
     // The notification path uses ceiling for both the displayed remaining
