@@ -1,5 +1,5 @@
-v1.3.3 — chain rings through Do Not Disturb like an alarm
+v1.3.4 — gap-free 3-2-1 + per-segment voice toggle
 
-• Boundary chimes and the chain-end finale now route through the alarm audio stream, so chains keep ringing on silent or in Do Not Disturb — no per-app override needed.
-• Notifications tagged as alarms so heads-up + lock-screen entries still appear under default DND policy.
-• Fixed: notification-health probe was reporting "OK" while checking a deleted channel.
+• 3-2-1 countdown now plays as one pre-mixed asset (Android FGS) and one Web Audio schedule, with sample-rate-precise spacing. Fixes the audibly irregular ticks reported in v1.3.3.
+• New speaker icon on every segment lets you silence its name announcement individually.
+• TTS warm-up at chain start eliminates first-time speech lag.

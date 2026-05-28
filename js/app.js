@@ -249,12 +249,19 @@ function expandChain(rootChain, opts = {}) {
           });
         }
       } else {
-        out.push({
+        const expanded = {
           name: seg.name || 'Segment',
           duration: Math.max(1, seg.duration | 0),
           color: seg.color || rootChain.color || 'amber',
           path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
-        });
+        };
+        // Propagate the per-segment voice flag only when the user has
+        // explicitly set it OFF — keeping the "undefined ⇒ default ON"
+        // contract for legacy data. The engine's _advance check reads
+        // `nextSeg.voice !== false`, so undefined and true behave
+        // identically; storing `false` is the only state worth carrying.
+        if (seg.voice === false) expanded.voice = false;
+        out.push(expanded);
       }
     });
   }
@@ -623,7 +630,11 @@ const Engine = {
     // long idle periods, so do it again here. Cheap belt-and-braces.
     if (Store.getSettings().voice) Voice.warmupForChain(this.segments);
     if (Store.getSettings().wake)    Wake.acquire();
-    if (Store.getSettings().voice)   Voice.speak(this.segments[0].name);
+    // Announce the opening segment, gated by the same per-segment flag
+    // the _advance path uses so a user-silenced segment stays silent at
+    // chain-start too (consistent behavior whether segment 1 is reached
+    // via chain start or via _advance into a later segment).
+    if (Store.getSettings().voice && this.segments[0]?.voice !== false) Voice.speak(this.segments[0].name);
 
     this._persist();
     this._emitChainEvent('chain:start');
@@ -2388,5 +2399,17 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// Testability hatch — expose the closure-scoped singletons under a single
+// namespace so Playwright smoke tests (tools/smoke-audio-voice.mjs) can
+// spy on Audio / Voice calls and drive Engine state without having to
+// chase every behavior through the DOM. Intentionally NOT frozen so the
+// tests can monkey-patch methods. Production code should never read from
+// here — it has direct closure references. Picking a namespaced object
+// (rather than separate window globals) avoids colliding with the built-in
+// browser `window.Audio` (HTMLAudioElement) constructor.
+if (typeof window !== 'undefined') {
+  window.ChainedApp = { Audio, Voice, Engine, Store };
+}
 
 })();
