@@ -154,6 +154,14 @@ public class ChainTimerService extends Service {
     // (chain/seg cues collapsed to a final true/false by the JS-side
     // resolver) when deciding whether to play the pre-rendered file.
     public static final String EXTRA_VOICE_ENABLED_JSON    = "voiceEnabledJson";
+    // Routing policy for the voice MediaPlayer when a headset is
+    // connected. One of "headset" (default — speaker silent), "both"
+    // (alarm-clock style, plays through both), "speaker" (force
+    // builtin speaker even when headset is connected). The FGS
+    // applies it via setPreferredDevice before each play. Unknown
+    // values collapse to "headset". chime / finalThree / finale stay
+    // on SoundPool with USAGE_ALARM (system policy = both speakers).
+    public static final String EXTRA_AUDIO_ROUTE           = "audioRoute";
 
     // The persistent run notification lives on a HIGH-importance channel
     // so the OS shows heads-up + vibration when the service detects a
@@ -243,6 +251,11 @@ public class ChainTimerService extends Service {
     // against re-playing the same voice if onTick re-enters within the
     // same segment. Cleared on every plan replace.
     private int lastVoicedAtIndex = -1;
+    // Routing policy for voice playback when a headset is connected.
+    // "headset" (default) | "both" | "speaker". Mirrors the user's
+    // app-level audioRoute setting; the FGS uses it to pick the
+    // MediaPlayer preferred device per play.
+    private String audioRoute = "headset";
     // MediaPlayer instance held while playing the current voice file.
     // Reused (and released) on every new boundary so a long voice that
     // hasn't finished can't queue up across multiple segments. Routes
@@ -337,6 +350,10 @@ public class ChainTimerService extends Service {
             java.util.List<Boolean> parsedEnabled = parseBoolArray(voiceEnabledJson);
             voiceEnabled.clear();
             voiceEnabled.addAll(parsedEnabled);
+        }
+        String routeExtra = intent.getStringExtra(EXTRA_AUDIO_ROUTE);
+        if (routeExtra != null && (routeExtra.equals("headset") || routeExtra.equals("both") || routeExtra.equals("speaker"))) {
+            audioRoute = routeExtra;
         }
 
         if (ACTION_COMPLETE.equals(action)) {
@@ -1120,10 +1137,71 @@ public class ChainTimerService extends Service {
                 return true;
             });
             mp.prepare();
+            // Apply the routing policy AFTER prepare() (per Android
+            // docs setPreferredDevice may need an active audio stream
+            // to bind). On "both" we leave the preferred device unset
+            // so USAGE_ALARM's default routing (speaker + headset) wins.
+            android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(audioRoute);
+            if (preferred != null) mp.setPreferredDevice(preferred);
             mp.start();
             voicePlayer = mp;
         } catch (Throwable t) {
             releaseVoicePlayer();
+        }
+    }
+
+    /**
+     * Resolve the user's audioRoute setting against currently-connected
+     * output devices.
+     *
+     *   "headset" → first non-builtin output device (wired/BT/USB
+     *               headset); null when nothing is plugged in (so
+     *               playback falls back to the system default, which
+     *               is the speaker — exactly what the user wants).
+     *   "speaker" → TYPE_BUILTIN_SPEAKER, always (overrides any
+     *               connected headset).
+     *   "both"    → null (preserve USAGE_ALARM's default "play through
+     *               every output" behaviour).
+     *
+     * Returns null on any error or when no matching device exists; the
+     * caller treats null as "use system default."
+     */
+    private android.media.AudioDeviceInfo pickPreferredOutputDevice(String route) {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return null;
+            android.media.AudioDeviceInfo[] outs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+            if (outs == null || outs.length == 0) return null;
+            if ("speaker".equals(route)) {
+                for (android.media.AudioDeviceInfo d : outs) {
+                    if (d.getType() == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) return d;
+                }
+                return null;
+            }
+            if ("headset".equals(route)) {
+                // Preference order: USB > wired > BT (LE/A2DP) > BT SCO.
+                // The user is most likely to expect "the thing actually
+                // in my ears" if they have multiple connected.
+                android.media.AudioDeviceInfo wired = null, bt = null, btSco = null, usb = null;
+                for (android.media.AudioDeviceInfo d : outs) {
+                    int t = d.getType();
+                    if (t == android.media.AudioDeviceInfo.TYPE_USB_HEADSET) usb = d;
+                    else if (t == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
+                          || t == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES) wired = d;
+                    else if (t == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) bt = d;
+                    else if (t == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO) btSco = d;
+                }
+                if (usb   != null) return usb;
+                if (wired != null) return wired;
+                if (bt    != null) return bt;
+                if (btSco != null) return btSco;
+                return null; // no headset → system default (speaker)
+            }
+            // "both" or unknown → no preference, let USAGE_ALARM route
+            // through whatever the system thinks alarms should go to.
+            return null;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

@@ -1565,6 +1565,16 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   border-left: 1px solid var(--rule);
   margin-left: 4px;
 }
+/* Stack the head + pill control vertically instead of the default
+   label-on-the-left / toggle-on-the-right two-column layout. Used for
+   settings that need a 3-way pill control. */
+.setting-row-column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  cursor: default;
+}
+.setting-row-column .setting-row-head { display: block; }
 
 /* Native bridge panel (only visible when running inside Capacitor) */
 .native-panel {

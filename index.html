@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="./css/styles.css?v=1.3.6" />
+  <link rel="stylesheet" href="./css/styles.css?v=1.3.7" />
 </head>
 <body data-view="library">
 
@@ -329,6 +329,17 @@
           </label>
 
           <h3 class="setting-section-head">Other</h3>
+          <div class="setting-row setting-row-column" id="setting-row-route">
+            <span class="setting-row-head">
+              <strong>When a headset is connected</strong>
+              <small>Where the chain plays its audio cues. Only affects the chain; system sounds are unchanged.</small>
+            </span>
+            <div class="cue-pill" id="setting-route" role="radiogroup" aria-label="Audio routing">
+              <button type="button" role="radio" data-route="headset">Headset only</button>
+              <button type="button" role="radio" data-route="both">Both</button>
+              <button type="button" role="radio" data-route="speaker">Speaker only</button>
+            </div>
+          </div>
           <label class="setting-row">
             <span>
               <strong>Keep screen awake</strong>
@@ -502,8 +513,8 @@
 
   </div>
 
-  <script src="./js/app.js?v=1.3.6"></script>
+  <script src="./js/app.js?v=1.3.7"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.3.6"></script>
+  <script src="./js/native.js?v=1.3.7"></script>
 </body>
 </html>

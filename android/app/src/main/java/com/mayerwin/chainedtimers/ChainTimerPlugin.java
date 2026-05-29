@@ -529,6 +529,11 @@ public class ChainTimerPlugin extends Plugin {
         if (voiceEnabledJson != null && !voiceEnabledJson.isEmpty()) {
             intent.putExtra(ChainTimerService.EXTRA_VOICE_ENABLED_JSON, voiceEnabledJson);
         }
+        // Per-chain audio routing policy. Defaults to "headset" if
+        // omitted — matches the in-app default and the user's mental
+        // model of "headphones win when they're plugged in."
+        String audioRoute = call.getString("audioRoute", "headset");
+        intent.putExtra(ChainTimerService.EXTRA_AUDIO_ROUTE, audioRoute);
 
         // segmentStartedAtMs: effective wall-clock moment the current
         // segment started, with paused-time excluded. The service derives

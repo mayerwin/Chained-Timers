@@ -418,7 +418,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset' } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -485,6 +485,12 @@
       voiceEnabledJson: Array.isArray(voiceEnabled)
         ? JSON.stringify(voiceEnabled.map(v => !!v))
         : '',
+      // Audio routing policy when a headset is connected. One of
+      // 'headset' (default) | 'both' | 'speaker'. The FGS applies it
+      // to the voice MediaPlayer via setPreferredDevice; chime /
+      // finalThree / finale still go through SoundPool USAGE_ALARM
+      // (system policy = both speakers).
+      audioRoute: typeof audioRoute === 'string' ? audioRoute : 'headset',
     };
   }
 

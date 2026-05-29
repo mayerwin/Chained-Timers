@@ -32,6 +32,17 @@ const DEFAULT_SETTINGS = {
   prestart: true,
   finalTick: true,
   notifsAsked: false,
+  // Audio routing when a headset is connected:
+  //   'headset' (default) — audio plays only on the headset; speaker stays silent
+  //   'both'              — audio plays on speaker + headset (alarm-clock style)
+  //   'speaker'           — audio plays only on the speaker
+  // When no headset is connected all three behave the same (speaker).
+  // Currently honored by the FGS voice MediaPlayer; chime/finalThree/finale
+  // still route via USAGE_ALARM (system policy = both speakers) because
+  // SoundPool has no per-play setPreferredDevice. Native-platform only —
+  // browsers route through the system default output, which is what the
+  // OS chose when the user plugged in.
+  audioRoute: 'headset',
 };
 
 const TEMPLATES = [
@@ -842,6 +853,13 @@ const Engine = {
         ? Voice._lastChainPaths
         : null;
       const voiceEnabled = this.segments.map(s => effectiveCue(s, this.chain, 'voice'));
+      // Per-chain audio routing — the FGS uses this to decide which
+      // output device to send the voice MediaPlayer to when a headset
+      // is connected. Default 'headset' keeps audio private when the
+      // user is wearing headphones; 'both' restores the alarm-clock
+      // behaviour where it plays through everything; 'speaker' forces
+      // the builtin speaker even when a headset is plugged in.
+      const audioRoute = Store.getSettings().audioRoute || 'headset';
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           name: this.chain?.name,
@@ -854,6 +872,7 @@ const Engine = {
           soundEnabled,
           voicePaths,
           voiceEnabled,
+          audioRoute,
         },
       }));
     } catch {}
@@ -1927,6 +1946,7 @@ const UI = {
     // the sub-row when sound is off so the user isn't toggling a setting
     // that has no audible effect.
     UI._syncFinalTickRowVisibility();
+    UI._syncAudioRoutePill();
 
     const notifBtn = document.getElementById('enable-notifs');
     const status = document.getElementById('notif-status');
@@ -2148,6 +2168,19 @@ const UI = {
     row.hidden = !Store.getSettings().sound;
   },
 
+  // Reflect the persisted audio-route value onto the 3-segment pill.
+  // Stored value is one of 'headset' | 'both' | 'speaker'; any unknown
+  // value collapses to 'headset' (the default).
+  _syncAudioRoutePill() {
+    const cur = Store.getSettings().audioRoute || 'headset';
+    const validCur = ['headset', 'both', 'speaker'].includes(cur) ? cur : 'headset';
+    const pill = document.getElementById('setting-route');
+    if (!pill) return;
+    pill.querySelectorAll('button[data-route]').forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.route === validCur));
+    });
+  },
+
   // ------- Run view -------
 
   renderRun() {
@@ -2339,6 +2372,22 @@ function init() {
   wireToggle('setting-wake', 'wake');
   wireToggle('setting-prestart', 'prestart');
   wireToggle('setting-finaltick', 'finalTick');
+
+  // Audio routing pill (Headset only / Both / Speaker only)
+  document.querySelectorAll('#setting-route button[data-route]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.route;
+      if (!['headset', 'both', 'speaker'].includes(v)) return;
+      Store.setSetting('audioRoute', v);
+      UI._syncAudioRoutePill();
+      // Live-apply to a running chain: re-emit fgsupdate so the FGS
+      // re-binds its voice MediaPlayer to the new preferred device on
+      // the NEXT boundary. We don't interrupt whatever's currently
+      // playing — that would be jarring for users tapping the pill
+      // mid-segment.
+      if (Engine.isRunning) Engine._emitChainEvent('chain:fgsupdate');
+    });
+  });
 
   // notifications enable
   document.getElementById('enable-notifs').addEventListener('click', async () => {

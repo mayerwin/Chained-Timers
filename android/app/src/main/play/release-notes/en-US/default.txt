@@ -1,5 +1,6 @@
-v1.3.6 — voice cues work when minimized + zero-latency segment names
+v1.3.7 — headset routing for voice cues
 
-• Every segment's name is now pre-rendered to a WAV file on chain start, cached in app storage. The foreground service plays the right file at each boundary — runs whether the WebView is open, locked, or backgrounded.
-• Zero TTS lag: the audio is on disk before the segment begins, so the voice fires the exact instant the boundary lands.
-• Files are reused across runs of the same chain.
+• New "When a headset is connected" setting (Headset only / Both / Speaker only). Default: Headset only.
+• Voice cues now respect your choice via Android's setPreferredDevice — the speaker stays silent when you're wearing headphones.
+• Chime / 3-2-1 tick / chain-end finale still ring through both outputs so an alarm-style cue can't go unheard.
+• Live-applies to a running chain; takes effect at the next segment.
