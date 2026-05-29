@@ -1,6 +1,6 @@
 {
   "name": "chained-timers",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "The interval forge — a small, fast, installable PWA that sequences timers into named chains. Native-shell builds via Capacitor.",
   "private": true,
   "license": "MIT",
@@ -10,33 +10,34 @@
     "url": "https://github.com/mayerwin/Chained-Timers.git"
   },
   "scripts": {
-    "serve":             "node tools/serve.mjs",
-    "icons":             "node tools/generate-icons.mjs",
-    "smoke":             "node tools/smoke.mjs",
+    "serve": "node tools/serve.mjs",
+    "icons": "node tools/generate-icons.mjs",
+    "smoke": "node tools/smoke.mjs",
     "screenshots:store": "node tools/store-screenshots.mjs",
-    "publishing:refresh":"node tools/publishing-refresh.mjs",
-    "build:www":         "node tools/build-www.mjs",
-    "cap:sync":        "npm run build:www && npx cap sync",
-    "cap:android":     "npm run cap:sync && npx cap open android",
-    "cap:ios":         "npm run cap:sync && npx cap open ios",
-    "cap:add:android":   "npm run build:www && npx cap add android && node tools/generate-android-icons.mjs",
-    "cap:add:ios":       "npm run build:www && npx cap add ios",
-    "icons:android":     "node tools/generate-android-icons.mjs",
-    "audio:render":      "node tools/render-audio.mjs",
-    "version:stamp":     "node tools/version-stamp.mjs"
+    "publishing:refresh": "node tools/publishing-refresh.mjs",
+    "build:www": "node tools/build-www.mjs",
+    "cap:sync": "npm run build:www && npx cap sync",
+    "cap:android": "npm run cap:sync && npx cap open android",
+    "cap:ios": "npm run cap:sync && npx cap open ios",
+    "cap:add:android": "npm run build:www && npx cap add android && node tools/generate-android-icons.mjs",
+    "cap:add:ios": "npm run build:www && npx cap add ios",
+    "icons:android": "node tools/generate-android-icons.mjs",
+    "audio:render": "node tools/render-audio.mjs",
+    "version:stamp": "node tools/version-stamp.mjs"
   },
   "dependencies": {
-    "@capacitor/core":                "^8.3.1",
-    "@capacitor/haptics":             "^8.0.2",
+    "@capacitor-community/text-to-speech": "^8.0.0",
+    "@capacitor/core": "^8.3.1",
+    "@capacitor/haptics": "^8.0.2",
     "@capacitor/local-notifications": "^8.0.2",
-    "@capacitor/preferences":         "^8.0.1",
-    "@capacitor/status-bar":          "^8.0.2"
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2"
   },
   "devDependencies": {
-    "@capacitor/cli":     "^8.3.1",
     "@capacitor/android": "^8.3.1",
-    "@capacitor/ios":     "^8.3.1",
-    "playwright":         "^1.59.1",
-    "sharp":              "^0.34.5"
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/ios": "^8.3.1",
+    "playwright": "^1.59.1",
+    "sharp": "^0.34.5"
   }
 }

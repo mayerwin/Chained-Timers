@@ -1,5 +1,5 @@
-v1.3.4 — gap-free 3-2-1 + per-segment voice toggle
+v1.3.5 — per-chain & per-segment cue overrides + Android voice fix
 
-• 3-2-1 countdown now plays as one pre-mixed asset (Android FGS) and one Web Audio schedule, with sample-rate-precise spacing. Fixes the audibly irregular ticks reported in v1.3.3.
-• New speaker icon on every segment lets you silence its name announcement individually.
-• TTS warm-up at chain start eliminates first-time speech lag.
+• Tap the bell on any chain or segment to override the default cues just for that scope: Sound, 3-2-1 tick, Voice, end-of-segment vibration (and Pre-start at the chain level). Segment beats chain beats app defaults.
+• Voice cues now use Android's native TTS engine — works reliably where the WebView's built-in speech engine didn't.
+• Settings split into "Default cues" (overridable) and "Other".

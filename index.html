@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="./css/styles.css?v=1.3.4" />
+  <link rel="stylesheet" href="./css/styles.css?v=1.3.5" />
 </head>
 <body data-view="library">
 
@@ -123,8 +123,23 @@
 
       <main class="editor-scroll">
         <div class="editor-name-block">
-          <label class="field-label">Chain name</label>
-          <input type="text" class="editor-name-input" id="editor-name" maxlength="48" placeholder="Untitled chain" />
+          <div class="editor-name-row">
+            <div class="editor-name-fields">
+              <label class="field-label">Chain name</label>
+              <input type="text" class="editor-name-input" id="editor-name" maxlength="48" placeholder="Untitled chain" />
+            </div>
+            <!-- Bell = chain-level cue overrides. Tap to open the cue
+                 sheet (Sound / Final 3 / Voice / Vibrate / Pre-start). A
+                 small dot appears on the bell when any override is set. -->
+            <button class="cue-bell" id="editor-cues-btn" aria-label="Chain cue overrides" title="Chain cue overrides">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2.5h-15L6 16z"/>
+                <path d="M10 19a2 2 0 0 0 4 0"/>
+                <path d="M12 3v2"/>
+              </svg>
+              <span class="cue-bell-dot" id="editor-cues-dot" hidden></span>
+            </button>
+          </div>
           <div class="editor-color-row" id="editor-color-row"></div>
         </div>
 
@@ -275,33 +290,35 @@
           </button>
         </header>
         <div class="sheet-body">
+          <h3 class="setting-section-head">Default cues</h3>
+          <p class="setting-section-hint">These set the baseline for every chain. You can override them per chain (bell icon in the editor) or per segment (bell icon on each row).</p>
           <label class="setting-row">
             <span>
               <strong>Sound cues</strong>
-              <small>Play a tone when a segment ends.</small>
+              <small>Chime when a segment ends and at chain start/end.</small>
             </span>
             <input type="checkbox" id="setting-sound" />
+          </label>
+          <label class="setting-row setting-row-sub" id="setting-row-finaltick">
+            <span>
+              <strong>Final 3 seconds tick</strong>
+              <small>Three quick tones counting down the last 3s of each segment.</small>
+            </span>
+            <input type="checkbox" id="setting-finaltick" />
           </label>
           <label class="setting-row">
             <span>
               <strong>Voice cues</strong>
-              <small>Speak the next segment name aloud.</small>
+              <small>Speak each segment name aloud as it begins.</small>
             </span>
             <input type="checkbox" id="setting-voice" />
           </label>
           <label class="setting-row">
             <span>
-              <strong>Vibration</strong>
-              <small>Buzz your phone between segments.</small>
+              <strong>When a segment ends</strong>
+              <small>Buzz the phone at every segment boundary and at chain end.</small>
             </span>
             <input type="checkbox" id="setting-vibrate" />
-          </label>
-          <label class="setting-row">
-            <span>
-              <strong>Keep screen awake</strong>
-              <small>Wake Lock — prevents your screen from sleeping during a run.</small>
-            </span>
-            <input type="checkbox" id="setting-wake" />
           </label>
           <label class="setting-row">
             <span>
@@ -310,12 +327,14 @@
             </span>
             <input type="checkbox" id="setting-prestart" />
           </label>
+
+          <h3 class="setting-section-head">Other</h3>
           <label class="setting-row">
             <span>
-              <strong>Final 3 seconds tick</strong>
-              <small>Quick tones to mark the segment ending.</small>
+              <strong>Keep screen awake</strong>
+              <small>Wake Lock — prevents your screen from sleeping during a run.</small>
             </span>
-            <input type="checkbox" id="setting-finaltick" />
+            <input type="checkbox" id="setting-wake" />
           </label>
           <label class="setting-row">
             <span>
@@ -352,6 +371,26 @@
           <p class="setting-credit">
             Built with care. Open source on <a href="https://github.com/mayerwin/Chained-Timers" target="_blank" rel="noopener">GitHub</a>.
           </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ░░░░░░░░ CUE OVERRIDE SHEET (chain + segment) ░░░░░░░░ -->
+    <!-- Shared between chain-level and segment-level overrides. UI._openCueSheet
+         re-populates the title + per-cue rows + tri-state pills before opening. -->
+    <div class="sheet" id="cues-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card" role="dialog" aria-label="Cue overrides">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title" id="cues-sheet-title">Cues</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <div class="sheet-body">
+          <p class="cues-sheet-hint" id="cues-sheet-hint">Override the defaults inherited from app settings.</p>
+          <div class="cues-list" id="cues-list"></div>
         </div>
       </div>
     </div>
@@ -463,8 +502,8 @@
 
   </div>
 
-  <script src="./js/app.js?v=1.3.4"></script>
+  <script src="./js/app.js?v=1.3.5"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.3.4"></script>
+  <script src="./js/native.js?v=1.3.5"></script>
 </body>
 </html>

@@ -255,11 +255,11 @@ function expandChain(rootChain, opts = {}) {
           color: seg.color || rootChain.color || 'amber',
           path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
         };
-        // Propagate the per-segment voice flag only when the user has
-        // explicitly set it OFF — keeping the "undefined ⇒ default ON"
-        // contract for legacy data. The engine's _advance check reads
-        // `nextSeg.voice !== false`, so undefined and true behave
-        // identically; storing `false` is the only state worth carrying.
+        // Propagate per-segment cue overrides through expansion so the
+        // engine resolver can see them. Both the v1.3.5 `seg.cues` shape
+        // and the legacy v1.3.4 `seg.voice = false` (the only field that
+        // ever shipped) are forwarded; readSegCue() reads either side.
+        if (seg.cues) expanded.cues = { ...seg.cues };
         if (seg.voice === false) expanded.voice = false;
         out.push(expanded);
       }
@@ -394,16 +394,43 @@ const Audio = {
 // ============================================================
 
 const Voice = {
-  // True when the platform exposes the Web Speech synthesis API. Used by
-  // the editor UI to hide the per-segment speaker button (a control that
-  // toggles a setting nothing on this device can honour would just be a
-  // dead button).
+  // The Web Speech (window.speechSynthesis) implementation inside the
+  // Capacitor Android WebView is unreliable: it silently no-ops on many
+  // OEM ROMs because the WebView lacks a bundled TTS bridge to the
+  // platform service. We route through @capacitor-community/text-to-
+  // speech when running native — that plugin calls Android's
+  // android.speech.tts.TextToSpeech directly, which the user has set up
+  // through the OS (Google TTS preinstalled on every supported device).
+  // Web fallback is unchanged.
+  _native() {
+    return window.Capacitor?.Plugins?.TextToSpeech || null;
+  },
+
+  // True when the platform can actually produce speech. Native plugin
+  // takes precedence (it's known-working on Android); Web Speech is
+  // accepted only when we're NOT inside a native shell — that's where
+  // it tends to silently fail.
   supported() {
+    if (this._native()) return true;
+    if (window.ChainedNative?.isNative) return false;
     return typeof window !== 'undefined' && 'speechSynthesis' in window;
   },
 
+  // Fire-and-forget speak. Cancels any in-flight utterance first so a
+  // user skipping segments rapidly doesn't queue announcements behind
+  // each other.
   speak(text) {
-    if (!this.supported()) return;
+    if (!text) return;
+    const native = this._native();
+    if (native) {
+      (async () => {
+        try { await native.stop(); } catch {}
+        try { await native.speak({ text, rate: 1.0, pitch: 1.0, volume: 1.0 }); } catch {}
+      })();
+      return;
+    }
+    if (window.ChainedNative?.isNative) return;       // native without plugin = dead end
+    if (!('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -414,22 +441,26 @@ const Voice = {
     } catch (e) { /* noop */ }
   },
 
-  // Browsers (especially Chrome) load the voice list ASYNCHRONOUSLY after
-  // first access. The first call to speak() may also incur a noticeable
-  // cold-start delay while the platform TTS engine spins up. We trigger
-  // both at app boot so the very first real speak() (typically at the
-  // boundary between segment 1 and segment 2) is instant — which is what
-  // the user feels as "audio that doesn't lag the first time the timer
-  // runs." Silent warm-up utterance is cancelled immediately so the user
-  // never hears it, but it forces the platform pipeline to initialize.
+  // First-call warm-up. Browsers (especially Chrome) load the voice
+  // list ASYNCHRONOUSLY after first access; the platform TTS engine
+  // also incurs a cold-start delay on its first synth. Both are
+  // primed here so the very first real speak() (typically at the
+  // boundary between segment 1 and segment 2) is instant.
   _warmed: false,
   warmup() {
-    if (!this.supported() || this._warmed) return;
+    if (this._warmed) return;
     this._warmed = true;
+    const native = this._native();
+    if (native) {
+      // Probing supported languages forces the Android TextToSpeech
+      // service to bind, which is what costs ~200-500ms on first use.
+      native.getSupportedLanguages?.().catch(() => {});
+      return;
+    }
+    if (!('speechSynthesis' in window)) return;
     try {
       const voices = window.speechSynthesis.getVoices();
       if (!voices || voices.length === 0) {
-        // Chrome path — voices populate later, on 'voiceschanged'.
         window.speechSynthesis.addEventListener('voiceschanged', () => { /* now ready */ }, { once: true });
       }
       const u = new SpeechSynthesisUtterance(' ');
@@ -440,17 +471,14 @@ const Voice = {
     } catch (e) { /* noop */ }
   },
 
-  // Per-chain warmup. The Web Speech API does NOT cache rendered audio
-  // per phrase (browsers re-synthesize on every speak), so "pre-caching"
-  // each segment name isn't possible at the spec level. What we CAN
-  // ensure is that the synthesis pipeline itself is hot — voices loaded,
-  // native TTS bridge attached — before the first real speak fires (at
-  // the boundary between segment 1 and segment 2). One silent utterance
-  // is enough to wake the engine; we don't need one per segment. Run
-  // even when boot-time warmup already happened, because the pipeline
-  // can cool off during idle.
+  // Per-chain re-warm. The Android TTS service stays bound after first
+  // use, so this is a no-op on native. On web we fire another silent
+  // utterance because the Web Speech pipeline can cool off during long
+  // idle stretches between chains.
   warmupForChain(/* segments */) {
-    if (!this.supported()) return;
+    const native = this._native();
+    if (native) return;
+    if (!('speechSynthesis' in window)) return;
     try {
       const u = new SpeechSynthesisUtterance(' ');
       u.volume = 0;
@@ -578,6 +606,83 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 }[c]));
 
 // ============================================================
+// Cue overrides — 3-level inheritance (app default → chain → segment)
+// ============================================================
+//
+// Five user-facing cues can be overridden: sound, finalTick, voice,
+// vibrate, prestart. Segment level supports the first four (prestart
+// is meaningless on a single segment — it only fires once at chain
+// start). Each level stores its overrides under a `cues` object whose
+// keys are tri-state:
+//
+//   undefined  → inherit from the next level up (or the app default)
+//   true       → explicit ON, regardless of inherited value
+//   false      → explicit OFF, regardless of inherited value
+//
+// Resolution walks segment.cues → chain.cues → Store.getSettings().
+// Stored explicitly only when the user has flipped away from the
+// inherited value, so unmodified chains/segments serialize cleanly
+// without dragging along default-redundant cue objects. The legacy
+// seg.voice field (v1.3.4) is migrated lazily by readSegCue below so
+// users upgrading from v1.3.4 keep their silenced segments silent.
+const CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate', 'prestart'];
+const SEGMENT_CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate'];
+
+function readSegCue(seg, key) {
+  if (!seg) return undefined;
+  // Forward path: new shape.
+  if (seg.cues && key in seg.cues) return seg.cues[key];
+  // Backward-compat: v1.3.4 stored a top-level seg.voice = false.
+  if (key === 'voice' && seg.voice === false) return false;
+  return undefined;
+}
+
+function readChainCue(chain, key) {
+  return chain?.cues?.[key];
+}
+
+// Public resolver. Walks segment → chain → app default. Returns a
+// concrete boolean — never undefined — so callsites can `if (cue)`
+// without extra guards.
+function effectiveCue(seg, chain, key) {
+  const s = readSegCue(seg, key);
+  if (s != null) return !!s;
+  const c = readChainCue(chain, key);
+  if (c != null) return !!c;
+  const settings = Store.getSettings();
+  return !!settings[key];
+}
+
+// Inherited value at a given level. Used by the chain + segment cue
+// sheets to render the "Default (On/Off)" pill so the user can see what
+// they'd be inheriting before they tap On/Off.
+function inheritedCue(level, chain, key) {
+  if (level === 'chain') {
+    return !!Store.getSettings()[key];
+  }
+  if (level === 'segment') {
+    const c = readChainCue(chain, key);
+    if (c != null) return !!c;
+    return !!Store.getSettings()[key];
+  }
+  return !!Store.getSettings()[key];
+}
+
+// Setter — writes only when the user actually overrides, deletes the key
+// when they reset to "inherit." Keeps stored JSON minimal.
+function setCueOverride(holder, key, value) {
+  if (value == null) {
+    if (holder.cues) {
+      delete holder.cues[key];
+      if (Object.keys(holder.cues).length === 0) delete holder.cues;
+    }
+    return;
+  }
+  if (!holder.cues) holder.cues = {};
+  holder.cues[key] = !!value;
+}
+
+// ============================================================
 // Timer Engine
 // ============================================================
 
@@ -622,19 +727,26 @@ const Engine = {
     this.finalThreeFiredFor = -1;
     this.warningOn = false;
 
-    if (Store.getSettings().sound)   { Audio.unlock(); Audio.start(); }
-    if (Store.getSettings().vibrate) Vibe.start();
-    // Force a TTS warm-up before the first real announcement (which fires
-    // when segment 1 ends). Idempotent — the boot-time warmup may have
-    // already run, but the synth engine can lose its warm state during
-    // long idle periods, so do it again here. Cheap belt-and-braces.
-    if (Store.getSettings().voice) Voice.warmupForChain(this.segments);
+    // Chain-start sound/vibration are CHAIN-level events (no segment is
+    // "the one being celebrated"), so they resolve through chain.cues
+    // and app defaults — segment overrides don't apply. Audio.unlock() is
+    // unconditional because the user gesture window closes after this
+    // function returns; locking it behind a cue gate would silently break
+    // sound on iOS for users who later flip the setting on.
+    Audio.unlock();
+    if (effectiveCue(null, this.chain, 'sound'))   Audio.start();
+    if (effectiveCue(null, this.chain, 'vibrate')) Vibe.start();
+    // Warm-up only if at least one segment is going to speak. Cheap to skip
+    // when the user has voice globally off and no segment overrides it on.
+    const willAnyVoiceFire = this.segments.some(s => effectiveCue(s, this.chain, 'voice'));
+    if (willAnyVoiceFire) Voice.warmupForChain(this.segments);
     if (Store.getSettings().wake)    Wake.acquire();
-    // Announce the opening segment, gated by the same per-segment flag
-    // the _advance path uses so a user-silenced segment stays silent at
-    // chain-start too (consistent behavior whether segment 1 is reached
-    // via chain start or via _advance into a later segment).
-    if (Store.getSettings().voice && this.segments[0]?.voice !== false) Voice.speak(this.segments[0].name);
+    // Announce the opening segment, gated by segment 0's effective voice
+    // cue so a user-silenced first segment stays silent — consistent
+    // behavior whether segment 1 is reached via chain start or _advance.
+    if (this.segments[0] && effectiveCue(this.segments[0], this.chain, 'voice')) {
+      Voice.speak(this.segments[0].name);
+    }
 
     this._persist();
     this._emitChainEvent('chain:start');
@@ -665,13 +777,15 @@ const Engine = {
       const pausedAtMs = this.isPaused ? this.pausedAtWall : 0;
       // Mirror the user's audio preferences so the native service can
       // play the same Audio.chime / Audio.finale / Audio.finalThree cues
-      // via SoundPool while the WebView is asleep — otherwise backgrounded
-      // chains would skip those cues entirely. soundEnabled gates ALL
-      // service-side audio; tickEnabled additionally requires the
-      // "Final-tick" toggle to honour the same in-app gating.
-      const settings = Store.getSettings();
-      const soundEnabled = settings.sound !== false;
-      const tickEnabled  = soundEnabled && settings.finalTick !== false;
+      // via SoundPool while the WebView is asleep. Resolved against the
+      // CURRENT segment's effective cues so per-segment silencing also
+      // applies when the WebView is paused (the FGS service uses these
+      // values directly — there's no second resolution step on the
+      // Android side). The service receives a fresh update on every
+      // segment advance, so each segment gets its own cue snapshot.
+      const curSeg = this.segments[this.currentIndex] || null;
+      const soundEnabled = effectiveCue(curSeg, this.chain, 'sound');
+      const tickEnabled  = soundEnabled && effectiveCue(curSeg, this.chain, 'finalTick');
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           name: this.chain?.name,
@@ -766,15 +880,15 @@ const Engine = {
 
       // Final-3-second burst (when not paused). One-shot per segment: the
       // moment remaining first drops into ≤3s we fire the whole 3-2-1
-      // sequence as a single scheduled audio + vibration pattern. The Web
-      // Audio scheduler then plays the three pulses at exact +0/+1/+2s
-      // on the audio thread, immune to rAF / setTimeout / GC jitter that
-      // produced audibly irregular spacing in v1.3.3 and earlier.
-      if (!this.isPaused && Store.getSettings().finalTick) {
+      // sequence as a single scheduled audio + vibration pattern. Gates
+      // are per-segment-effective: the currently-running segment's
+      // overrides win over chain / app defaults, so a user-silenced
+      // segment is silent here even if the chain or app has the cue on.
+      if (!this.isPaused && effectiveCue(seg, this.chain, 'finalTick')) {
         if (remainingInt <= 3 && remainingInt >= 1 && this.finalThreeFiredFor !== this.currentIndex) {
           this.finalThreeFiredFor = this.currentIndex;
-          if (Store.getSettings().sound)   Audio.finalThree();
-          if (Store.getSettings().vibrate) Vibe.finalTick();
+          if (effectiveCue(seg, this.chain, 'sound'))   Audio.finalThree();
+          if (effectiveCue(seg, this.chain, 'vibrate')) Vibe.finalTick();
         }
       }
 
@@ -831,17 +945,21 @@ const Engine = {
     // a "transition happened" chime/vibe: the user just tapped Next or
     // Previous and already knows. Voice still announces the new segment
     // since that's useful context, not a confirmation cue.
+    //
+    // Cue ownership: the chime + vibrate at a boundary mark the END of
+    // the OUTGOING segment, so they're gated by that segment's effective
+    // cues (`seg`). The voice announcement names the INCOMING segment,
+    // so it's gated by the new segment's effective cues (`nextSeg`).
+    // This matches the mental model "silencing segment N means nothing
+    // fires at the end of segment N, regardless of what segment N+1
+    // wants" while still letting the next segment announce itself.
     const isUserSkip = reason === 'skip';
     if (reason !== 'catchup') {
-      if (!isUserSkip && Store.getSettings().sound)   Audio.chime();
-      if (!isUserSkip && Store.getSettings().vibrate) Vibe.segmentEnd();
       const nextSeg = this.segments[this.currentIndex];
-      // Per-segment voice flag (seg.voice) gates announcement on top of
-      // the global "voice" setting. Undefined ⇒ ON (legacy chains saved
-      // before the per-segment toggle existed). Explicit `false` ⇒ silent
-      // for that segment specifically.
-      if (Store.getSettings().voice && nextSeg && nextSeg.voice !== false) Voice.speak(nextSeg.name);
-      if (!isUserSkip) {
+      if (!isUserSkip && effectiveCue(seg,     this.chain, 'sound'))   Audio.chime();
+      if (!isUserSkip && effectiveCue(seg,     this.chain, 'vibrate')) Vibe.segmentEnd();
+      if (nextSeg && effectiveCue(nextSeg, this.chain, 'voice')) Voice.speak(nextSeg.name);
+      if (!isUserSkip && nextSeg) {
         Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
       }
     }
@@ -998,9 +1116,15 @@ const Engine = {
     // the correct wall-clock moment, and we don't want to replay the
     // finale chime/voice/vibe minutes/hours later when they return — nor
     // unhide the completion overlay (it'd flash on the next run).
+    //
+    // Chain end IS the end of the last segment, so finale cues resolve
+    // against the LAST segment's effective overrides ("silencing the
+    // last segment silences the finale" — the natural extension of the
+    // segment-N rule used for mid-chain boundaries).
+    const lastSeg = this.segments[this.segments.length - 1];
     if (reason !== 'catchup') {
-      if (Store.getSettings().sound)   Audio.finale();
-      if (Store.getSettings().vibrate) Vibe.finale();
+      if (effectiveCue(lastSeg, this.chain, 'sound'))   Audio.finale();
+      if (effectiveCue(lastSeg, this.chain, 'vibrate')) Vibe.finale();
       Notif.show(`${this.chain.name} complete`, `${fmtLong(total)} · ${this.segments.length} segments`);
       this.onComplete?.(total);
     }
@@ -1343,7 +1467,11 @@ const UI = {
       return;
     }
     View.show('run');
-    if (Store.getSettings().prestart) UI.runPrestart(chain);
+    // Prestart is a chain-level concept (no segment is running yet) — it
+    // resolves against chain.cues then app defaults. Segments don't get
+    // a prestart override on purpose: it makes no sense to "skip the
+    // countdown only for segment 3."
+    if (effectiveCue(null, chain, 'prestart')) UI.runPrestart(chain);
     else Engine.startChain(chain);
   },
 
@@ -1362,14 +1490,20 @@ const UI = {
     overlay.hidden = false;
     let n = 3;
     num.textContent = n;
-    if (Store.getSettings().sound)   Audio.prestart(false);
-    if (Store.getSettings().vibrate) Vibe.do(50);
+    // Prestart's own audible/vibration ticks resolve at chain level
+    // (segment hasn't started yet), so they ride on chain.cues.sound /
+    // chain.cues.vibrate. Captured once at countdown start — the user
+    // can't realistically toggle settings mid-countdown.
+    const sound   = effectiveCue(null, chain, 'sound');
+    const vibrate = effectiveCue(null, chain, 'vibrate');
+    if (sound)   Audio.prestart(false);
+    if (vibrate) Vibe.do(50);
     UI.prestartIv = setInterval(() => {
       n--;
       if (n > 0) {
         num.textContent = n;
-        if (Store.getSettings().sound)   Audio.prestart(n === 1);
-        if (Store.getSettings().vibrate) Vibe.do(n === 1 ? 100 : 50);
+        if (sound)   Audio.prestart(n === 1);
+        if (vibrate) Vibe.do(n === 1 ? 100 : 50);
       } else {
         UI.cancelPrestart();
         Engine.startChain(chain);
@@ -1427,6 +1561,10 @@ const UI = {
     document.getElementById('editor-mode-label').textContent = Editor.draftId ? 'Editing' : 'New';
     const nameInput = document.getElementById('editor-name');
     nameInput.value = draft.name;
+
+    // Chain-level cue bell — dot indicator lights up when any chain-level
+    // cue is explicitly overridden. Click opens the chain-scoped cue sheet.
+    UI._syncChainCueBell();
 
     // color row
     const colorRow = document.getElementById('editor-color-row');
@@ -1535,47 +1673,32 @@ const UI = {
       li.appendChild(dur);
     }
 
-    // Per-segment TTS toggle — appears immediately left of the trash.
-    // Hidden entirely when the platform has no SpeechSynthesis (older
-    // WebViews / locked-down OS images), since a control that toggles a
-    // setting nothing on this device can honour is just confusing. Both
-    // a regular segment and a subchain row get the button so a subchain
-    // can also be silenced (Voice.speak fires on advance into either).
-    if (Voice.supported()) {
-      const voiceBtn = document.createElement('button');
-      voiceBtn.className = 'segment-voice';
-      // Two visual states drawn from one SVG:
-      //   ON  — speaker icon
-      //   OFF — speaker icon with a diagonal slash, like the system "mute"
-      // The OFF state is rendered via the `.is-off` CSS class so we don't
-      // re-create the SVG markup on toggle (avoids a tiny flash and keeps
-      // the focus state intact for keyboard users).
-      const voiceOn = seg.voice !== false;
-      voiceBtn.classList.toggle('is-off', !voiceOn);
-      voiceBtn.setAttribute('aria-pressed', String(voiceOn));
-      voiceBtn.setAttribute('aria-label', voiceOn ? 'Announce this segment' : 'Do not announce this segment');
-      voiceBtn.setAttribute('title', voiceOn ? 'Announcing on segment start' : 'Silent on segment start');
-      voiceBtn.innerHTML = `
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 9v6h4l5 4V5L8 9H4z"/>
-          <path class="voice-wave-1" d="M16 8.5a4.5 4.5 0 0 1 0 7"/>
-          <path class="voice-wave-2" d="M18.5 6a8 8 0 0 1 0 12"/>
-          <path class="voice-slash" d="M3.5 3.5l17 17"/>
-        </svg>`;
-      voiceBtn.addEventListener('click', () => {
-        const nextOn = seg.voice === false; // currently OFF → flip to ON
-        if (nextOn) {
-          delete seg.voice; // back to "undefined" = ON, keeps storage minimal
-        } else {
-          seg.voice = false;
-        }
-        voiceBtn.classList.toggle('is-off', !nextOn);
-        voiceBtn.setAttribute('aria-pressed', String(nextOn));
-        voiceBtn.setAttribute('aria-label', nextOn ? 'Announce this segment' : 'Do not announce this segment');
-        voiceBtn.setAttribute('title', nextOn ? 'Announcing on segment start' : 'Silent on segment start');
-      });
-      li.appendChild(voiceBtn);
-    }
+    // Per-segment cue overrides — bell icon left of trash. Tap opens the
+    // cue sheet (4 cues: sound, finalTick, voice, vibrate; prestart is
+    // chain-only). The bell's accent dot lights up when at least one
+    // cue at this scope is explicitly overridden, giving the user a
+    // glance-readable "this segment differs from chain defaults" signal.
+    const cuesBtn = document.createElement('button');
+    cuesBtn.className = 'cue-bell segment-cues';
+    cuesBtn.setAttribute('aria-label', 'Segment cue overrides');
+    cuesBtn.setAttribute('title', 'Cue overrides');
+    cuesBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2.5h-15L6 16z"/>
+        <path d="M10 19a2 2 0 0 0 4 0"/>
+        <path d="M12 3v2"/>
+      </svg>
+      <span class="cue-bell-dot" hidden></span>`;
+    const refreshBellDot = () => {
+      const has = !!(seg.cues && Object.keys(seg.cues).length) || seg.voice === false;
+      cuesBtn.classList.toggle('has-overrides', has);
+      cuesBtn.querySelector('.cue-bell-dot').hidden = !has;
+    };
+    refreshBellDot();
+    cuesBtn.addEventListener('click', () => {
+      UI._openCueSheet('segment', seg, Editor.draft, refreshBellDot);
+    });
+    li.appendChild(cuesBtn);
 
     const removeBtn = document.createElement('button');
     removeBtn.className = 'segment-remove';
@@ -1742,14 +1865,29 @@ const UI = {
     document.getElementById('setting-wake').checked      = !!s.wake;
     document.getElementById('setting-prestart').checked  = !!s.prestart;
     document.getElementById('setting-finaltick').checked = !!s.finalTick;
+    // Final-3 tick depends on the sound channel being on at all — hide
+    // the sub-row when sound is off so the user isn't toggling a setting
+    // that has no audible effect.
+    UI._syncFinalTickRowVisibility();
 
     const notifBtn = document.getElementById('enable-notifs');
     const status = document.getElementById('notif-status');
+    const notifRow = notifBtn.closest('.setting-row');
     const perm = Notif.perm();
-    if (perm === 'granted') { notifBtn.textContent = 'Enabled'; notifBtn.disabled = true; status.textContent = 'System notifications enabled.'; }
-    else if (perm === 'denied') { notifBtn.textContent = 'Blocked'; notifBtn.disabled = true; status.textContent = 'Notifications blocked in browser settings.'; }
-    else if (perm === 'unsupported') { notifBtn.textContent = 'N/A'; notifBtn.disabled = true; status.textContent = 'Notifications not supported in this browser.'; }
-    else { notifBtn.disabled = false; notifBtn.textContent = 'Enable'; }
+    // The browser Notification API is irrelevant whenever native delivery is
+    // available: on Capacitor we route everything through @capacitor/local-
+    // notifications + the ChainTimerPlugin FGS, and on a browser without
+    // Notification support (Android WebView, some embedded browsers) we'd
+    // otherwise show "Notifications not supported in this browser" — which
+    // reads to the user as a broken state when it actually doesn't apply.
+    // Hide the row entirely in both cases.
+    const hideNotifRow = (window.ChainedNative?.isNative) || perm === 'unsupported';
+    if (notifRow) notifRow.hidden = hideNotifRow;
+    if (!hideNotifRow) {
+      if      (perm === 'granted') { notifBtn.textContent = 'Enabled';  notifBtn.disabled = true;  status.textContent = 'System notifications enabled.'; }
+      else if (perm === 'denied')  { notifBtn.textContent = 'Blocked';  notifBtn.disabled = true;  status.textContent = 'Notifications blocked in browser settings.'; }
+      else                         { notifBtn.disabled = false;         notifBtn.textContent = 'Enable'; }
+    }
 
     // Native bridge panel — only visible when running inside Capacitor
     const N = window.ChainedNative;
@@ -1837,6 +1975,120 @@ const UI = {
   },
 
   closeSettings() { document.getElementById('settings-sheet').hidden = true; },
+
+  // ------- Cue overrides sheet (chain + segment scopes) -------
+  //
+  // One shared sheet that re-renders for either scope. The chain scope
+  // shows all 5 cues (sound, finalTick, voice, vibrate, prestart). The
+  // segment scope shows the first 4 (prestart only makes sense once at
+  // chain start, not per-segment). Each cue gets a 3-way pill:
+  // Default / On / Off. "Default" displays the inherited value so the
+  // user sees what they'd be inheriting before tapping. The sheet
+  // mutates the holder (chain or seg) in place; the caller wires a
+  // refreshBellDot callback so the bell on the editor / row updates
+  // its dot indicator when the user closes the sheet.
+  _openCueSheet(scope, holder, chainContext, onChange) {
+    const sheet = document.getElementById('cues-sheet');
+    const titleEl = document.getElementById('cues-sheet-title');
+    const hintEl = document.getElementById('cues-sheet-hint');
+    const list  = document.getElementById('cues-list');
+
+    const isChain = scope === 'chain';
+    const inheritLevel = isChain ? 'chain' : 'segment';
+    const keys = isChain ? CUE_KEYS : SEGMENT_CUE_KEYS;
+
+    const CUE_META = {
+      sound:     { title: 'Sound cues',           hint: 'Chime when a segment ends and at chain start/end.' },
+      finalTick: { title: 'Final 3 seconds tick', hint: 'Three quick tones counting down the last 3s.', requires: 'sound' },
+      voice:     { title: 'Voice cues',           hint: 'Speak each segment name aloud as it begins.' },
+      vibrate:   { title: 'When a segment ends',  hint: 'Buzz at every segment boundary and at chain end.' },
+      prestart:  { title: 'Pre-start countdown',  hint: '3-2-1 before the chain starts.' },
+    };
+
+    titleEl.textContent = isChain ? 'Chain cues' : 'Segment cues';
+    hintEl.textContent  = isChain
+      ? 'Override the app defaults for this chain. Per-segment overrides win over these.'
+      : 'Override the chain defaults for this segment.';
+
+    list.innerHTML = '';
+    keys.forEach(key => {
+      const meta = CUE_META[key];
+      const current = holder.cues?.[key];      // undefined | true | false
+      const inheritedFromGlobal = inheritedCue(inheritLevel, chainContext, key);
+
+      const row = document.createElement('div');
+      row.className = 'cue-row' + (meta.requires ? ' is-nested' : '');
+      row.dataset.cueKey = key;
+
+      const head = document.createElement('div');
+      head.className = 'cue-row-head';
+      const inheritedLabel = inheritedFromGlobal ? 'On' : 'Off';
+      head.innerHTML = `
+        <span class="cue-row-title">${escape(meta.title)}</span>
+        <span class="cue-row-hint">${escape(meta.hint)}</span>`;
+      row.appendChild(head);
+
+      const pill = document.createElement('div');
+      pill.className = 'cue-pill';
+      pill.setAttribute('role', 'radiogroup');
+      pill.setAttribute('aria-label', meta.title);
+      const mkBtn = (state, label, subLabel) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.state = state;
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-pressed', String(state === (current == null ? 'default' : current ? 'on' : 'off')));
+        b.innerHTML = subLabel
+          ? `${escape(label)}<span class="pill-default-inherit">${escape(subLabel)}</span>`
+          : escape(label);
+        b.addEventListener('click', () => {
+          if (state === 'default') setCueOverride(holder, key, null);
+          else                     setCueOverride(holder, key, state === 'on');
+          // Refresh just this row's pill states (cheap full re-render keeps
+          // it simple; the dependent finalTick sub-row's visibility may
+          // also change if `sound` was just toggled).
+          UI._openCueSheet(scope, holder, chainContext, onChange);
+          if (onChange) onChange();
+        });
+        return b;
+      };
+      pill.appendChild(mkBtn('default', 'Default', inheritedLabel));
+      pill.appendChild(mkBtn('on',  'On'));
+      pill.appendChild(mkBtn('off', 'Off'));
+      row.appendChild(pill);
+
+      // Hide finalTick row when the EFFECTIVE sound at this scope is off
+      // — same logic as the App Settings sub-row. The user can't make
+      // finalTick fire when the sound channel it depends on is silent.
+      if (meta.requires) {
+        const parentEffective = effectiveCue(
+          isChain ? null : holder,
+          chainContext,
+          meta.requires
+        );
+        if (!parentEffective) row.hidden = true;
+      }
+
+      list.appendChild(row);
+    });
+
+    sheet.hidden = false;
+  },
+
+  _syncChainCueBell() {
+    const btn = document.getElementById('editor-cues-btn');
+    const dot = document.getElementById('editor-cues-dot');
+    if (!btn || !dot) return;
+    const has = !!(Editor.draft?.cues && Object.keys(Editor.draft.cues).length);
+    btn.classList.toggle('has-overrides', has);
+    dot.hidden = !has;
+  },
+
+  _syncFinalTickRowVisibility() {
+    const row = document.getElementById('setting-row-finaltick');
+    if (!row) return;
+    row.hidden = !Store.getSettings().sound;
+  },
 
   // ------- Run view -------
 
@@ -2003,12 +2255,24 @@ function init() {
       if (sheet) sheet.hidden = true;
     });
   });
+
+  // Chain-level cue overrides — bell in the editor header. The draft is
+  // mutated in place; the bell's dot indicator refreshes on each pill
+  // tap (via the onChange callback) so the user sees their override
+  // land without re-rendering the whole editor.
+  document.getElementById('editor-cues-btn').addEventListener('click', () => {
+    if (!Editor.draft) return;
+    UI._openCueSheet('chain', Editor.draft, Editor.draft, () => UI._syncChainCueBell());
+  });
   // settings toggles
   const wireToggle = (id, key) => {
     document.getElementById(id).addEventListener('change', e => {
       Store.setSetting(key, e.target.checked);
       if (key === 'wake' && e.target.checked && Engine.isRunning && !Engine.isPaused) Wake.acquire();
       if (key === 'wake' && !e.target.checked) Wake.release();
+      // Sound is the parent of "Final 3 seconds tick" in the Defaults
+      // section — hide/show the nested row as the user flips the parent.
+      if (key === 'sound') UI._syncFinalTickRowVisibility();
     });
   };
   wireToggle('setting-sound', 'sound');

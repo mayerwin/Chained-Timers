@@ -1,20 +1,30 @@
-// End-to-end tests for the v1.3.4 audio + voice changes.
+// End-to-end tests for the v1.3.5 cue-inheritance + Android TTS work.
 //
-// Three properties to lock in:
+// Five properties to lock in:
 //
-//   1. Per-segment TTS toggle persists, surfaces .is-off CSS, and stores
-//      seg.voice only when explicitly OFF (legacy chains with no field
-//      stay ON by default).
+//   1. Segment row renders a bell button (replaces the v1.3.4 speaker
+//      icon). Bell starts without the .has-overrides accent dot when
+//      the segment has no cue overrides.
 //
-//   2. Engine.startChain triggers exactly ONE Audio.finalThree() call
-//      per segment as the chain enters the last-3s window — never three
-//      independent calls, never zero, never repeats inside the same
-//      segment. This is the central regression risk of the 3-2-1 fix.
+//   2. Opening the segment cue sheet, tapping a per-cue pill writes
+//      seg.cues[key] (only when the user picks On/Off — picking Default
+//      removes the key so storage stays minimal).
 //
-//   3. Voice.speak fires on segment advance ONLY when both the global
-//      voice setting AND the per-segment seg.voice !== false are true.
-//      A toggled-off segment must produce zero speak() calls for its
-//      own announcement.
+//   3. Engine.startChain triggers exactly ONE Audio.finalThree() call
+//      per segment as the chain enters the last-3s window. Central
+//      regression risk of the v1.3.4 3-2-1 concatenation: must not
+//      revert to per-second fan-out.
+//
+//   4. Three-level inheritance: a segment-level voice override beats a
+//      chain-level override beats the app default. Concretely:
+//        seg2: voice=undefined  (inherits), chain.voice=false  → silent
+//        seg3: voice=true       (override), chain.voice=false  → speaks
+//        seg4: voice=undefined,             chain has no override → inherits app default ON → speaks
+//
+//   5. Same inheritance applies to sound (chime + finalThree). When the
+//      chain mutes sound, Audio.chime and Audio.finalThree are not
+//      called for default-inheriting segments; a per-segment override
+//      back to ON wakes them up.
 //
 // Run via:
 //   npm run serve   # in another shell
@@ -44,10 +54,6 @@ const page = await context.newPage();
 page.on('pageerror', e   => bad('pageerror: ' + e.message));
 page.on('console',   msg => { if (msg.type() === 'error') bad('console: ' + msg.text()); });
 
-// Seed a known chain so we can deterministically open the editor and
-// run it. Three 4-second segments: short enough to reach the 3-2-1 window
-// within seconds of fake-time advancement, long enough that the engine
-// actually walks past several boundaries.
 const SEED = {
   schemaVersion: 1,
   chains: [{
@@ -70,56 +76,52 @@ await page.addInitScript(({ key, seed }) => {
 
 await page.goto(URL, { waitUntil: 'networkidle' });
 
-console.log('Test 1: SpeechSynthesis-supported env shows the per-segment speaker button');
+console.log('Test 1: Segment row renders bell with no accent dot when no overrides exist');
 {
-  // Enter the editor via the chain card body (NOT the play button).
   await page.locator('.chain-card .chain-card-body').first().click();
   await page.waitForSelector('.view-editor:not([hidden])', { timeout: 3000 });
   const rows = await page.locator('.segment-row').count();
   eq(rows, 3, 'segment rows');
-  const voiceButtons = await page.locator('.segment-voice').count();
-  eq(voiceButtons, 3, 'voice buttons rendered (1 per segment)');
-  const initialOff = await page.locator('.segment-voice.is-off').count();
-  eq(initialOff, 0, 'all voice buttons start ON (no .is-off)');
+  const bells = await page.locator('.segment-row .segment-cues').count();
+  eq(bells, 3, 'one bell per segment row');
+  const overridden = await page.locator('.segment-row .segment-cues.has-overrides').count();
+  eq(overridden, 0, 'no segments start with overrides');
 }
 
-console.log('\nTest 2: Toggling the speaker button surfaces .is-off and persists seg.voice = false');
+console.log('\nTest 2: Tapping a cue pill writes seg.cues; tapping Default removes the key');
 {
-  await page.locator('.segment-row').nth(1).locator('.segment-voice').click();
-  const offState = await page.locator('.segment-row').nth(1).locator('.segment-voice.is-off').count();
-  eq(offState, 1, 'segment 2 voice button now .is-off');
-
-  // Save via the explicit footer button (id="editor-save" — there's also
-  // a "Save & start" button, so we must target the plain Save by id).
+  // Open the cue sheet for segment 2 (Bravo) and flip Voice → Off.
+  await page.locator('.segment-row').nth(1).locator('.segment-cues').click();
+  await page.waitForSelector('#cues-sheet:not([hidden])', { timeout: 2000 });
+  await page.locator('.cue-row[data-cue-key="voice"] .cue-pill button[data-state="off"]').click();
+  // Save the draft so the override persists to storage.
+  await page.locator('#cues-sheet button[data-close-sheet]').click();
   await page.locator('#editor-save-only').click();
   await page.waitForTimeout(80);
-  const stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), STORAGE_KEY);
-  const segs = stored.chains[0].segments;
-  eq(segs[1].voice, false, 'seg.voice persisted as false on segment 2');
-  eq('voice' in segs[0], false, 'segment 1 has no voice key (= default ON)');
-  eq('voice' in segs[2], false, 'segment 3 has no voice key (= default ON)');
-}
+  const stored1 = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), STORAGE_KEY);
+  eq(stored1.chains[0].segments[1].cues?.voice, false, 'segment 2: seg.cues.voice = false');
+  eq('voice' in (stored1.chains[0].segments[0].cues || {}), false, 'segment 1 untouched');
 
-console.log('\nTest 3: Re-toggling segment 2 back ON deletes the seg.voice key (no zombie false)');
-{
+  // Bell now reflects the override.
   await page.locator('.chain-card .chain-card-body').first().click();
   await page.waitForSelector('.view-editor:not([hidden])', { timeout: 3000 });
-  const restoredOff = await page.locator('.segment-row').nth(1).locator('.segment-voice.is-off').count();
-  eq(restoredOff, 1, 'segment 2 button restored as OFF from storage');
-  await page.locator('.segment-row').nth(1).locator('.segment-voice').click();
-  const flippedOn = await page.locator('.segment-row').nth(1).locator('.segment-voice.is-off').count();
-  eq(flippedOn, 0, 'segment 2 button flipped back to ON');
+  const hasDot = await page.locator('.segment-row').nth(1).locator('.segment-cues.has-overrides').count();
+  eq(hasDot, 1, 'segment 2 bell now has-overrides');
+
+  // Reset to Default — should delete the key entirely (no zombie false).
+  await page.locator('.segment-row').nth(1).locator('.segment-cues').click();
+  await page.waitForSelector('#cues-sheet:not([hidden])', { timeout: 2000 });
+  await page.locator('.cue-row[data-cue-key="voice"] .cue-pill button[data-state="default"]').click();
+  await page.locator('#cues-sheet button[data-close-sheet]').click();
   await page.locator('#editor-save-only').click();
   await page.waitForTimeout(80);
-  const stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), STORAGE_KEY);
-  eq('voice' in stored.chains[0].segments[1], false, 'seg.voice key deleted (back to default ON)');
+  const stored2 = await page.evaluate((k) => JSON.parse(localStorage.getItem(k)), STORAGE_KEY);
+  // After reset the cues object should be gone (we delete it once empty).
+  eq(stored2.chains[0].segments[1].cues, undefined, 'seg.cues removed when last override cleared');
 }
 
-console.log('\nTest 4: Engine fires Audio.finalThree exactly once per segment in the last-3s window');
+console.log('\nTest 3: Audio.finalThree fires exactly once per segment (3-2-1 not regressed)');
 {
-  // Hard-reset the page so the spies install cleanly under a fresh load.
-  // The ChainedApp namespace is exposed by app.js after the IIFE so it's
-  // reachable from page.evaluate.
   await page.goto(URL, { waitUntil: 'networkidle' });
   await page.evaluate(() => {
     if (!window.ChainedApp) throw new Error('ChainedApp namespace missing — test hatch not loaded');
@@ -134,39 +136,79 @@ console.log('\nTest 4: Engine fires Audio.finalThree exactly once per segment in
     const origSpeak = Voice.speak.bind(Voice);
     Voice.speak = function(t) { window.__speakCalls.push(t); origSpeak(t); };
   });
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.evaluate(() => window.ChainedApp.Engine.startChain(window.ChainedApp.Store.getChains()[0]));
+  await page.clock.runFor(14000);
+  const calls = await page.evaluate(() => ({
+    final3: window.__finalThreeCalls,
+    chimes: window.__chimeCalls,
+    speaks: window.__speakCalls,
+  }));
+  console.log('  state:', JSON.stringify(calls));
+  eq(calls.final3, 3, 'finalThree fires exactly 3 times (one per segment)');
+  eq(calls.chimes, 2, 'chime fires exactly 2 times (mid-chain boundaries only)');
+}
 
-  // Mark segment 2 OFF for voice via Store before starting.
+console.log('\nTest 4: 3-level inheritance — segment override beats chain override beats app default');
+{
+  // Fresh page; set up a chain where:
+  //   chain.cues.voice = false      → would silence everything by default
+  //   seg[0].cues.voice = undefined → inherits chain.false → silent
+  //   seg[1].cues.voice = true      → OVERRIDES chain → speaks
+  //   seg[2].cues.voice = undefined → inherits chain.false → silent
+  //
+  // Mutate via the in-memory Store (the addInitScript re-seeds on every
+  // page reload and would wipe direct localStorage edits).
+  await page.goto(URL, { waitUntil: 'networkidle' });
   await page.evaluate(() => {
     const { Store } = window.ChainedApp;
     const chain = Store.getChains()[0];
-    chain.segments[1].voice = false;
+    chain.cues = { voice: false };
+    chain.segments[1].cues = { voice: true };
     Store.upsertChain(chain);
+    window.__speakCalls = [];
+    const { Voice } = window.ChainedApp;
+    Voice.speak = function(t) { window.__speakCalls.push(t); };
   });
-
-  // Start the chain via the public Engine API. The rAF loop reads
-  // Date.now() for elapsed-time math; we use Playwright's clock.install
-  // to advance synthetic wall-clock through the whole 12s chain.
   await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   await page.evaluate(() => window.ChainedApp.Engine.startChain(window.ChainedApp.Store.getChains()[0]));
-  // 3 segments × 4 seconds = 12 seconds of chain. Run 14s to land past the
-  // chain-complete cue so we capture the full sequence.
   await page.clock.runFor(14000);
+  const calls = await page.evaluate(() => ({ speaks: window.__speakCalls }));
+  console.log('  state:', JSON.stringify(calls));
+  eq(calls.speaks, ['Bravo'], 'only segment with explicit voice=true speaks; chain.voice=false silences others');
+}
 
+console.log('\nTest 5: Sound inheritance — chain mutes sound, segment can re-enable it');
+{
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    const { Store, Audio } = window.ChainedApp;
+    const chain = Store.getChains()[0];
+    chain.cues = { sound: false };
+    delete chain.segments[1].cues;
+    chain.segments[2].cues = { sound: true };  // Charlie overrides chain mute
+    Store.upsertChain(chain);
+    window.__finalThreeCalls = 0;
+    window.__chimeCalls      = 0;
+    Audio.finalThree = function() { window.__finalThreeCalls++; };
+    Audio.chime      = function() { window.__chimeCalls++; };
+  });
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.evaluate(() => window.ChainedApp.Engine.startChain(window.ChainedApp.Store.getChains()[0]));
+  await page.clock.runFor(14000);
   const calls = await page.evaluate(() => ({
-    final3:  window.__finalThreeCalls,
-    chimes:  window.__chimeCalls,
-    speaks:  window.__speakCalls,
-    running: window.ChainedApp.Engine.isRunning,
-    idx:     window.ChainedApp.Engine.currentIndex,
+    final3: window.__finalThreeCalls,
+    chimes: window.__chimeCalls,
   }));
   console.log('  state:', JSON.stringify(calls));
-  eq(calls.final3, 3, 'Audio.finalThree fired once per segment');
-  eq(calls.chimes, 2, 'Audio.chime fired on each mid-chain boundary');
-  // Voice.speak fires on:
-  //   chain start    : opening segment "Alpha" (default voice ON)
-  //   seg 1 → seg 2  : suppressed by seg.voice = false on segment 2 (Bravo silent)
-  //   seg 2 → seg 3  : default ON → "Charlie"
-  eq(calls.speaks, ['Alpha', 'Charlie'], 'Voice.speak gated by per-segment seg.voice flag (Bravo suppressed)');
+  // finalThree fires once for Charlie (segment 3, has sound=true override).
+  // It does NOT fire for Alpha or Bravo because their effective sound is false.
+  eq(calls.final3, 1, 'finalThree fires only for Charlie (the segment with sound=true override)');
+  // chime fires on boundary going INTO each segment AFTER segment-end. The
+  // chime is gated by the OUTGOING segment's cues:
+  //   Alpha (chain.sound=false, no override) end → no chime
+  //   Bravo (inherits chain.sound=false)      end → no chime
+  eq(calls.chimes, 0, 'no chimes — every boundary out of a sound-off segment is silent');
 }
 
 await browser.close();

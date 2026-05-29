@@ -775,20 +775,127 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 .segment-remove:hover { background: rgba(226,72,58,0.1); color: var(--warn); }
 
-/* Per-segment TTS announce toggle. Speaker icon ON; slashed (muted) OFF. */
-.segment-voice {
-  width: 32px; height: 32px;
+/* Cue-override bell. Used at chain level (editor header) and segment
+   level (segment row, left of trash). The accent dot lights up when at
+   least one cue at that scope has been explicitly overridden. */
+.cue-bell {
+  position: relative;
+  width: 36px; height: 36px;
   display: grid; place-items: center;
   border-radius: 50%;
-  color: var(--accent);
+  color: var(--ink-dim);
   transition: background 140ms, color 140ms;
+  background: transparent;
 }
-.segment-voice:hover { background: rgba(245,176,66,0.10); }
-.segment-voice .voice-slash { opacity: 0; transition: opacity 140ms; }
-.segment-voice.is-off { color: var(--ink-faint); }
-.segment-voice.is-off .voice-wave-1,
-.segment-voice.is-off .voice-wave-2 { opacity: 0; }
-.segment-voice.is-off .voice-slash { opacity: 1; }
+.cue-bell:hover { background: rgba(245,176,66,0.10); color: var(--accent); }
+.cue-bell.has-overrides { color: var(--accent); }
+.cue-bell-dot {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+}
+
+/* Segment-row cue bell sizing — smaller chrome to match the 32px trash. */
+.segment-cues {
+  width: 32px; height: 32px;
+}
+.segment-cues .cue-bell-dot { top: 4px; right: 4px; width: 7px; height: 7px; }
+
+/* Chain editor header: name fields on the left, bell on the right. */
+.editor-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.editor-name-fields { flex: 1; min-width: 0; }
+
+/* Cue override sheet — one card per cue with a tri-state pill control. */
+.cues-sheet-hint {
+  font-family: var(--f-serif);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--ink-dim);
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+.cues-list { display: flex; flex-direction: column; gap: 10px; }
+.cue-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--rule);
+}
+.cue-row.is-nested {
+  margin-left: 14px;
+  border-left-width: 3px;
+  border-left-color: var(--rule-strong);
+}
+.cue-row-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cue-row-title {
+  font-family: var(--f-body);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.cue-row-hint {
+  font-family: var(--f-serif);
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--ink-dim);
+}
+
+/* Tri-state pill: Default / On / Off. Selected segment gets accent. */
+.cue-pill {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  background: var(--surface-3);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.cue-pill button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--f-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+  letter-spacing: 0.01em;
+}
+.cue-pill button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--bg);
+}
+.cue-pill button:not([aria-pressed="true"]):hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--ink);
+}
+.cue-pill button .pill-default-inherit {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  font-family: var(--f-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.72;
+  margin-top: 1px;
+}
 
 /* sub-chain row variant */
 .segment-sub {
@@ -1430,6 +1537,34 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 
 .setting-rule { border: 0; border-top: 1px solid var(--rule); margin: 4px 0; }
+
+/* Settings section heading — separates Defaults from Other. */
+.setting-section-head {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 18px 0 4px;
+  font-weight: 600;
+}
+.setting-section-head:first-child { margin-top: 0; }
+.setting-section-hint {
+  font-family: var(--f-serif);
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--ink-dim);
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+/* Sub-row indent for settings nested under a parent (e.g. Final 3
+   seconds tick under Sound cues). The bell rule on the left edge gives
+   a clean "branches from above" feel without an actual tree-view UI. */
+.setting-row-sub {
+  padding-left: 14px;
+  border-left: 1px solid var(--rule);
+  margin-left: 4px;
+}
 
 /* Native bridge panel (only visible when running inside Capacitor) */
 .native-panel {
