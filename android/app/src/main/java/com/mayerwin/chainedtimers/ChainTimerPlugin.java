@@ -9,14 +9,29 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 
 import androidx.core.app.NotificationManagerCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Bridges JS → ChainTimerService.
@@ -285,6 +300,179 @@ public class ChainTimerPlugin extends Plugin {
         return ch == null || ch.getImportance() != NotificationManager.IMPORTANCE_NONE;
     }
 
+    // ------------------------------------------------------------------
+    // TTS pre-rendering — Voice cues without per-boundary latency.
+    //
+    // window.speechSynthesis inside the Capacitor Android WebView is
+    // unreliable, and even with @capacitor-community/text-to-speech
+    // (which talks to android.speech.tts.TextToSpeech) JS-side speak()
+    // calls only fire while the WebView is alive — the moment the user
+    // backgrounds the app, the JS engine pauses and no voice fires at
+    // segment boundaries.
+    //
+    // Fix: pre-render every segment name to a WAV file at chain start,
+    // hand the file paths to ChainTimerService, and have the service
+    // play the right file via MediaPlayer at every boundary. Files are
+    // cached in the app's cache dir keyed by SHA-1 of the text, so
+    // repeat chain runs are instant. The cache dir is cleared by Android
+    // automatically under storage pressure; any missing file falls back
+    // to silence (the service checks existence before playing).
+    // ------------------------------------------------------------------
+
+    /** Initialized lazily on first prerender call. The Activity context is
+     *  retained but cleared in handleOnDestroy via the static reset path. */
+    private static volatile TextToSpeech sharedTts;
+    private static volatile boolean ttsReady       = false;
+    private static volatile boolean ttsInitFailed  = false;
+    private static final Object ttsInitLock = new Object();
+    /** Latches one per outstanding synthesizeToFile call, keyed by
+     *  utteranceId. The shared progress listener counts each one down. */
+    private static final ConcurrentHashMap<String, CountDownLatch> ttsLatches = new ConcurrentHashMap<>();
+
+    private static void ensureTtsInit(Context ctx, Runnable onReady) {
+        if (ttsReady)      { onReady.run(); return; }
+        if (ttsInitFailed) { onReady.run(); return; }
+        synchronized (ttsInitLock) {
+            if (ttsReady || ttsInitFailed) { onReady.run(); return; }
+            if (sharedTts == null) {
+                sharedTts = new TextToSpeech(ctx.getApplicationContext(), status -> {
+                    if (status == TextToSpeech.SUCCESS) {
+                        // Wire a single progress listener that routes by
+                        // utteranceId. Each synthesizeToFile call gets its
+                        // own latch in ttsLatches; we count it down on done
+                        // or error regardless. The waiter on the calling
+                        // thread then proceeds.
+                        sharedTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                            @Override public void onStart(String id) { /* no-op */ }
+                            @Override public void onDone(String id) {
+                                CountDownLatch l = ttsLatches.remove(id);
+                                if (l != null) l.countDown();
+                            }
+                            @Override public void onError(String id) {
+                                CountDownLatch l = ttsLatches.remove(id);
+                                if (l != null) l.countDown();
+                            }
+                            @Override public void onError(String id, int errorCode) {
+                                CountDownLatch l = ttsLatches.remove(id);
+                                if (l != null) l.countDown();
+                            }
+                        });
+                        ttsReady = true;
+                    } else {
+                        ttsInitFailed = true;
+                    }
+                    onReady.run();
+                });
+            }
+        }
+    }
+
+    /**
+     * Pre-render an array of texts to WAV files in the app's cache dir.
+     * Returns the file paths under `paths` (parallel to the input array)
+     * — entries are null when synthesis fails or the TTS engine is
+     * unavailable (the FGS treats null as "no voice for this segment"
+     * and falls back to silence).
+     *
+     * Files are keyed by SHA-1 of the text so repeated names in a chain
+     * (e.g. Inhale/Hold/Exhale × 10 in a Box Breath) render exactly
+     * once, and subsequent chain runs hit the cache immediately. The
+     * whole call blocks until every file is either ready or known
+     * failed; total time is dominated by the LONGEST synthesis, since
+     * the underlying TextToSpeech queue is per-utterance and ordered
+     * but each utterance renders independently.
+     */
+    @PluginMethod
+    public void prerenderVoices(PluginCall call) {
+        JSArray texts = call.getArray("texts");
+        if (texts == null) { call.reject("texts array required"); return; }
+        final int n = texts.length();
+
+        ensureTtsInit(getContext(), () -> {
+            JSArray pathsArr = new JSArray();
+            if (!ttsReady) {
+                // Engine never initialized — return all nulls; the JS side
+                // already knows how to fall back gracefully.
+                for (int i = 0; i < n; i++) pathsArr.put(JSONObject.NULL);
+                JSObject ret = new JSObject();
+                ret.put("paths", pathsArr);
+                call.resolve(ret);
+                return;
+            }
+
+            File voicesDir = new File(getContext().getCacheDir(), "voices");
+            if (!voicesDir.exists()) voicesDir.mkdirs();
+
+            String[] result = new String[n];
+            // First pass: build target file paths + kick off synthesis
+            // for anything not already cached.
+            for (int i = 0; i < n; i++) {
+                String text;
+                try { text = texts.getString(i); }
+                catch (JSONException e) { result[i] = null; continue; }
+                if (text == null || text.trim().isEmpty()) {
+                    result[i] = null;
+                    continue;
+                }
+                String hash = sha1(text);
+                File outFile = new File(voicesDir, "tts_" + hash + ".wav");
+                result[i] = outFile.getAbsolutePath();
+
+                if (outFile.exists() && outFile.length() > 0) {
+                    continue; // cache hit
+                }
+                String utterId = "u_" + i + "_" + hash;
+                CountDownLatch latch = new CountDownLatch(1);
+                ttsLatches.put(utterId, latch);
+                int rc;
+                try {
+                    rc = sharedTts.synthesizeToFile(text, null, outFile, utterId);
+                } catch (Throwable t) {
+                    rc = TextToSpeech.ERROR;
+                }
+                if (rc != TextToSpeech.SUCCESS) {
+                    ttsLatches.remove(utterId);
+                    latch.countDown();
+                    result[i] = null;
+                }
+                try {
+                    if (!latch.await(8, TimeUnit.SECONDS)) {
+                        ttsLatches.remove(utterId);
+                        result[i] = null;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result[i] = null;
+                }
+                // Verify the file actually landed (synth may "succeed"
+                // but write zero bytes on misconfigured voices).
+                if (result[i] != null && (!outFile.exists() || outFile.length() == 0)) {
+                    result[i] = null;
+                }
+            }
+
+            for (String p : result) pathsArr.put(p == null ? JSONObject.NULL : p);
+            JSObject ret = new JSObject();
+            ret.put("paths", pathsArr);
+            call.resolve(ret);
+        });
+    }
+
+    private static String sha1(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            byte[] bytes = md.digest(input.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            // Fallback that's stable but lower-quality: input hashCode
+            // padded out. Used only when SHA-1 is somehow unavailable
+            // (shouldn't happen on any Android we support).
+            return "h" + Integer.toHexString(input.hashCode());
+        }
+    }
+
     /**
      * Read a JS-side number as Long with a getDouble fallback. Capacitor 8's
      * PluginCall.getLong returns null for some JSON Number variants — we hit
@@ -329,6 +517,18 @@ public class ChainTimerPlugin extends Plugin {
         if (chainName != null) intent.putExtra(ChainTimerService.EXTRA_CHAIN_NAME, chainName);
         String planJson = call.getString("planJson", null);
         if (planJson != null) intent.putExtra(ChainTimerService.EXTRA_PLAN_JSON, planJson);
+        // Parallel-to-plan voice arrays (see ChainTimerService for the
+        // contract). Both ride as JSON strings to avoid Capacitor 8
+        // nested-array bridge quirks. Empty string means "no payload" —
+        // the service keeps whatever it had from the previous update.
+        String voicePathsJson = call.getString("voicePathsJson", null);
+        if (voicePathsJson != null && !voicePathsJson.isEmpty()) {
+            intent.putExtra(ChainTimerService.EXTRA_VOICE_PATHS_JSON, voicePathsJson);
+        }
+        String voiceEnabledJson = call.getString("voiceEnabledJson", null);
+        if (voiceEnabledJson != null && !voiceEnabledJson.isEmpty()) {
+            intent.putExtra(ChainTimerService.EXTRA_VOICE_ENABLED_JSON, voiceEnabledJson);
+        }
 
         // segmentStartedAtMs: effective wall-clock moment the current
         // segment started, with paused-time excluded. The service derives

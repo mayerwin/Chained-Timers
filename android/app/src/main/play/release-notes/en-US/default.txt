@@ -1,5 +1,5 @@
-v1.3.5 — per-chain & per-segment cue overrides + Android voice fix
+v1.3.6 — voice cues work when minimized + zero-latency segment names
 
-• Tap the bell on any chain or segment to override the default cues just for that scope: Sound, 3-2-1 tick, Voice, end-of-segment vibration (and Pre-start at the chain level). Segment beats chain beats app defaults.
-• Voice cues now use Android's native TTS engine — works reliably where the WebView's built-in speech engine didn't.
-• Settings split into "Default cues" (overridable) and "Other".
+• Every segment's name is now pre-rendered to a WAV file on chain start, cached in app storage. The foreground service plays the right file at each boundary — runs whether the WebView is open, locked, or backgrounded.
+• Zero TTS lag: the audio is on disk before the segment begins, so the voice fires the exact instant the boundary lands.
+• Files are reused across runs of the same chain.

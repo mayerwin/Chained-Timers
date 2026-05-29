@@ -394,42 +394,38 @@ const Audio = {
 // ============================================================
 
 const Voice = {
-  // The Web Speech (window.speechSynthesis) implementation inside the
-  // Capacitor Android WebView is unreliable: it silently no-ops on many
-  // OEM ROMs because the WebView lacks a bundled TTS bridge to the
-  // platform service. We route through @capacitor-community/text-to-
-  // speech when running native — that plugin calls Android's
-  // android.speech.tts.TextToSpeech directly, which the user has set up
-  // through the OS (Google TTS preinstalled on every supported device).
-  // Web fallback is unchanged.
-  _native() {
-    return window.Capacitor?.Plugins?.TextToSpeech || null;
+  // On Android (Capacitor), the JS engine pauses the moment the user
+  // backgrounds the app, so window.speechSynthesis / Voice.speak()
+  // never fire at segment boundaries. We pre-render every segment
+  // name to a WAV via the ChainTimer plugin BEFORE the chain starts,
+  // hand the file paths to the FGS, and let the service play the
+  // right file via MediaPlayer at each boundary — runs whether the
+  // WebView is alive or asleep, and has zero TTS latency because the
+  // audio is already on disk. On non-native (web/PWA) we still use
+  // window.speechSynthesis as the synth pathway.
+  _chainTimer() {
+    return window.Capacitor?.Plugins?.ChainTimer || null;
   },
 
-  // True when the platform can actually produce speech. Native plugin
-  // takes precedence (it's known-working on Android); Web Speech is
-  // accepted only when we're NOT inside a native shell — that's where
-  // it tends to silently fail.
+  // True when voice cues CAN actually fire on this platform. On native
+  // the FGS-via-pre-rendered-files path needs the ChainTimer plugin AND
+  // the (separate) TextToSpeech plugin used by prerenderVoices. On web
+  // we just need window.speechSynthesis.
   supported() {
-    if (this._native()) return true;
-    if (window.ChainedNative?.isNative) return false;
+    if (window.ChainedNative?.isNative) {
+      return !!this._chainTimer();
+    }
     return typeof window !== 'undefined' && 'speechSynthesis' in window;
   },
 
-  // Fire-and-forget speak. Cancels any in-flight utterance first so a
-  // user skipping segments rapidly doesn't queue announcements behind
-  // each other.
+  // Fire-and-forget speak. On native this is a NO-OP — the FGS service
+  // owns voice playback (it has the pre-rendered files and fires them
+  // at boundaries autonomously). Letting JS also speak via the plugin
+  // would double-speak in foreground. On web (no FGS), this still
+  // routes through window.speechSynthesis.
   speak(text) {
     if (!text) return;
-    const native = this._native();
-    if (native) {
-      (async () => {
-        try { await native.stop(); } catch {}
-        try { await native.speak({ text, rate: 1.0, pitch: 1.0, volume: 1.0 }); } catch {}
-      })();
-      return;
-    }
-    if (window.ChainedNative?.isNative) return;       // native without plugin = dead end
+    if (window.ChainedNative?.isNative) return;
     if (!('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
@@ -441,6 +437,38 @@ const Voice = {
     } catch (e) { /* noop */ }
   },
 
+  // Cached pre-rendered voice paths for the most recent chain. Keyed by
+  // a stable signature of (chain id + segment name list) so a chain
+  // can be re-run without re-rendering. Paths point at files in the
+  // app's cache dir; Android may evict them under storage pressure,
+  // in which case prerenderForChain will repopulate on next start.
+  _lastChainKey: null,
+  _lastChainPaths: [],
+
+  // Synthesize every segment name to a WAV file ON NATIVE, return the
+  // parallel array of paths (one per segment). On non-native this is
+  // a no-op — Web Speech can't pre-render to an addressable URL and
+  // window.speechSynthesis.speak() is already low-latency enough.
+  async prerenderForChain(segments) {
+    if (!window.ChainedNative?.isNative) return [];
+    const ct = this._chainTimer();
+    if (!ct) return [];
+    const texts = segments.map(s => s?.name || 'Segment');
+    const key   = texts.join('');
+    if (key === this._lastChainKey && this._lastChainPaths.length === texts.length) {
+      return this._lastChainPaths;
+    }
+    try {
+      const result = await ct.prerenderVoices({ texts });
+      const paths = Array.isArray(result?.paths) ? result.paths : [];
+      this._lastChainKey = key;
+      this._lastChainPaths = paths;
+      return paths;
+    } catch (e) {
+      return [];
+    }
+  },
+
   // First-call warm-up. Browsers (especially Chrome) load the voice
   // list ASYNCHRONOUSLY after first access; the platform TTS engine
   // also incurs a cold-start delay on its first synth. Both are
@@ -450,13 +478,11 @@ const Voice = {
   warmup() {
     if (this._warmed) return;
     this._warmed = true;
-    const native = this._native();
-    if (native) {
-      // Probing supported languages forces the Android TextToSpeech
-      // service to bind, which is what costs ~200-500ms on first use.
-      native.getSupportedLanguages?.().catch(() => {});
-      return;
-    }
+    // Native voice playback is now via pre-rendered files (FGS +
+    // MediaPlayer) — no warmup needed here. Warm-up only matters for
+    // the web/PWA Web Speech path, which is high-latency on first call
+    // because Chromium loads the voice list asynchronously.
+    if (window.ChainedNative?.isNative) return;
     if (!('speechSynthesis' in window)) return;
     try {
       const voices = window.speechSynthesis.getVoices();
@@ -471,13 +497,11 @@ const Voice = {
     } catch (e) { /* noop */ }
   },
 
-  // Per-chain re-warm. The Android TTS service stays bound after first
-  // use, so this is a no-op on native. On web we fire another silent
-  // utterance because the Web Speech pipeline can cool off during long
-  // idle stretches between chains.
+  // Per-chain re-warm. No-op on native (FGS owns playback; pre-render
+  // happens via prerenderForChain). On web, kick the Web Speech engine
+  // back to life — it can cool off during long idle stretches.
   warmupForChain(/* segments */) {
-    const native = this._native();
-    if (native) return;
+    if (window.ChainedNative?.isNative) return;
     if (!('speechSynthesis' in window)) return;
     try {
       const u = new SpeechSynthesisUtterance(' ');
@@ -744,8 +768,27 @@ const Engine = {
     // Announce the opening segment, gated by segment 0's effective voice
     // cue so a user-silenced first segment stays silent — consistent
     // behavior whether segment 1 is reached via chain start or _advance.
+    // On native, Voice.speak short-circuits — the FGS plays the
+    // pre-rendered file at segment 0 once it receives ACTION_START.
     if (this.segments[0] && effectiveCue(this.segments[0], this.chain, 'voice')) {
       Voice.speak(this.segments[0].name);
+    }
+
+    // Pre-render every segment's voice to a WAV file on native, then
+    // re-emit chain:start with the paths so the FGS can play them at
+    // boundaries (the very moment we cross from segment N to N+1,
+    // regardless of whether the WebView is alive). The first chain
+    // run does the synthesis; subsequent runs hit the file cache and
+    // resolve instantly. We don't await this — the chain proceeds
+    // immediately, and the FGS catches up on the next update. For
+    // segment 0 specifically, the prerender almost always finishes
+    // before the segment's first second elapses (typical short names
+    // synthesize in <100ms each), so even a low-latency segment-0
+    // voice usually lands on time.
+    if (window.ChainedNative?.isNative && willAnyVoiceFire) {
+      Voice.prerenderForChain(this.segments).then(() => {
+        if (this.isRunning) this._emitChainEvent('chain:fgsupdate');
+      });
     }
 
     this._persist();
@@ -786,6 +829,19 @@ const Engine = {
       const curSeg = this.segments[this.currentIndex] || null;
       const soundEnabled = effectiveCue(curSeg, this.chain, 'sound');
       const tickEnabled  = soundEnabled && effectiveCue(curSeg, this.chain, 'finalTick');
+      // Parallel arrays to segments[]: pre-rendered voice paths (one per
+      // segment, null = "no voice file ready yet"), plus the per-segment
+      // effective voice gate (already includes chain + segment cue
+      // overrides). The FGS uses voicePaths[i] gated by voiceEnabled[i].
+      // voicePaths comes from Voice._lastChainPaths (populated by the
+      // prerender promise that Engine.startChain kicks off); on the
+      // first chain:start emit it may still be empty — the
+      // chain:fgsupdate that follows the prerender resolution refreshes
+      // the FGS with the now-ready paths.
+      const voicePaths = (window.ChainedNative?.isNative && Voice._lastChainPaths.length === this.segments.length)
+        ? Voice._lastChainPaths
+        : null;
+      const voiceEnabled = this.segments.map(s => effectiveCue(s, this.chain, 'voice'));
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           name: this.chain?.name,
@@ -796,6 +852,8 @@ const Engine = {
           isPaused: this.isPaused,
           tickEnabled,
           soundEnabled,
+          voicePaths,
+          voiceEnabled,
         },
       }));
     } catch {}

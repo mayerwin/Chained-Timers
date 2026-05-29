@@ -418,7 +418,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -472,6 +472,19 @@
       segmentTotal: total,
       hasPrev:      currentIndex > 0,
       hasNext:      currentIndex < total - 1,
+      // Pre-rendered voice WAV paths + per-segment effective voice
+      // gates. Both ride as JSON strings to avoid round-tripping nested
+      // arrays through the Capacitor bridge — the FGS parses them on
+      // receipt. voicePaths may be null on the very first chain:start
+      // emit if the synthesis promise hasn't settled yet; the next
+      // chain:fgsupdate (fired from the engine's prerender resolve)
+      // carries the now-ready paths.
+      voicePathsJson:   Array.isArray(voicePaths)
+        ? JSON.stringify(voicePaths.map(p => (p == null ? null : String(p))))
+        : '',
+      voiceEnabledJson: Array.isArray(voiceEnabled)
+        ? JSON.stringify(voiceEnabled.map(v => !!v))
+        : '',
     };
   }
 

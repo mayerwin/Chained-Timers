@@ -24,6 +24,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -139,6 +140,20 @@ public class ChainTimerService extends Service {
     // and gates ALL SoundPool playback (chime, finale, tick) so the
     // service respects the same toggle the in-app Web Audio path does.
     public static final String EXTRA_SOUND_ENABLED         = "soundEnabled";
+    // JSON array of pre-rendered voice WAV file paths, one per segment
+    // index (null entries = no voice for that segment). Synthesized by
+    // ChainTimerPlugin.prerenderVoices at chain start and shipped to
+    // the FGS in every update — keeps the per-segment voice contract
+    // even when JS is suspended (the WebView pauses, so Voice.speak in
+    // js/app.js never fires; MediaPlayer in the FGS picks up the slack).
+    // Parallel JSON to planJson — voicePathsJson[i] corresponds to
+    // planJson[i].n.
+    public static final String EXTRA_VOICE_PATHS_JSON      = "voicePathsJson";
+    // Per-segment effective voice flag bitset, JSON array of booleans
+    // parallel to planJson. The FGS respects per-segment voice overrides
+    // (chain/seg cues collapsed to a final true/false by the JS-side
+    // resolver) when deciding whether to play the pre-rendered file.
+    public static final String EXTRA_VOICE_ENABLED_JSON    = "voiceEnabledJson";
 
     // The persistent run notification lives on a HIGH-importance channel
     // so the OS shows heads-up + vibration when the service detects a
@@ -218,6 +233,22 @@ public class ChainTimerService extends Service {
     private int finalThreeStartedAtIndex = -1;
     // User's "play tick in last 3 seconds" preference, mirrored from JS.
     private boolean tickEnabled = true;
+    // Pre-rendered voice WAV paths, parallel to `plan`. Null entries are
+    // segments with no voice (either rendering failed or the user
+    // disabled voice for that segment via the cue override sheet).
+    private final java.util.List<String>  voicePaths   = new ArrayList<>();
+    private final java.util.List<Boolean> voiceEnabled = new ArrayList<>();
+    // Last segment index for which we fired a voice playback. Set when
+    // the FGS service crosses a boundary into a new segment — guards
+    // against re-playing the same voice if onTick re-enters within the
+    // same segment. Cleared on every plan replace.
+    private int lastVoicedAtIndex = -1;
+    // MediaPlayer instance held while playing the current voice file.
+    // Reused (and released) on every new boundary so a long voice that
+    // hasn't finished can't queue up across multiple segments. Routes
+    // through the ALARM stream like every other in-service audio source
+    // so DND-bypass still works.
+    private android.media.MediaPlayer voicePlayer;
 
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
     private final Runnable tickRunnable = this::onTick;
@@ -289,6 +320,25 @@ public class ChainTimerService extends Service {
         tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
         soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
 
+        // Parallel arrays to the plan: pre-rendered voice file paths and
+        // per-segment effective voice gates. JS resolves chain.cues +
+        // seg.cues against app defaults to a boolean per segment, then
+        // hands the file paths over for the FGS to play at boundaries.
+        // Either array may be missing on legacy callers — voice then
+        // silently falls back to no playback.
+        String voicePathsJson = intent.getStringExtra(EXTRA_VOICE_PATHS_JSON);
+        if (voicePathsJson != null) {
+            java.util.List<String> parsedPaths = parseStringArray(voicePathsJson);
+            voicePaths.clear();
+            voicePaths.addAll(parsedPaths);
+        }
+        String voiceEnabledJson = intent.getStringExtra(EXTRA_VOICE_ENABLED_JSON);
+        if (voiceEnabledJson != null) {
+            java.util.List<Boolean> parsedEnabled = parseBoolArray(voiceEnabledJson);
+            voiceEnabled.clear();
+            voiceEnabled.addAll(parsedEnabled);
+        }
+
         if (ACTION_COMPLETE.equals(action)) {
             // JS-driven completion (foreground rAF reached chain end).
             // The in-app finale chime has already played through Web
@@ -349,8 +399,23 @@ public class ChainTimerService extends Service {
             if (nm != null) {
                 try { nm.cancel(NOTIFICATION_ID_COMPLETE); } catch (Throwable ignored) {}
             }
+            // Fresh chain — reset voice dedup so segment 0 plays.
+            lastVoicedAtIndex = -1;
         }
         running = true;
+
+        // Voice for the current segment. Single source of truth on Android:
+        // JS no longer speaks directly (see Voice.speak in app.js — it
+        // short-circuits on native), so this is the ONLY voice cue. Fires:
+        //   - ACTION_START : segment 0 (lastVoicedAtIndex = -1).
+        //   - ACTION_UPDATE following a JS-driven advance: curIndex
+        //     changed, so we voice the new segment.
+        // The autonomous-tick boundary in onTick() handles backgrounded
+        // segment advances via the same lastVoicedAtIndex dedup.
+        if (!paused && curIndex != lastVoicedAtIndex) {
+            lastVoicedAtIndex = curIndex;
+            maybePlayVoiceForSegment(curIndex);
+        }
 
         // Schedule the next tick — only when actively counting down. While
         // paused we leave the static notification in place; the chain
@@ -425,6 +490,22 @@ public class ChainTimerService extends Service {
         // only audio cue at the boundary in background.
         if (boundaryAlert) playChime();
 
+        // Voice announcement for the segment we just entered. Fires on
+        // EVERY autonomous boundary crossing (background) AND on every
+        // JS-driven UPDATE that lands on a new index (foreground). The
+        // dedup is per-segment-index (lastVoicedAtIndex), so a single
+        // segment only ever gets its voice played once — JS doesn't
+        // play voice on its side anymore (it relies on the FGS for
+        // both paths), so there's no double-speak risk. Pre-rendered
+        // file is the only audio source; if it's missing we silently
+        // skip rather than fall back to live TTS (which would put us
+        // back at the original "no voice when minimized" problem on
+        // every cold-start chain).
+        if (curIndex != idxBefore && curIndex != lastVoicedAtIndex) {
+            lastVoicedAtIndex = curIndex;
+            maybePlayVoiceForSegment(curIndex);
+        }
+
         // Last-3-second cue. We fire final3.wav ONCE per segment, the
         // moment remaining first drops into the ≤3s window. The WAV is
         // pre-rendered with three 660Hz pulses at exact 1.000s offsets,
@@ -480,6 +561,7 @@ public class ChainTimerService extends Service {
     private void stopRun() {
         running = false;
         tickHandler.removeCallbacks(tickRunnable);
+        releaseVoicePlayer();
         releaseWakeLock();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -903,6 +985,12 @@ public class ChainTimerService extends Service {
                 paused = false;
                 prevAlertIndex = curIndex;        // user-driven, no boundary alert
                 finalThreeStartedAtIndex = -1;
+                // Voice the new segment on user-skip too — the user
+                // wants to know what they jumped into.
+                if (curIndex != lastVoicedAtIndex) {
+                    lastVoicedAtIndex = curIndex;
+                    maybePlayVoiceForSegment(curIndex);
+                }
                 tickHandler.removeCallbacks(tickRunnable);
                 scheduleNextTick();
                 updated = true;
@@ -929,6 +1017,10 @@ public class ChainTimerService extends Service {
             paused = false;
             prevAlertIndex = curIndex;
             finalThreeStartedAtIndex = -1;
+            if (curIndex != lastVoicedAtIndex) {
+                lastVoicedAtIndex = curIndex;
+                maybePlayVoiceForSegment(curIndex);
+            }
             tickHandler.removeCallbacks(tickRunnable);
             scheduleNextTick();
             updated = true;
@@ -987,6 +1079,89 @@ public class ChainTimerService extends Service {
     private void playFinale()     { playSample(finaleSoundId); }
     private void playFinalThree() { playSample(finalThreeSoundId); }
 
+    /**
+     * Play the pre-rendered voice WAV for the given segment index, if
+     * it's allowed and exists. Routed through MediaPlayer (not SoundPool,
+     * which doesn't easily handle arbitrary file paths) on the ALARM
+     * audio stream so the chain remains DND-bypass-clean. Idempotent
+     * across overlapping calls: any in-flight playback is torn down
+     * before the new one starts.
+     */
+    private void maybePlayVoiceForSegment(int segIdx) {
+        if (segIdx < 0 || segIdx >= voicePaths.size()) return;
+        // Per-segment effective voice gate. Defaults to ON when the
+        // bitset wasn't supplied (legacy callers / first-run JS that
+        // hasn't shipped the new payload yet).
+        boolean voiceOn = segIdx >= voiceEnabled.size() || Boolean.TRUE.equals(voiceEnabled.get(segIdx));
+        if (!voiceOn) return;
+        String path = voicePaths.get(segIdx);
+        if (path == null) return;
+        File f = new File(path);
+        if (!f.exists() || f.length() == 0) return;
+
+        // Tear down any in-flight playback so a quick skip-skip can't
+        // pile two voices on top of each other.
+        releaseVoicePlayer();
+        try {
+            android.media.MediaPlayer mp = new android.media.MediaPlayer();
+            android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build();
+            mp.setAudioAttributes(attrs);
+            mp.setDataSource(path);
+            mp.setOnCompletionListener(p -> {
+                try { p.release(); } catch (Throwable ignored) {}
+                if (voicePlayer == p) voicePlayer = null;
+            });
+            mp.setOnErrorListener((p, what, extra) -> {
+                try { p.release(); } catch (Throwable ignored) {}
+                if (voicePlayer == p) voicePlayer = null;
+                return true;
+            });
+            mp.prepare();
+            mp.start();
+            voicePlayer = mp;
+        } catch (Throwable t) {
+            releaseVoicePlayer();
+        }
+    }
+
+    private void releaseVoicePlayer() {
+        android.media.MediaPlayer mp = voicePlayer;
+        voicePlayer = null;
+        if (mp == null) return;
+        try { if (mp.isPlaying()) mp.stop(); } catch (Throwable ignored) {}
+        try { mp.release(); } catch (Throwable ignored) {}
+    }
+
+    /** Parse a JSON array of strings (with JSONObject.NULL → null
+     *  entries) into a Java List. Tolerant of malformed JSON: returns
+     *  an empty list and the FGS treats missing entries as "no voice
+     *  for this segment." */
+    private static java.util.List<String> parseStringArray(String json) {
+        java.util.List<String> out = new ArrayList<>();
+        if (json == null || json.isEmpty()) return out;
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                Object v = arr.opt(i);
+                out.add((v == null || v == JSONObject.NULL) ? null : v.toString());
+            }
+        } catch (JSONException ignored) {}
+        return out;
+    }
+
+    private static java.util.List<Boolean> parseBoolArray(String json) {
+        java.util.List<Boolean> out = new ArrayList<>();
+        if (json == null || json.isEmpty()) return out;
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) out.add(arr.optBoolean(i, true));
+        } catch (JSONException ignored) {}
+        return out;
+    }
+
     @SuppressLint("WakelockTimeout")
     private void acquireWakeLock() {
         if (wakeLock == null) {
@@ -1020,6 +1195,7 @@ public class ChainTimerService extends Service {
         running = false;
         tickHandler.removeCallbacks(tickRunnable);
         releaseWakeLock();
+        releaseVoicePlayer();
         if (soundPool != null) {
             try { soundPool.release(); } catch (Throwable ignored) {}
             soundPool = null;
