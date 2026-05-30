@@ -1,5 +1,4 @@
-v1.3.8 — every chain cue honors the headset-routing setting
+v1.3.9 — zero-latency first chime
 
-• Chime, 3-2-1 tick, chain-end finale, AND voice now ALL play through the output you picked in "When a headset is connected". Previous version only routed voice.
-• Achieved by switching the cue pool from SoundPool to MediaPlayer instances kept prepared between plays — same low play latency, plus per-instance preferred-device binding.
-• Flip the routing pill mid-chain — the cue pool re-binds on the next segment.
+• The chime, 3-2-1 tick, and chain-end finale players are silently pre-warmed at chain start (volume=0 start → pause → restore volume). The audio thread and output buffer are allocated upfront, so the FIRST cue fires at the same low latency as every subsequent one.
+• Routing was already locked to the device you picked in "When a headset is connected"; warmup honors that too.

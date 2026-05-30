@@ -1076,8 +1076,40 @@ public class ChainTimerService extends Service {
             finalThreePlayer = createPreparedPlayer(R.raw.final3);
             finalePlayer     = createPreparedPlayer(R.raw.finale);
             applyAudioRouteToCuePool();
+            // Silent pre-warm so the FIRST real cue play has the same
+            // low latency as subsequent plays. MediaPlayer lazily allocates
+            // its audio thread / output-buffer on the first start(); doing
+            // that allocation under volume=0 means no audible chirp, but
+            // the buffer is ready for the real play that follows. Order
+            // matters: applyAudioRouteToCuePool() sets the preferred
+            // device BEFORE warming so the warmup binds to the right
+            // output the first time (otherwise the first real play would
+            // pay a re-binding hit). Pause + seek-back-to-0 leaves each
+            // player in the same "ready to replay" state as it would be
+            // after a normal cue fire.
+            warmCueMediaPlayers();
         } catch (Throwable t) {
             releaseCueMediaPlayers();
+        }
+    }
+
+    private void warmCueMediaPlayers() {
+        warmOneCue(chimePlayer);
+        warmOneCue(finalThreePlayer);
+        warmOneCue(finalePlayer);
+    }
+
+    private void warmOneCue(android.media.MediaPlayer mp) {
+        if (mp == null) return;
+        try {
+            mp.setVolume(0f, 0f); // silence — no audible output during warmup
+            mp.start();           // triggers audio-thread + buffer allocation
+            mp.pause();            // immediately stop; buffer remains warm
+            mp.seekTo(0);          // reset playback position for the real play
+            mp.setVolume(1f, 1f); // restore normal volume for subsequent plays
+        } catch (Throwable ignored) {
+            // A failed warmup just means the FIRST real play might cost
+            // an extra ~50ms; not worth aborting setup over.
         }
     }
 
