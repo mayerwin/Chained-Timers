@@ -2170,8 +2170,16 @@ const UI = {
 
   // Reflect the persisted audio-route value onto the 3-segment pill.
   // Stored value is one of 'headset' | 'both' | 'speaker'; any unknown
-  // value collapses to 'headset' (the default).
+  // value collapses to 'headset' (the default). The whole row is hidden
+  // on non-native platforms — browsers route through whatever the OS
+  // picked as the default output and we don't have the permission scope
+  // (setSinkId needs persistent device-selection) to override that.
+  // Showing the pill on web would be lying about what the setting does.
   _syncAudioRoutePill() {
+    const row = document.getElementById('setting-row-route');
+    if (!row) return;
+    row.hidden = !window.ChainedNative?.isNative;
+    if (row.hidden) return;
     const cur = Store.getSettings().audioRoute || 'headset';
     const validCur = ['headset', 'both', 'speaker'].includes(cur) ? cur : 'headset';
     const pill = document.getElementById('setting-route');

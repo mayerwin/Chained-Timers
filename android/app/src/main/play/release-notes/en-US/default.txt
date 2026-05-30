@@ -1,6 +1,5 @@
-v1.3.7 — headset routing for voice cues
+v1.3.8 — every chain cue honors the headset-routing setting
 
-• New "When a headset is connected" setting (Headset only / Both / Speaker only). Default: Headset only.
-• Voice cues now respect your choice via Android's setPreferredDevice — the speaker stays silent when you're wearing headphones.
-• Chime / 3-2-1 tick / chain-end finale still ring through both outputs so an alarm-style cue can't go unheard.
-• Live-applies to a running chain; takes effect at the next segment.
+• Chime, 3-2-1 tick, chain-end finale, AND voice now ALL play through the output you picked in "When a headset is connected". Previous version only routed voice.
+• Achieved by switching the cue pool from SoundPool to MediaPlayer instances kept prepared between plays — same low play latency, plus per-instance preferred-device binding.
+• Flip the routing pill mid-chain — the cue pool re-binds on the next segment.

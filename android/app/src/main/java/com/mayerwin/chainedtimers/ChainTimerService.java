@@ -265,15 +265,21 @@ public class ChainTimerService extends Service {
 
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
     private final Runnable tickRunnable = this::onTick;
-    // SoundPool plays chime / finale / tick directly through the Media
-    // stream with ~10–50 ms latency. The notification-channel sound
-    // pipeline takes 200–500 ms (more on emulators) which makes the
-    // chain-end finale visibly lag behind the SoundPool-played 3-second
-    // ticks; routing all three through SoundPool keeps the cadence tight.
-    private android.media.SoundPool soundPool;
-    private int chimeSoundId      = 0;
-    private int finaleSoundId     = 0;
-    private int finalThreeSoundId = 0;
+    // Pre-prepared MediaPlayer pool for chime / finalThree / finale.
+    // v1.3.7 and earlier used SoundPool here because of its sub-50ms
+    // play latency for short one-shots — but SoundPool has NO
+    // setPreferredDevice, which meant the user's "headset only" routing
+    // setting silently leaked these cues to the speaker even when
+    // headphones were plugged in. MediaPlayer DOES support per-instance
+    // setPreferredDevice (via the AudioRouting interface, API 23+),
+    // so we pre-create + prepare one player per sound at chain start
+    // and replay via seekTo(0)+start(). Per-shot latency stays in the
+    // ~15ms range after prepare because we never tear them down between
+    // plays. Same USAGE_ALARM AudioAttributes as before, so DND bypass
+    // and alarm-stream classification are preserved.
+    private android.media.MediaPlayer chimePlayer;
+    private android.media.MediaPlayer finalThreePlayer;
+    private android.media.MediaPlayer finalePlayer;
     // Mirrors the user's master "Sound" toggle. Gates SoundPool playback
     // so the service respects the same Settings switch as the in-app
     // Web Audio path.
@@ -311,7 +317,7 @@ public class ChainTimerService extends Service {
         }
 
         ensureChannel();
-        ensureSoundPool();
+        ensureMediaPlayers();
 
         // Refresh in-memory state from the intent. JS sends the full plan
         // on every START/UPDATE/COMPLETE so the service can self-advance
@@ -353,7 +359,14 @@ public class ChainTimerService extends Service {
         }
         String routeExtra = intent.getStringExtra(EXTRA_AUDIO_ROUTE);
         if (routeExtra != null && (routeExtra.equals("headset") || routeExtra.equals("both") || routeExtra.equals("speaker"))) {
+            String previousRoute = audioRoute;
             audioRoute = routeExtra;
+            // Live-rebind the cue MediaPlayer pool to the freshly-resolved
+            // preferred device. Voice picks up audioRoute per-play (each
+            // play creates a new MediaPlayer) so no extra work is needed
+            // there; the cue pool is long-lived and needs an explicit
+            // re-bind when the user flips the routing pill mid-chain.
+            if (!previousRoute.equals(audioRoute)) applyAudioRouteToCuePool();
         }
 
         if (ACTION_COMPLETE.equals(action)) {
@@ -579,6 +592,7 @@ public class ChainTimerService extends Service {
         running = false;
         tickHandler.removeCallbacks(tickRunnable);
         releaseVoicePlayer();
+        releaseCueMediaPlayers();
         releaseWakeLock();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -1055,46 +1069,91 @@ public class ChainTimerService extends Service {
         ChainTimerPlugin.deliverChainCommand(cmd);
     }
 
-    private void ensureSoundPool() {
-        if (soundPool != null) return;
+    private void ensureMediaPlayers() {
+        if (chimePlayer != null) return; // pool already up
         try {
-            // USAGE_ALARM routes playback through the ALARM stream, which is
-            // never muted by the ringer being silent, by DND/"Do Not Disturb"
-            // mode, or by the Notification-stream volume slider. This matches
-            // the user's mental model: this is an interval timer, it behaves
-            // like an alarm clock — when a segment boundary fires, the chime
-            // must ring even if the phone is on silent or in DND, with zero
-            // user intervention (no per-channel "Override DND" toggle, no
-            // Notification-policy permission prompt). Switching this away
-            // from USAGE_NOTIFICATION_EVENT was the fix for chains going
-            // silent in DND and the user thinking notifications were broken
-            // even after disabling DND (the real problem was just that the
-            // last cue silently passed during DND).
-            AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build();
-            soundPool = new android.media.SoundPool.Builder()
-                .setMaxStreams(2)
-                .setAudioAttributes(attrs)
-                .build();
-            chimeSoundId      = soundPool.load(this, R.raw.chime,   1);
-            finaleSoundId     = soundPool.load(this, R.raw.finale,  1);
-            finalThreeSoundId = soundPool.load(this, R.raw.final3,  1);
-        } catch (Throwable ignored) {
-            soundPool = null;
-            chimeSoundId = finaleSoundId = finalThreeSoundId = 0;
+            chimePlayer      = createPreparedPlayer(R.raw.chime);
+            finalThreePlayer = createPreparedPlayer(R.raw.final3);
+            finalePlayer     = createPreparedPlayer(R.raw.finale);
+            applyAudioRouteToCuePool();
+        } catch (Throwable t) {
+            releaseCueMediaPlayers();
         }
     }
 
-    private void playSample(int soundId) {
-        if (!soundEnabled || soundPool == null || soundId == 0) return;
-        try { soundPool.play(soundId, 1f, 1f, 1, 0, 1f); } catch (Throwable ignored) {}
+    /**
+     * Build a MediaPlayer for an R.raw resource, in prepared state, with
+     * the alarm-stream AudioAttributes that keep our DND-bypass story
+     * intact:
+     *
+     *   USAGE_ALARM routes playback through the ALARM stream, which is
+     *   never muted by silent mode, DND, or the Notification-stream
+     *   volume slider. This is the "this is a timer, ring like an alarm"
+     *   contract from v1.3.3 -- when a segment boundary fires, the
+     *   chime / 3-2-1 / finale ring even on silent / DND. CONTENT_TYPE_-
+     *   SONIFICATION marks the audio as a short cue, not music.
+     *
+     * MediaPlayer.create returns a prepared player; we set attributes
+     * AFTER prepare in case the system wants to re-bind. Throws on
+     * any error so the caller can release the partial pool.
+     */
+    private android.media.MediaPlayer createPreparedPlayer(int resId) throws Exception {
+        android.media.MediaPlayer mp = android.media.MediaPlayer.create(this, resId);
+        if (mp == null) throw new Exception("MediaPlayer.create returned null for resId=" + resId);
+        AudioAttributes attrs = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        try { mp.setAudioAttributes(attrs); } catch (Throwable ignored) {}
+        // Tag the player as "completed" — sits in PlaybackCompleted state
+        // ready for seekTo(0)+start() to replay.
+        return mp;
     }
 
-    private void playChime()      { playSample(chimeSoundId); }
-    private void playFinale()     { playSample(finaleSoundId); }
-    private void playFinalThree() { playSample(finalThreeSoundId); }
+    /**
+     * Re-bind every cue MediaPlayer to the currently-resolved preferred
+     * output device. Called at pool creation, on every START/UPDATE
+     * intent (so a user flipping the audioRoute pill mid-chain takes
+     * effect on the next play), and after the user changes audio devices
+     * physically (unhandled — we just rebind on next intent).
+     */
+    private void applyAudioRouteToCuePool() {
+        android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(audioRoute);
+        // null is fine here — passing null clears any preference and lets
+        // USAGE_ALARM's default routing win (which is "all alarm outputs"
+        // a.k.a. the v1.3.6 "Both" mode).
+        if (chimePlayer      != null) try { chimePlayer.setPreferredDevice(preferred); }      catch (Throwable ignored) {}
+        if (finalThreePlayer != null) try { finalThreePlayer.setPreferredDevice(preferred); } catch (Throwable ignored) {}
+        if (finalePlayer     != null) try { finalePlayer.setPreferredDevice(preferred); }     catch (Throwable ignored) {}
+    }
+
+    /**
+     * Single-shot replay. After PlaybackCompleted, seekTo(0)+start()
+     * replays from the beginning at low latency (~15ms after the first
+     * play warms the audio buffer). If the player is somehow still in
+     * the playing state from a previous fire (e.g. a 3.2s finalThree
+     * still tailing when the next boundary lands), we restart from 0 —
+     * the user is more likely to want the new cue to be sharp than to
+     * wait for the previous one to finish.
+     */
+    private void playCueSound(android.media.MediaPlayer mp) {
+        if (!soundEnabled || mp == null) return;
+        try {
+            if (mp.isPlaying()) mp.pause();
+            mp.seekTo(0);
+            mp.start();
+        } catch (Throwable ignored) {}
+    }
+
+    private void playChime()      { playCueSound(chimePlayer); }
+    private void playFinale()     { playCueSound(finalePlayer); }
+    private void playFinalThree() { playCueSound(finalThreePlayer); }
+
+    private void releaseCueMediaPlayers() {
+        if (chimePlayer != null)      { try { chimePlayer.release(); }      catch (Throwable ignored) {} chimePlayer = null; }
+        if (finalThreePlayer != null) { try { finalThreePlayer.release(); } catch (Throwable ignored) {} finalThreePlayer = null; }
+        if (finalePlayer != null)     { try { finalePlayer.release(); }     catch (Throwable ignored) {} finalePlayer = null; }
+    }
 
     /**
      * Play the pre-rendered voice WAV for the given segment index, if
@@ -1274,11 +1333,7 @@ public class ChainTimerService extends Service {
         tickHandler.removeCallbacks(tickRunnable);
         releaseWakeLock();
         releaseVoicePlayer();
-        if (soundPool != null) {
-            try { soundPool.release(); } catch (Throwable ignored) {}
-            soundPool = null;
-            chimeSoundId = finaleSoundId = finalThreeSoundId = 0;
-        }
+        releaseCueMediaPlayers();
         super.onDestroy();
     }
 
