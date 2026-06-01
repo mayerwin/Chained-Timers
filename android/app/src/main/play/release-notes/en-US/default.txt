@@ -1,4 +1,9 @@
-v1.3.9 — zero-latency first chime
+v1.4.0 — Run two chains at once
 
-• The chime, 3-2-1 tick, and chain-end finale players are silently pre-warmed at chain start (volume=0 start → pause → restore volume). The audio thread and output buffer are allocated upfront, so the FIRST cue fires at the same low latency as every subsequent one.
-• Routing was already locked to the device you picked in "When a headset is connected"; warmup honors that too.
+• Long-press a chain in the library to enter selection, tap a second, then Start — both begin at t=0.
+• A chip strip on the run view lets you swap focus with a tap. Long-press a chip to stop just that chain.
+• Tap an already-running chain to jump to its run view.
+• Editing is disabled while a chain is running.
+• Single-chain UX unchanged.
+
+Background lock-screen notifications track only the focused chain in v1.4.0; per-chain stacks ship in v1.4.1.

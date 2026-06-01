@@ -852,21 +852,50 @@
 
   function dispatch(type, detail) {
     if (type === 'schedule')       return serialize(() => scheduleAll(detail));
-    if (type === 'cancel')         return serialize(() => cancelAll());
+    if (type === 'cancel')         return serialize(() => cancelAll(detail));
     if (type === 'complete')       return serialize(() => completeStatus(detail));
     if (type === 'fgs-update')     return serialize(() => refreshFgsOnly(detail));
   }
 
-  window.addEventListener('chain:start',      e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
-  window.addEventListener('chain:reschedule', e => preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail }));
+  // v1.4 — multi-run filter. Events carry isFocused; the bridge only
+  // forwards focused-run events to the native FGS slot. Background runs
+  // tick in JS but don't drive the (singleton, for now) native service.
+  // chain:cancel and chain:complete from a focused run are kept; from a
+  // background run we just cancel that run's per-run state (no FGS work).
+  // v1.4.1 will replace this with true per-run FGS notifications.
+  const shouldDriveFgs = (detail) => !!detail && detail.isFocused !== false;
+
+  window.addEventListener('chain:start',      e => {
+    if (!shouldDriveFgs(e.detail)) return;
+    preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail });
+  });
+  window.addEventListener('chain:reschedule', e => {
+    if (!shouldDriveFgs(e.detail)) return;
+    preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail });
+  });
   // Natural segment advance: alarms still valid, just refresh the FGS
   // notification (title, chronometer, action button). No alarm churn.
-  window.addEventListener('chain:fgsupdate',  e => preWarmDone ? dispatch('fgs-update', e.detail) : queuedEvents.push({ type: 'fgs-update', detail: e.detail }));
-  window.addEventListener('chain:cancel',     ()  => preWarmDone ? dispatch('cancel')           : queuedEvents.push({ type: 'cancel' }));
-  // Chain finished naturally: hand off to the FGS service (or cleanup
-  // the LocalNotifications fallback) so a single "✓ Chain complete"
-  // notification replaces the persistent row in place.
-  window.addEventListener('chain:complete',   e => preWarmDone ? dispatch('complete', e?.detail) : queuedEvents.push({ type: 'complete', detail: e?.detail }));
+  window.addEventListener('chain:fgsupdate',  e => {
+    if (!shouldDriveFgs(e.detail)) return;
+    preWarmDone ? dispatch('fgs-update', e.detail) : queuedEvents.push({ type: 'fgs-update', detail: e.detail });
+  });
+  // chain:cancel always goes through — when the focused run is stopped
+  // by the user, we tear down the FGS. A background run's cancel still
+  // arrives here too, but the bridge treats it as a no-op for the FGS
+  // (there's nothing to tear down for a background run in v1.4.0).
+  window.addEventListener('chain:cancel',     e => {
+    // If still running runs in JS, only release the FGS when no focused
+    // run remains. Cheap check: the engine fires chain:reschedule for
+    // the newly-focused run right after (see Engine.focus + Engine._stopRun
+    // promote path), so we can just always cancel and let the next
+    // reschedule reinstate the FGS for whoever's focused now.
+    if (e && e.detail && e.detail.isFocused === false) return;
+    preWarmDone ? dispatch('cancel', e?.detail) : queuedEvents.push({ type: 'cancel', detail: e?.detail });
+  });
+  window.addEventListener('chain:complete',   e => {
+    if (!shouldDriveFgs(e.detail)) return;
+    preWarmDone ? dispatch('complete', e?.detail) : queuedEvents.push({ type: 'complete', detail: e?.detail });
+  });
 
   // Pre-warm: request permission + create channel + check exact-alarm
   // grant up front, before any chain starts, so the OS dialog isn't

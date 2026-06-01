@@ -1,4 +1,4 @@
-/* ==========================================================================
+﻿/* ==========================================================================
    Chained Timers
    ========================================================================== */
 
@@ -33,13 +33,13 @@ const DEFAULT_SETTINGS = {
   finalTick: true,
   notifsAsked: false,
   // Audio routing when a headset is connected:
-  //   'headset' (default) — audio plays only on the headset; speaker stays silent
-  //   'both'              — audio plays on speaker + headset (alarm-clock style)
-  //   'speaker'           — audio plays only on the speaker
+  //   'headset' (default) â€” audio plays only on the headset; speaker stays silent
+  //   'both'              â€” audio plays on speaker + headset (alarm-clock style)
+  //   'speaker'           â€” audio plays only on the speaker
   // When no headset is connected all three behave the same (speaker).
   // Currently honored by the FGS voice MediaPlayer; chime/finalThree/finale
   // still route via USAGE_ALARM (system policy = both speakers) because
-  // SoundPool has no per-play setPreferredDevice. Native-platform only —
+  // SoundPool has no per-play setPreferredDevice. Native-platform only â€”
   // browsers route through the system default output, which is what the
   // OS chose when the user plugged in.
   audioRoute: 'headset',
@@ -53,11 +53,11 @@ const TEMPLATES = [
     loops: 1,
     segments: [
       { kind: 'segment', name: 'Front plank',    duration: 90, color: 'amber' },
-      { kind: 'segment', name: 'Side plank — L', duration: 60, color: 'rust'  },
-      { kind: 'segment', name: 'Side plank — R', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank â€” L', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank â€” R', duration: 60, color: 'rust'  },
       { kind: 'segment', name: 'Front plank',    duration: 90, color: 'amber' },
-      { kind: 'segment', name: 'Side plank — L', duration: 60, color: 'rust'  },
-      { kind: 'segment', name: 'Side plank — R', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank â€” L', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank â€” R', duration: 60, color: 'rust'  },
       { kind: 'segment', name: 'Final hold',     duration: 90, color: 'sage'  },
     ],
   },
@@ -73,7 +73,7 @@ const TEMPLATES = [
   },
   {
     name: 'EMOM 10',
-    desc: 'Every Minute on the Minute — ten rounds of one minute. Do your reps, then rest.',
+    desc: 'Every Minute on the Minute â€” ten rounds of one minute. Do your reps, then rest.',
     color: 'indigo',
     loops: 10,
     segments: [
@@ -188,6 +188,13 @@ const Store = {
 
   deleteChain(id) {
     if (!id) return;
+    // v1.4 — defend against orphan EngineRuns. If the deleted chain is
+    // running, stop the run first so it doesn't keep ticking against a
+    // chain that no longer exists in the library. typeof check guards
+    // module-load order (Store is defined before Engine).
+    if (typeof Engine !== 'undefined' && Engine?.isChainRunning?.(id)) {
+      Engine.stopRun(id);
+    }
     this.state.chains = this.state.chains.filter(c => c.id !== id);
     // also strip references to it from other chains
     this.state.chains.forEach(c => {
@@ -255,7 +262,7 @@ function expandChain(rootChain, opts = {}) {
           expanded.forEach(es => {
             out.push({
               ...es,
-              path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`, ...es.path],
+              path: [`${rootChain.name}${loops > 1 ? ` Â· ${loop+1}/${loops}` : ''}`, ...es.path],
             });
           });
         }
@@ -264,7 +271,7 @@ function expandChain(rootChain, opts = {}) {
           name: seg.name || 'Segment',
           duration: Math.max(1, seg.duration | 0),
           color: seg.color || rootChain.color || 'amber',
-          path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
+          path: [`${rootChain.name}${loops > 1 ? ` Â· ${loop+1}/${loops}` : ''}`],
         };
         // Propagate per-segment cue overrides through expansion so the
         // engine resolver can see them. Both the v1.3.5 `seg.cues` shape
@@ -298,7 +305,7 @@ function isAncestorOf(maybeAncestorId, descendantChain, visited = new Set()) {
 }
 
 // ============================================================
-// Audio cues (Web Audio API — generated tones, no asset files)
+// Audio cues (Web Audio API â€” generated tones, no asset files)
 // ============================================================
 
 const Audio = {
@@ -350,12 +357,12 @@ const Audio = {
     setTimeout(() => this.beep({ freq: 1320, duration: 0.28, volume: 0.22, type: 'sine' }), 120);
   },
 
-  // 3-2-1 countdown — three 660Hz square pulses scheduled in ONE call
+  // 3-2-1 countdown â€” three 660Hz square pulses scheduled in ONE call
   // via the Web Audio scheduler at the precise audio-clock moments
   // t+0.000, t+1.000, t+2.000. Before v1.3.4 these fired as three
   // separate Audio.tick() calls from the engine's rAF loop, with the
   // spacing depending on whichever rAF frame happened to cross each
-  // Math.ceil boundary — and the user reported the spacing felt
+  // Math.ceil boundary â€” and the user reported the spacing felt
   // irregular. Scheduling all three at once moves the timing guarantee
   // out of the JS event loop and into the audio thread, which plays
   // them gap-free at sample-rate precision (same approach as concatenated
@@ -410,7 +417,7 @@ const Voice = {
   // never fire at segment boundaries. We pre-render every segment
   // name to a WAV via the ChainTimer plugin BEFORE the chain starts,
   // hand the file paths to the FGS, and let the service play the
-  // right file via MediaPlayer at each boundary — runs whether the
+  // right file via MediaPlayer at each boundary â€” runs whether the
   // WebView is alive or asleep, and has zero TTS latency because the
   // audio is already on disk. On non-native (web/PWA) we still use
   // window.speechSynthesis as the synth pathway.
@@ -429,7 +436,7 @@ const Voice = {
     return typeof window !== 'undefined' && 'speechSynthesis' in window;
   },
 
-  // Fire-and-forget speak. On native this is a NO-OP — the FGS service
+  // Fire-and-forget speak. On native this is a NO-OP â€” the FGS service
   // owns voice playback (it has the pre-rendered files and fires them
   // at boundaries autonomously). Letting JS also speak via the plugin
   // would double-speak in foreground. On web (no FGS), this still
@@ -453,27 +460,33 @@ const Voice = {
   // can be re-run without re-rendering. Paths point at files in the
   // app's cache dir; Android may evict them under storage pressure,
   // in which case prerenderForChain will repopulate on next start.
-  _lastChainKey: null,
-  _lastChainPaths: [],
+  // v1.4 — per-chain cache (Map keyed by chain id) so concurrent runs
+  // don't trash each other's path arrays. Legacy _lastChainKey /
+  // _lastChainPaths still exposed as getters for testability hooks.
+  _chainPaths: new Map(),
+  _chainKeys:  new Map(),
+  get _lastChainKey()   { return this._chainKeys.size ? [...this._chainKeys.values()].pop() : null; },
+  get _lastChainPaths() { return this._chainPaths.size ? [...this._chainPaths.values()].pop() : []; },
 
   // Synthesize every segment name to a WAV file ON NATIVE, return the
   // parallel array of paths (one per segment). On non-native this is
-  // a no-op — Web Speech can't pre-render to an addressable URL and
+  // a no-op â€” Web Speech can't pre-render to an addressable URL and
   // window.speechSynthesis.speak() is already low-latency enough.
-  async prerenderForChain(segments) {
+  async prerenderForChain(segments, chainId) {
     if (!window.ChainedNative?.isNative) return [];
     const ct = this._chainTimer();
     if (!ct) return [];
     const texts = segments.map(s => s?.name || 'Segment');
     const key   = texts.join('');
-    if (key === this._lastChainKey && this._lastChainPaths.length === texts.length) {
-      return this._lastChainPaths;
+    const id    = chainId || '__default__';
+    if (this._chainKeys.get(id) === key && this._chainPaths.get(id)?.length === texts.length) {
+      return this._chainPaths.get(id);
     }
     try {
       const result = await ct.prerenderVoices({ texts });
       const paths = Array.isArray(result?.paths) ? result.paths : [];
-      this._lastChainKey = key;
-      this._lastChainPaths = paths;
+      this._chainKeys.set(id, key);
+      this._chainPaths.set(id, paths);
       return paths;
     } catch (e) {
       return [];
@@ -490,7 +503,7 @@ const Voice = {
     if (this._warmed) return;
     this._warmed = true;
     // Native voice playback is now via pre-rendered files (FGS +
-    // MediaPlayer) — no warmup needed here. Warm-up only matters for
+    // MediaPlayer) â€” no warmup needed here. Warm-up only matters for
     // the web/PWA Web Speech path, which is high-latency on first call
     // because Chromium loads the voice list asynchronously.
     if (window.ChainedNative?.isNative) return;
@@ -510,7 +523,7 @@ const Voice = {
 
   // Per-chain re-warm. No-op on native (FGS owns playback; pre-render
   // happens via prerenderForChain). On web, kick the Web Speech engine
-  // back to life — it can cool off during long idle stretches.
+  // back to life â€” it can cool off during long idle stretches.
   warmupForChain(/* segments */) {
     if (window.ChainedNative?.isNative) return;
     if (!('speechSynthesis' in window)) return;
@@ -589,13 +602,13 @@ const Notif = {
     // In the native shell, the OS-scheduled LocalNotifications handle every
     // segment transition. Firing a duplicate Web Notification here would
     // either show twice or hang on navigator.serviceWorker.ready (no SW
-    // is registered in native builds — see init()).
+    // is registered in native builds â€” see init()).
     if (window.ChainedNative?.isNative) return;
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
     try {
       // Prefer SW registration so notifications persist if tab becomes inactive,
-      // but never block on it — Promise.race with a short timeout.
+      // but never block on it â€” Promise.race with a short timeout.
       const reg = await Promise.race([
         navigator.serviceWorker?.ready ?? Promise.resolve(null),
         new Promise(resolve => setTimeout(() => resolve(null), 500)),
@@ -641,20 +654,20 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 }[c]));
 
 // ============================================================
-// Cue overrides — 3-level inheritance (app default → chain → segment)
+// Cue overrides â€” 3-level inheritance (app default â†’ chain â†’ segment)
 // ============================================================
 //
 // Five user-facing cues can be overridden: sound, finalTick, voice,
 // vibrate, prestart. Segment level supports the first four (prestart
-// is meaningless on a single segment — it only fires once at chain
+// is meaningless on a single segment â€” it only fires once at chain
 // start). Each level stores its overrides under a `cues` object whose
 // keys are tri-state:
 //
-//   undefined  → inherit from the next level up (or the app default)
-//   true       → explicit ON, regardless of inherited value
-//   false      → explicit OFF, regardless of inherited value
+//   undefined  â†’ inherit from the next level up (or the app default)
+//   true       â†’ explicit ON, regardless of inherited value
+//   false      â†’ explicit OFF, regardless of inherited value
 //
-// Resolution walks segment.cues → chain.cues → Store.getSettings().
+// Resolution walks segment.cues â†’ chain.cues â†’ Store.getSettings().
 // Stored explicitly only when the user has flipped away from the
 // inherited value, so unmodified chains/segments serialize cleanly
 // without dragging along default-redundant cue objects. The legacy
@@ -676,8 +689,8 @@ function readChainCue(chain, key) {
   return chain?.cues?.[key];
 }
 
-// Public resolver. Walks segment → chain → app default. Returns a
-// concrete boolean — never undefined — so callsites can `if (cue)`
+// Public resolver. Walks segment â†’ chain â†’ app default. Returns a
+// concrete boolean â€” never undefined â€” so callsites can `if (cue)`
 // without extra guards.
 function effectiveCue(seg, chain, key) {
   const s = readSegCue(seg, key);
@@ -703,7 +716,7 @@ function inheritedCue(level, chain, key) {
   return !!Store.getSettings()[key];
 }
 
-// Setter — writes only when the user actually overrides, deletes the key
+// Setter â€” writes only when the user actually overrides, deletes the key
 // when they reset to "inherit." Keeps stored JSON minimal.
 function setCueOverride(holder, key, value) {
   if (value == null) {
@@ -718,45 +731,94 @@ function setCueOverride(holder, key, value) {
 }
 
 // ============================================================
-// Timer Engine
+// Timer Engine â€” multi-run capable
 // ============================================================
-
+//
+// v1.4 â€” the engine supports up to 2 concurrent chain runs. Each
+// active chain has its own EngineRun instance with independent state
+// (currentIndex, segmentStartedAtWall, paused state, rAF loop,
+// persistence key). The Engine coordinator keeps the focused run's
+// state surfaced under the old singleton API (Engine.chain, .segments,
+// .isRunning, .pause(), .skipNext(), â€¦) so all existing single-chain
+// callsites continue to work without modification. When 2 chains are
+// running, UI calls Engine.focus(chainId) to swap which run the
+// coordinator's fields point at; the chip strip in the run view drives
+// this on tap.
+//
+// Why 2 (not N): the user constraint is "no more than 2." Capping at 2
+// keeps the UX surface manageable (one chip strip, one focused timer,
+// trivial promotion logic when the primary ends) and the audio mixing
+// honest (Android can mix unlimited USAGE_ALARM streams but two
+// simultaneous cues is the realistic upper bound).
+//
 // All elapsed-time math is wall-clock (Date.now) because the Capacitor
 // Android WebView pauses JS timers + frame callbacks (and may freeze
 // performance.now) when the activity is backgrounded or the screen
 // locks. Wall-clock is the only source that keeps ticking across freezes,
 // so the engine can correctly catch up multiple segments when the user
 // returns to the app. performance.now is used only for the rAF cadence.
-const Engine = {
-  chain: null,
-  segments: [],
-  currentIndex: 0,
-  segmentStartedAtWall: 0,  // Date.now() when current segment "began" (paused-time excluded)
-  pausedAtWall: 0,          // Date.now() at moment of pause
-  pausedDuration: 0,        // total ms paused within this segment (wall-clock)
-  isRunning: false,
-  isPaused: false,
-  rafId: null,
-  onTick: null,
-  onSegmentChange: null,
-  onComplete: null,
-  totalElapsed: 0,          // accumulated elapsed ms across all completed segments
-  finalThreeFiredFor: -1,   // currentIndex for which we already triggered the 3-2-1 burst
-  warningOn: false,
 
-  startChain(chain) {
-    this.chain = chain;
-    this.segments = expandChain(chain);
-    if (!this.segments.length) {
-      Toast.show('Chain has no segments');
-      return false;
+const MAX_CONCURRENT_RUNS = 2;
+const RUN_PERSIST_PREFIX  = 'chained-timers/run/v2/';
+const RUN_PERSIST_LEGACY  = 'chained-timers/run/v1';  // single-run v1.3.x snapshot
+
+// A single chain's runtime state. Instantiated by Engine when a chain
+// is started; lives until the user stops it or it completes naturally.
+// All previously singleton-scoped Engine fields and methods live here.
+class EngineRun {
+  constructor(chain) {
+    this.id           = chain.id;
+    this.chain        = chain;
+    this.segments     = expandChain(chain);
+    this.currentIndex = 0;
+    this.segmentStartedAtWall = 0;
+    this.pausedAtWall = 0;
+    this.pausedDuration = 0;
+    this.isRunning = false;
+    this.isPaused  = false;
+    this.rafId     = null;
+    this.totalElapsed = 0;
+    this.finalThreeFiredFor = -1;
+    this.warningOn = false;
+  }
+
+  // ---- bridge helpers ----------------------------------------
+  // Fire UI callbacks ONLY when this run is the focused one (the only
+  // one drawing the big timer). Background runs still tick autonomously
+  // but their state surfaces via the chip strip + native notification,
+  // not the big clock â€” so onTick / onSegmentChange must be silent for
+  // them. onComplete fires regardless (a finished background run wants
+  // to be cleaned up + announced; the run view promotes another run if
+  // possible or returns to the library).
+  _isFocused() { return Engine._focusedId === this.id; }
+  _cbTick(seg, remaining, elapsed) {
+    if (this._isFocused() && typeof Engine.onTick === 'function') {
+      Engine.onTick(seg, remaining, elapsed);
     }
+  }
+  _cbSegmentChange() {
+    if (this._isFocused() && typeof Engine.onSegmentChange === 'function') {
+      Engine.onSegmentChange();
+    }
+  }
+  _cbComplete(totalSeconds, reason) {
+    // Always notify the coordinator so it can promote / clean up. The
+    // coordinator itself decides whether to surface a "Well done."
+    // overlay (only for the focused run AND only when the user was
+    // actually present — catchup-completions stay silent so the overlay
+    // doesn't flash on the next chain run).
+    Engine._onRunComplete(this, totalSeconds, reason);
+  }
+
+  // ---- public lifecycle --------------------------------------
+  start(opts = {}) {
+    if (!this.segments.length) return false;
     this.currentIndex = 0;
     this.totalElapsed = 0;
     this.pausedDuration = 0;
     this.isRunning = true;
     this.isPaused = false;
-    const now = Date.now();
+    const now = opts.startedAt || Date.now();
     this.segmentStartedAtWall = now;
     this.pausedAtWall = now;
     this.finalThreeFiredFor = -1;
@@ -764,104 +826,71 @@ const Engine = {
 
     // Chain-start sound/vibration are CHAIN-level events (no segment is
     // "the one being celebrated"), so they resolve through chain.cues
-    // and app defaults — segment overrides don't apply. Audio.unlock() is
+    // and app defaults â€” segment overrides don't apply. Audio.unlock() is
     // unconditional because the user gesture window closes after this
     // function returns; locking it behind a cue gate would silently break
     // sound on iOS for users who later flip the setting on.
-    Audio.unlock();
-    if (effectiveCue(null, this.chain, 'sound'))   Audio.start();
-    if (effectiveCue(null, this.chain, 'vibrate')) Vibe.start();
-    // Warm-up only if at least one segment is going to speak. Cheap to skip
-    // when the user has voice globally off and no segment overrides it on.
+    //
+    // Suppress in-app chain-start cues for background runs (this isn't the
+    // run the user is watching, and double-chiming when starting 2 chains
+    // at the same time would be noisy). The synced bulk-start path passes
+    // suppressInAppStart=true for the second-and-later runs.
+    if (!opts.suppressInAppStart) {
+      Audio.unlock();
+      if (effectiveCue(null, this.chain, 'sound'))   Audio.start();
+      if (effectiveCue(null, this.chain, 'vibrate')) Vibe.start();
+    } else {
+      Audio.unlock();
+    }
+    // Warm-up only if at least one segment is going to speak.
     const willAnyVoiceFire = this.segments.some(s => effectiveCue(s, this.chain, 'voice'));
-    if (willAnyVoiceFire) Voice.warmupForChain(this.segments);
-    if (Store.getSettings().wake)    Wake.acquire();
-    // Announce the opening segment, gated by segment 0's effective voice
-    // cue so a user-silenced first segment stays silent — consistent
-    // behavior whether segment 1 is reached via chain start or _advance.
-    // On native, Voice.speak short-circuits — the FGS plays the
-    // pre-rendered file at segment 0 once it receives ACTION_START.
-    if (this.segments[0] && effectiveCue(this.segments[0], this.chain, 'voice')) {
+    if (willAnyVoiceFire && !opts.suppressInAppStart) Voice.warmupForChain(this.segments);
+    if (Store.getSettings().wake) Wake.acquire();
+    if (!opts.suppressInAppStart && this.segments[0] && effectiveCue(this.segments[0], this.chain, 'voice')) {
       Voice.speak(this.segments[0].name);
     }
 
-    // Pre-render every segment's voice to a WAV file on native, then
-    // re-emit chain:start with the paths so the FGS can play them at
-    // boundaries (the very moment we cross from segment N to N+1,
-    // regardless of whether the WebView is alive). The first chain
-    // run does the synthesis; subsequent runs hit the file cache and
-    // resolve instantly. We don't await this — the chain proceeds
-    // immediately, and the FGS catches up on the next update. For
-    // segment 0 specifically, the prerender almost always finishes
-    // before the segment's first second elapses (typical short names
-    // synthesize in <100ms each), so even a low-latency segment-0
-    // voice usually lands on time.
+    // Pre-render every segment's voice â€” see the v1.3.6 comment block
+    // in Voice.prerenderForChain for the rationale.
     if (window.ChainedNative?.isNative && willAnyVoiceFire) {
-      Voice.prerenderForChain(this.segments).then(() => {
-        if (this.isRunning) this._emitChainEvent('chain:fgsupdate');
+      Voice.prerenderForChain(this.segments, this.id).then(() => {
+        if (this.isRunning) this._emit('chain:fgsupdate');
       });
     }
 
     this._persist();
-    this._emitChainEvent('chain:start');
+    this._emit('chain:start');
 
     this._loop();
-    this.onSegmentChange?.();
+    this._cbSegmentChange();
     return true;
-  },
+  }
 
-  // Emit a lifecycle event so the native shell (js/native.js, Capacitor)
-  // can pre-schedule local notifications. No-op in plain browsers.
+  // Emit a lifecycle event so the native shell (js/native.js) can drive
+  // the FGS / OS-fallback alarm queue. Detail now carries runId so the
+  // bridge can route per-run.
   //
   // segmentStartedAtMs is an "effective" wall-clock time: if the segment
   // had been running continuously without pauses, this is when it would
   // have started. So fireAt = segmentStartedAtMs + segment.duration is
   // always the correct wall-clock fire moment for the *current* segment.
-  _emitChainEvent(name) {
+  _emit(name) {
     try {
-      // segmentStartedAtWall already excludes paused-time (we shift it
-      // forward on resume), so fireAt = segmentStartedAtWall + duration
-      // is the correct wall-clock moment.
       const segmentStartedAtMs = this.segmentStartedAtWall + this.pausedDuration;
-      // pausedAtMs: the wall-clock moment of pause, frozen since then.
-      // Anchored time the native side needs to compute "remaining at the
-      // moment of pause" without drifting as Date.now() keeps marching
-      // forward (which would silently zero the displayed remaining after
-      // any non-trivial pause, e.g. across an app restart).
       const pausedAtMs = this.isPaused ? this.pausedAtWall : 0;
-      // Mirror the user's audio preferences so the native service can
-      // play the same Audio.chime / Audio.finale / Audio.finalThree cues
-      // via SoundPool while the WebView is asleep. Resolved against the
-      // CURRENT segment's effective cues so per-segment silencing also
-      // applies when the WebView is paused (the FGS service uses these
-      // values directly — there's no second resolution step on the
-      // Android side). The service receives a fresh update on every
-      // segment advance, so each segment gets its own cue snapshot.
       const curSeg = this.segments[this.currentIndex] || null;
       const soundEnabled = effectiveCue(curSeg, this.chain, 'sound');
       const tickEnabled  = soundEnabled && effectiveCue(curSeg, this.chain, 'finalTick');
-      // Parallel arrays to segments[]: pre-rendered voice paths (one per
-      // segment, null = "no voice file ready yet"), plus the per-segment
-      // effective voice gate (already includes chain + segment cue
-      // overrides). The FGS uses voicePaths[i] gated by voiceEnabled[i].
-      // voicePaths comes from Voice._lastChainPaths (populated by the
-      // prerender promise that Engine.startChain kicks off); on the
-      // first chain:start emit it may still be empty — the
-      // chain:fgsupdate that follows the prerender resolution refreshes
-      // the FGS with the now-ready paths.
-      const voicePaths = (window.ChainedNative?.isNative && Voice._lastChainPaths.length === this.segments.length)
-        ? Voice._lastChainPaths
+      const voicePaths = (window.ChainedNative?.isNative
+        && Voice._chainPaths.get(this.id)?.length === this.segments.length)
+        ? Voice._chainPaths.get(this.id)
         : null;
       const voiceEnabled = this.segments.map(s => effectiveCue(s, this.chain, 'voice'));
-      // Per-chain audio routing — the FGS uses this to decide which
-      // output device to send the voice MediaPlayer to when a headset
-      // is connected. Default 'headset' keeps audio private when the
-      // user is wearing headphones; 'both' restores the alarm-clock
-      // behaviour where it plays through everything; 'speaker' forces
-      // the builtin speaker even when a headset is plugged in.
       const audioRoute = Store.getSettings().audioRoute || 'headset';
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
+          runId: this.id,
+          isFocused: this._isFocused(),
           name: this.chain?.name,
           segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
           currentIndex: this.currentIndex,
@@ -876,21 +905,16 @@ const Engine = {
         },
       }));
     } catch {}
-  },
+  }
 
-  // Compute the elapsed wall-clock ms within the current segment, excluding
-  // any time the user was paused. Single source of truth for both the rAF
-  // tick and the catchup-from-background path.
   _elapsedMs() {
     const ref = this.isPaused ? this.pausedAtWall : Date.now();
     return Math.max(0, ref - this.segmentStartedAtWall - this.pausedDuration);
-  },
+  }
 
-  // Walk forward through any segments whose wall-clock duration has already
-  // elapsed. Called on visibilitychange / app resume, and on cold-start
-  // restoration. Uses 'catchup' so we don't replay every missed chime/voice
-  // back-to-back (the user wasn't listening) and don't re-issue OS schedules
-  // (those were pre-set at chain:start with absolute fire times).
+  // Walk forward through any segments whose wall-clock duration has
+  // already elapsed. Same semantics as the v1.3.x singleton, just
+  // operating on `this` instead of the global Engine.
   _catchup(opts = {}) {
     if (!this.isRunning || this.isPaused) return false;
     let advanced = false;
@@ -902,20 +926,11 @@ const Engine = {
         advanced = true;
       } else break;
     }
-    // If we advanced past one or more segments, the foreground-service
-    // notification (and its chronometer) is stale. Refresh it once at
-    // the end — the alarm queue stays untouched because future alarms
-    // were pre-set at chain:start and remain correct.
-    //
-    // opts.silent skips this emit. Used when an action method (skipNext /
-    // pause / etc.) is about to dispatch its own chain:reschedule with
-    // the post-action state — the catchup is just an internal sync and
-    // we don't want to send TWO updates back-to-back to the FGS.
     if (!opts.silent && advanced && this.isRunning) {
-      this._emitChainEvent('chain:fgsupdate');
+      this._emit('chain:fgsupdate');
     }
     return advanced;
-  },
+  }
 
   _loop() {
     cancelAnimationFrame(this.rafId);
@@ -927,27 +942,13 @@ const Engine = {
 
       const elapsedMs = this._elapsedMs();
 
-      // If the WebView was frozen long enough to span MULTIPLE segment
-      // boundaries, walk forward through every segment whose wall-clock
-      // duration has elapsed. Without this, a single tick would only
-      // advance one segment and snap the next to "just starting".
-      //
-      // Important: only switch to catchup mode when more than ONE segment
-      // is past — i.e. the *next* segment's whole duration also elapsed.
-      // For a normal foreground tick that just crossed the *current*
-      // segment's boundary, fall through to the regular _advance('auto')
-      // below so the chime / voice / "Chain complete" overlay actually
-      // fire. Previously this branch always took the catchup path and
-      // silently swallowed those cues, including for the last-segment
-      // end, leaving the run view stuck at "00:00" with no overlay.
+      // Multi-boundary catch-up â€” same logic as the singleton path.
       if (!this.isPaused && elapsedMs >= seg.duration * 1000) {
         const nextSeg = this.segments[this.currentIndex + 1];
         const overshootMs = elapsedMs - seg.duration * 1000;
         const multipleBoundariesPast = nextSeg && overshootMs >= nextSeg.duration * 1000;
         if (multipleBoundariesPast && this._catchup()) {
-          this.onSegmentChange?.();
-          // _advance kicks _loop again, but it cancelled rafId first;
-          // bail here so the new loop owns the next frame.
+          this._cbSegmentChange();
           return;
         }
       }
@@ -955,13 +956,13 @@ const Engine = {
       const remainingSec = Math.max(0, seg.duration - elapsedMs / 1000);
       const remainingInt = Math.ceil(remainingSec);
 
-      // Final-3-second burst (when not paused). One-shot per segment: the
-      // moment remaining first drops into ≤3s we fire the whole 3-2-1
-      // sequence as a single scheduled audio + vibration pattern. Gates
-      // are per-segment-effective: the currently-running segment's
-      // overrides win over chain / app defaults, so a user-silenced
-      // segment is silent here even if the chain or app has the cue on.
-      if (!this.isPaused && effectiveCue(seg, this.chain, 'finalTick')) {
+      // Final-3-second burst â€” only when focused, AND when not paused.
+      // Background runs intentionally don't fire the in-app burst (the
+      // FGS plays final3.wav from the service even when the WebView is
+      // backgrounded, so the user still hears the cue; firing here for
+      // a background run would either be redundant in foreground or
+      // silent in background â€” net zero benefit, net possible doubling).
+      if (!this.isPaused && this._isFocused() && effectiveCue(seg, this.chain, 'finalTick')) {
         if (remainingInt <= 3 && remainingInt >= 1 && this.finalThreeFiredFor !== this.currentIndex) {
           this.finalThreeFiredFor = this.currentIndex;
           if (effectiveCue(seg, this.chain, 'sound'))   Audio.finalThree();
@@ -969,14 +970,28 @@ const Engine = {
         }
       }
 
-      // Warning state for last 5 seconds
+      // Warning state for last 5 seconds â€” only on the focused run (the
+      // background run isn't drawing the ring, no point colouring it).
       const shouldWarn = remainingInt <= 5 && !this.isPaused && remainingInt > 0;
-      if (shouldWarn !== this.warningOn) {
+      if (this._isFocused() && shouldWarn !== this.warningOn) {
         this.warningOn = shouldWarn;
         document.querySelector('.view-run')?.classList.toggle('is-warning', shouldWarn);
       }
 
-      this.onTick?.(seg, remainingSec, elapsedMs / 1000);
+      this._cbTick(seg, remainingSec, elapsedMs / 1000);
+
+      // v1.4 — keep chip clocks live for background runs. Throttled
+      // to integer-second changes (the chip shows whole seconds via
+      // Math.ceil) so we don't DOM-thrash 60× per second. Single-chain
+      // case short-circuits inside _updateRunChipClocks anyway because
+      // the chip strip is hidden.
+      if (!this._isFocused() && typeof UI !== 'undefined' && UI?._updateRunChipClocks) {
+        const secNow = (Math.ceil(remainingSec) | 0);
+        if (this._lastChipSec !== secNow) {
+          this._lastChipSec = secNow;
+          UI._updateRunChipClocks();
+        }
+      }
 
       if (remainingSec <= 0 && !this.isPaused) {
         this._advance('auto');
@@ -986,25 +1001,13 @@ const Engine = {
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
-  },
+  }
 
-  // reason:
-  //   'auto'    — timer naturally ran out: OS-scheduled queue is correct, no reschedule needed
-  //   'skip'    — user tapped next: must re-schedule the remaining notifications
-  //   'catchup' — replaying segments that elapsed while app was backgrounded:
-  //               the user wasn't there, so no chime/voice/vibe; OS notifications
-  //               already fired for these moments
   _advance(reason = 'auto') {
     const seg = this.segments[this.currentIndex];
     const segDurMs = (seg?.duration || 0) * 1000;
     this.totalElapsed += segDurMs;
 
-    // Compute the next segment's wall-clock start *before* mutating index.
-    // For auto/catchup we anchor to the boundary moment of the segment that
-    // just ended (= old start + paused-time + duration); this way successive
-    // catchup steps preserve the wall-clock advancement instead of snapping
-    // each new segment to "now". For skip, the user just tapped Next, so
-    // the new segment starts fresh from the current instant.
     const now = Date.now();
     const nextStartWall = (reason === 'skip')
       ? now
@@ -1017,27 +1020,18 @@ const Engine = {
       return;
     }
 
-    // Segment transition cues — only when the user is actually present
-    // AND the transition is automatic. A user-initiated skip doesn't need
-    // a "transition happened" chime/vibe: the user just tapped Next or
-    // Previous and already knows. Voice still announces the new segment
-    // since that's useful context, not a confirmation cue.
-    //
-    // Cue ownership: the chime + vibrate at a boundary mark the END of
-    // the OUTGOING segment, so they're gated by that segment's effective
-    // cues (`seg`). The voice announcement names the INCOMING segment,
-    // so it's gated by the new segment's effective cues (`nextSeg`).
-    // This matches the mental model "silencing segment N means nothing
-    // fires at the end of segment N, regardless of what segment N+1
-    // wants" while still letting the next segment announce itself.
+    // Cue ownership rules are unchanged from the singleton path.
+    // In-app chime / vibe / voice only fire if this run is the focused
+    // one â€” same reason as final-3: background runs lean on the FGS for
+    // audible cues to avoid double-firing when foreground.
     const isUserSkip = reason === 'skip';
-    if (reason !== 'catchup') {
+    if (reason !== 'catchup' && this._isFocused()) {
       const nextSeg = this.segments[this.currentIndex];
       if (!isUserSkip && effectiveCue(seg,     this.chain, 'sound'))   Audio.chime();
       if (!isUserSkip && effectiveCue(seg,     this.chain, 'vibrate')) Vibe.segmentEnd();
       if (nextSeg && effectiveCue(nextSeg, this.chain, 'voice')) Voice.speak(nextSeg.name);
       if (!isUserSkip && nextSeg) {
-        Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
+        Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} Â· ${this.currentIndex + 1} of ${this.segments.length}`);
       }
     }
 
@@ -1046,86 +1040,70 @@ const Engine = {
     this.pausedDuration = 0;
     this.finalThreeFiredFor = -1;
     this.warningOn = false;
-    document.querySelector('.view-run')?.classList.remove('is-warning');
+    if (this._isFocused()) {
+      document.querySelector('.view-run')?.classList.remove('is-warning');
+    }
 
     this._persist();
-    this.onSegmentChange?.();
+    this._cbSegmentChange();
     this._loop();
-    // Only manual user-driven skips need to re-issue the OS schedule
-    // (their fire times moved). For natural advances the alarm queue
-    // is still correct from chain:start, but the foreground notification
-    // and its live countdown are stale — emit a lightweight FGS-only
-    // refresh that doesn't touch the alarm queue. 'catchup' batches its
-    // FGS refresh once at the end of the catch-up loop in _catchup.
-    if (reason === 'skip')      this._emitChainEvent('chain:reschedule');
-    else if (reason === 'auto') this._emitChainEvent('chain:fgsupdate');
-  },
+    if (reason === 'skip')      this._emit('chain:reschedule');
+    else if (reason === 'auto') this._emit('chain:fgsupdate');
+  }
 
   pause() {
     if (!this.isRunning || this.isPaused) return;
-    // Sync to wall clock first. The native FGS service may have advanced
-    // segments in the background; without this catch-up we'd freeze the
-    // clock on whatever segment JS last observed (pre-background) instead
-    // of the one the user is currently looking at in the notification.
     this._catchup({ silent: true });
     if (!this.isRunning) return;
     this.isPaused = true;
     this.pausedAtWall = Date.now();
-    document.querySelector('.view-run')?.classList.add('is-paused');
-    document.querySelector('.view-run')?.classList.remove('is-warning');
-    Wake.release();
+    if (this._isFocused()) {
+      document.querySelector('.view-run')?.classList.add('is-paused');
+      document.querySelector('.view-run')?.classList.remove('is-warning');
+    }
+    // Only release the wake lock when NO run is still actively
+    // counting down. activeRunningCount() includes paused-but-running
+    // runs (isRunning stays true while isPaused flips), so for a
+    // single-chain user pressing pause we'd otherwise hold the screen
+    // awake throughout the pause (v1.3.x released it). Filter to
+    // !isPaused so single-chain pause behaves as it did before.
+    const anyTicking = [...Engine._runs.values()].some(r => r.isRunning && !r.isPaused && r !== this);
+    if (!anyTicking) Wake.release();
     cancelAnimationFrame(this.rafId);
-    // Re-render the run-view clock with the actual remaining time at the
-    // moment of pause. Without this the UI reads onTick(seg, null, null)
-    // as "no remaining info" and falls back to seg.duration — which makes
-    // the clock visibly JUMP from e.g. 00:42 up to the segment's full
-    // duration the instant Pause is tapped, looking like the button is
-    // broken and the timer froze at the wrong value.
     const seg = this.segments[this.currentIndex];
     if (seg) {
       const elapsedSec = this._elapsedMs() / 1000;
       const remainingSec = Math.max(0, seg.duration - elapsedSec);
-      this.onTick?.(seg, remainingSec, elapsedSec);
+      this._cbTick(seg, remainingSec, elapsedSec);
     }
     this._persist();
-    // Re-emit so the native bridge cancels future transition alarms
-    // (they'd fire at the wrong wall-clock moments while paused) but
-    // keeps a sticky "⏸ Paused — segment X" entry in the tray.
-    this._emitChainEvent('chain:reschedule');
-  },
+    this._emit('chain:reschedule');
+  }
 
   resume() {
     if (!this.isRunning || !this.isPaused) return;
     this.pausedDuration += Date.now() - this.pausedAtWall;
     this.isPaused = false;
-    document.querySelector('.view-run')?.classList.remove('is-paused');
+    if (this._isFocused()) {
+      document.querySelector('.view-run')?.classList.remove('is-paused');
+    }
     if (Store.getSettings().wake) Wake.acquire();
     this._persist();
     this._loop();
-    this._emitChainEvent('chain:reschedule');
-  },
+    this._emit('chain:reschedule');
+  }
 
-  toggle() {
-    if (this.isPaused) this.resume();
-    else this.pause();
-  },
+  toggle() { if (this.isPaused) this.resume(); else this.pause(); }
 
   skipNext() {
     if (!this.isRunning) return;
-    // Catch up to wall clock first so we skip from the segment the user
-    // currently sees (in the notification or run view) — not the one JS
-    // last observed before the WebView was backgrounded. Without this,
-    // tapping "Next" on a notification showing 9/16 would advance from
-    // JS's stale 7/16 to 8/16 instead of 9/16 → 10/16.
     if (!this.isPaused) this._catchup({ silent: true });
     if (!this.isRunning) return;
     this._advance('skip');
-  },
+  }
 
   skipPrev() {
     if (!this.isRunning) return;
-    // Same wall-clock sync as skipNext: jump back from where the user
-    // currently sees us, not from where JS last observed.
     if (!this.isPaused) this._catchup({ silent: true });
     if (!this.isRunning) return;
     const restartCurrent = () => {
@@ -1138,11 +1116,10 @@ const Engine = {
     if (this.currentIndex === 0) {
       restartCurrent();
       this._persist();
-      this.onSegmentChange?.();
-      this._emitChainEvent('chain:reschedule');
+      this._cbSegmentChange();
+      this._emit('chain:reschedule');
       return;
     }
-    // if more than 2.5s in, restart current; else go to prev
     if (this._elapsedMs() > 2500) {
       restartCurrent();
     } else {
@@ -1152,60 +1129,62 @@ const Engine = {
       restartCurrent();
     }
     this._persist();
-    this.onSegmentChange?.();
-    this._emitChainEvent('chain:reschedule');
-  },
+    this._cbSegmentChange();
+    this._emit('chain:reschedule');
+  }
 
-  // opts.preserveNotifications: when called from _complete, the "Chain
-  // complete" tray notification has already fired (or is firing). We must
-  // NOT cancel it by ID — that would dismiss it from the tray within ms.
   stop(opts = {}) {
     this.isRunning = false;
     this.isPaused = false;
     cancelAnimationFrame(this.rafId);
-    document.querySelector('.view-run')?.classList.remove('is-warning', 'is-paused');
-    Wake.release();
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (this._isFocused()) {
+      document.querySelector('.view-run')?.classList.remove('is-warning', 'is-paused');
+    }
+    // Same active-ticking check as in pause() — release the wake lock
+    // when no run is actually counting down. A paused-but-running run
+    // shouldn't keep the screen awake; v1.3.x semantics.
+    const anyTicking = [...Engine._runs.values()].some(r => r.isRunning && !r.isPaused && r !== this);
+    if (!anyTicking) {
+      Wake.release();
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    }
     if (!opts.preserveNotifications) {
-      window.dispatchEvent(new CustomEvent('chain:cancel'));
+      // isFocused is critical for the bridge filter — without it the
+      // bridge's shouldDriveFgs treats `undefined` as focused, so a
+      // background run cancellation would tear down the focused run's
+      // FGS notification.
+      window.dispatchEvent(new CustomEvent('chain:cancel', {
+        detail: { runId: this.id, isFocused: this._isFocused() },
+      }));
     }
     this._clearPersist();
-  },
+  }
 
   _complete(reason = 'auto') {
     const total = this.segments.reduce((s, x) => s + x.duration, 0);
+    const wasFocused = this._isFocused();
     this.stop({ preserveNotifications: true });
-    // Hand off chain end to the native shell. With the FGS plugin, the
-    // service replaces its persistent notification with a single
-    // "✓ Chain complete" heads-up and stops itself; on the OS-fallback
-    // path the LocalNotifications status row is cleared. Either way the
-    // user ends up with one notification for chain end, not a stack.
     window.dispatchEvent(new CustomEvent('chain:complete', {
       detail: {
+        runId: this.id,
+        // wasFocused captured before stop()/coordinator demotion to keep
+        // the bridge filter consistent with the run's role at the time
+        // the completion fired.
+        isFocused: wasFocused,
         name: this.chain?.name,
         segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
         currentIndex: this.segments.length - 1,
         totalSeconds: total,
       },
     }));
-    // Catchup completion happens silently: the chain ended while the user
-    // was away, the OS already fired the "Chain complete" notification at
-    // the correct wall-clock moment, and we don't want to replay the
-    // finale chime/voice/vibe minutes/hours later when they return — nor
-    // unhide the completion overlay (it'd flash on the next run).
-    //
-    // Chain end IS the end of the last segment, so finale cues resolve
-    // against the LAST segment's effective overrides ("silencing the
-    // last segment silences the finale" — the natural extension of the
-    // segment-N rule used for mid-chain boundaries).
     const lastSeg = this.segments[this.segments.length - 1];
-    if (reason !== 'catchup') {
+    if (reason !== 'catchup' && this._isFocused()) {
       if (effectiveCue(lastSeg, this.chain, 'sound'))   Audio.finale();
       if (effectiveCue(lastSeg, this.chain, 'vibrate')) Vibe.finale();
-      Notif.show(`${this.chain.name} complete`, `${fmtLong(total)} · ${this.segments.length} segments`);
-      this.onComplete?.(total);
+      Notif.show(`${this.chain.name} complete`, `${fmtLong(total)} Â· ${this.segments.length} segments`);
     }
-  },
+    this._cbComplete(total, reason);
+  }
 
   totalRemaining() {
     if (!this.segments.length) return 0;
@@ -1216,19 +1195,19 @@ const Engine = {
       r += this.segments[i].duration;
     }
     return r;
-  },
+  }
 
-  // ----- Crash-safe persistence -----
-  // Save running state on every transition so a WebView kill, OS reboot,
-  // or app force-stop doesn't lose the chain. Restored on init().
+  // ---- per-run persistence ------------------------------------
+  _persistKey() { return RUN_PERSIST_PREFIX + this.id; }
+
   _persist() {
     try {
       if (!this.isRunning || !this.chain) {
-        localStorage.removeItem('chained-timers/run/v1');
+        localStorage.removeItem(this._persistKey());
         return;
       }
       const snap = {
-        v: 1,
+        v: 2,
         chainId: this.chain.id,
         chainName: this.chain.name,
         segments: this.segments,
@@ -1240,84 +1219,363 @@ const Engine = {
         totalElapsed: this.totalElapsed,
         savedAt: Date.now(),
       };
-      localStorage.setItem('chained-timers/run/v1', JSON.stringify(snap));
+      localStorage.setItem(this._persistKey(), JSON.stringify(snap));
     } catch {}
-  },
+  }
 
   _clearPersist() {
-    try { localStorage.removeItem('chained-timers/run/v1'); } catch {}
+    try { localStorage.removeItem(this._persistKey()); } catch {}
+  }
+}
+
+// Coordinator. Tracks active EngineRuns + focused id. Exposes the old
+// Engine singleton API (chain, segments, isRunning, pause(), ...) for
+// the focused run so existing UI code works untouched.
+const Engine = {
+  _runs: new Map(),       // chainId â†’ EngineRun
+  _focusedId: null,
+
+  // UI callbacks (set by app init). Fire only for the focused run.
+  onTick: null,
+  onSegmentChange: null,
+  onComplete: null,
+  // Fires whenever the set of active runs changes (start, stop, complete,
+  // focus change). The UI uses this to update the chip strip.
+  onRunsChange: null,
+
+  // ---- backward-compat surface (focused run's fields/methods) -----
+  get _focused() { return this._focusedId ? this._runs.get(this._focusedId) : null; },
+  get chain()        { return this._focused?.chain || null; },
+  set chain(v)       { if (this._focused) this._focused.chain = v; },
+  get segments()     { return this._focused?.segments || []; },
+  set segments(v)    { if (this._focused) this._focused.segments = v; },
+  get currentIndex() { return this._focused?.currentIndex ?? 0; },
+  set currentIndex(v){ if (this._focused) this._focused.currentIndex = v; },
+  get isRunning()    { return this._focused?.isRunning || false; },
+  get isPaused()     { return this._focused?.isPaused  || false; },
+  get totalElapsed() { return this._focused?.totalElapsed || 0; },
+  set totalElapsed(v){ if (this._focused) this._focused.totalElapsed = v; },
+
+  // ---- multi-run accessors ------------------------------------
+  activeRuns()           { return [...this._runs.values()].filter(r => r.isRunning); },
+  activeRunningCount()   { return this.activeRuns().length; },
+  runById(id)            { return this._runs.get(id) || null; },
+  isChainRunning(id)     { return !!this._runs.get(id)?.isRunning; },
+  focusedRunId()         { return this._focusedId; },
+
+  // Switch which run is the "primary" for the run view. Returns true
+  // if focus actually moved. Recomputes the UI's is-warning/is-paused
+  // classes against the new focused run.
+  focus(chainId) {
+    if (!chainId || !this._runs.has(chainId)) return false;
+    if (this._focusedId === chainId) return false;
+    this._focusedId = chainId;
+    const run = this._runs.get(chainId);
+    const view = document.querySelector('.view-run');
+    if (view) {
+      view.classList.toggle('is-paused', !!run.isPaused);
+      view.classList.toggle('is-warning', !!run.warningOn);
+    }
+    this._notifyRunsChange();
+    // Re-render the run UI for the newly-focused run.
+    if (typeof this.onSegmentChange === 'function') this.onSegmentChange();
+    if (run.isRunning) {
+      const seg = run.segments[run.currentIndex];
+      if (seg && typeof this.onTick === 'function') {
+        const elapsedSec = run._elapsedMs() / 1000;
+        const remainingSec = Math.max(0, seg.duration - elapsedSec);
+        this.onTick(seg, remainingSec, elapsedSec);
+      }
+    }
+    // The native bridge follows the focused run for FGS purposes
+    // (v1.4.0 ships single-FGS multi-run; per-run notifications come
+    // in v1.4.1). Re-emit chain:reschedule so the bridge re-syncs the
+    // notification + alarm queue to the newly-focused chain.
+    if (run.isRunning) run._emit('chain:reschedule');
+    return true;
   },
 
-  // Restore a chain that was running when the app was killed/closed.
-  // Returns true if a session was restored (UI should jump to run view).
-  restoreIfActive() {
-    let snap;
-    try {
-      const raw = localStorage.getItem('chained-timers/run/v1');
-      if (!raw) return false;
-      snap = JSON.parse(raw);
-    } catch { this._clearPersist(); return false; }
+  _notifyRunsChange() {
+    if (typeof this.onRunsChange === 'function') {
+      try { this.onRunsChange(); } catch {}
+    }
+  },
 
-    if (!snap || snap.v !== 1 || !Array.isArray(snap.segments) || !snap.segments.length) {
-      this._clearPersist();
+  // Start a single chain. The new run becomes focused unless caller
+  // requests background placement (opts.focus === false). If the chain
+  // is already running, re-focus instead of restarting.
+  startChain(chain, opts = {}) {
+    if (!chain) return false;
+    const existing = this._runs.get(chain.id);
+    if (existing && existing.isRunning) {
+      if (opts.focus !== false) this.focus(chain.id);
+      return true;
+    }
+    if (this.activeRunningCount() >= MAX_CONCURRENT_RUNS) {
+      Toast.show(`${MAX_CONCURRENT_RUNS} chains already running â€” stop one to start another.`, 'warn');
       return false;
     }
-
-    // Refuse stale state (>24h old) — almost certainly the user moved on.
-    const ageMs = Date.now() - (snap.savedAt || 0);
-    if (ageMs > 24 * 3600 * 1000) { this._clearPersist(); return false; }
-
-    // Try to relink to the live chain (renames/edits OK), else use the
-    // snapshotted segments so the run can finish even if the chain was
-    // deleted.
-    const chain = Store.getChain(snap.chainId) || {
-      id: snap.chainId,
-      name: snap.chainName || 'Restored chain',
-      segments: snap.segments,
-    };
-
-    this.chain = chain;
-    this.segments = snap.segments;
-    this.currentIndex = snap.currentIndex | 0;
-    this.segmentStartedAtWall = Number(snap.segmentStartedAtWall) || Date.now();
-    this.pausedAtWall = Number(snap.pausedAtWall) || Date.now();
-    this.pausedDuration = Number(snap.pausedDuration) || 0;
-    this.isPaused = !!snap.isPaused;
-    this.isRunning = true;
-    this.totalElapsed = Number(snap.totalElapsed) || 0;
-    this.finalThreeFiredFor = -1;
-    this.warningOn = false;
-
-    // Walk past any segments whose duration has already elapsed in real
-    // wall-clock time. If the whole chain is past, _catchup -> _complete.
-    if (!this.isPaused) this._catchup();
-    if (!this.isRunning) return false;
-
-    // Sync the run-view CSS state with the restored engine state. The
-    // pause/resume methods normally toggle .is-paused, but we got here
-    // by deserialising state — do it explicitly.
-    const runView = document.querySelector('.view-run');
-    if (runView) {
-      runView.classList.toggle('is-paused', this.isPaused);
-      runView.classList.remove('is-warning');
+    const run = new EngineRun(chain);
+    if (!run.segments.length) {
+      Toast.show('Chain has no segments', 'warn');
+      return false;
     }
-
-    if (Store.getSettings().wake && !this.isPaused) Wake.acquire();
-    // Don't replay sounds / OS notifications: the OS notifications were
-    // pre-scheduled at chain:start last session; if they hadn't fired
-    // they're now stale — re-emit chain:reschedule so the native bridge
-    // re-sweeps and re-schedules from the *current* position.
-    this._emitChainEvent('chain:reschedule');
-    if (!this.isPaused) this._loop();
-    // Render the paused/running clock once even when no rAF is running,
-    // with real remaining/elapsed values so the clock doesn't snap to
-    // the segment's full duration on cold-start restoration.
-    const restoredSeg = this.segments[this.currentIndex];
-    if (restoredSeg) {
-      const elapsedSec = this._elapsedMs() / 1000;
-      const remainingSec = Math.max(0, restoredSeg.duration - elapsedSec);
-      this.onTick?.(restoredSeg, remainingSec, elapsedSec);
+    this._runs.set(chain.id, run);
+    if (opts.focus !== false || !this._focusedId) this._focusedId = chain.id;
+    const ok = run.start(opts);
+    if (!ok) {
+      this._runs.delete(chain.id);
+      if (this._focusedId === chain.id) this._focusedId = null;
+      return false;
     }
+    this._notifyRunsChange();
+    return true;
+  },
+
+  // Synced bulk start â€” every chain begins at the same t=0. The first
+  // chain in the array becomes focused. Used by long-press multi-select.
+  // Caller passes resolved chain objects.
+  startMany(chains) {
+    chains = (chains || []).filter(Boolean);
+    if (!chains.length) return false;
+    // Already-running chains are silently skipped — startChain would
+    // refocus them, breaking the synced-t=0 contract. If the caller
+    // selected only already-running chains, focus the first one.
+    const alreadyRunning = chains.filter(c => this.isChainRunning(c.id));
+    let fresh = chains.filter(c => !this.isChainRunning(c.id));
+    if (alreadyRunning.length) {
+      const names = alreadyRunning.map(c => c.name || 'a chain').join(', ');
+      Toast.show(`${names} already running — skipped from synced start.`, 'warn');
+    }
+    if (!fresh.length) {
+      if (chains[0]) this.focus(chains[0].id);
+      return !!chains[0];
+    }
+    const remaining = MAX_CONCURRENT_RUNS - this.activeRunningCount();
+    if (remaining <= 0) {
+      Toast.show(`${MAX_CONCURRENT_RUNS} chains already running.`, 'warn');
+      return false;
+    }
+    if (fresh.length > remaining) {
+      Toast.show(`Up to ${MAX_CONCURRENT_RUNS} chains at once.`, 'warn');
+      fresh = fresh.slice(0, remaining);
+    }
+    const startedAt = Date.now();
+    let firstStarted = null;
+    fresh.forEach((chain, i) => {
+      const opts = {
+        startedAt,
+        focus: i === 0,
+        suppressInAppStart: i > 0,
+      };
+      if (this.startChain(chain, opts) && !firstStarted) firstStarted = chain.id;
+    });
+    return !!firstStarted;
+  },
+
+  // ---- focused-run-targeted methods ------------------
+  pause()    { this._focused?.pause(); },
+  resume()   { this._focused?.resume(); },
+  toggle()   { this._focused?.toggle(); },
+  skipNext() { this._focused?.skipNext(); },
+  skipPrev() { this._focused?.skipPrev(); },
+  // Stop the focused run. UI's confirm dialog already fired (or wasn't
+  // needed); just tear down here.
+  stop()     { this._stopRun(this._focusedId); },
+  // Stop a specific run by id (used by chip-strip long-press, or by
+  // native notification action when there are multiple runs).
+  stopRun(chainId) { this._stopRun(chainId); },
+
+  totalRemaining() { return this._focused?.totalRemaining() || 0; },
+
+  _stopRun(chainId) {
+    const run = this._runs.get(chainId);
+    if (!run) return;
+    run.stop();
+    this._runs.delete(chainId);
+    if (this._focusedId === chainId) {
+      const next = this.activeRuns()[0] || null;
+      this._focusedId = next ? next.id : null;
+      if (next) this._promoteToFocused(next);
+    }
+    this._notifyRunsChange();
+  },
+
+  // Shared post-promotion housekeeping: sync the run-view CSS flags,
+  // re-fire onSegmentChange + onTick so the big clock immediately
+  // reflects the promoted run's state (no one-frame stale text), and
+  // re-emit chain:reschedule so the native bridge re-binds the FGS to
+  // the newly-focused run.
+  _promoteToFocused(next) {
+    const view = document.querySelector('.view-run');
+    if (view) {
+      view.classList.toggle('is-paused', !!next.isPaused);
+      view.classList.toggle('is-warning', !!next.warningOn);
+    }
+    if (typeof this.onSegmentChange === 'function') this.onSegmentChange();
+    if (next.isRunning) {
+      const seg = next.segments[next.currentIndex];
+      if (seg) {
+        const elapsedSec = next._elapsedMs() / 1000;
+        const remainingSec = Math.max(0, seg.duration - elapsedSec);
+        // Sync the warningOn flag against the run's current remaining so
+        // the ring color is correct on the very first frame post-swap.
+        next.warningOn = remainingSec <= 5 && remainingSec > 0 && !next.isPaused;
+        if (view) view.classList.toggle('is-warning', !!next.warningOn);
+        // If we're past the final-3 window, mark it fired so we don't
+        // double-fire the burst on the next focused tick.
+        if (remainingSec < 0.5) next.finalThreeFiredFor = next.currentIndex;
+        if (typeof this.onTick === 'function') {
+          this.onTick(seg, remainingSec, elapsedSec);
+        }
+      }
+      next._emit('chain:reschedule');
+    }
+  },
+
+  // Called by an EngineRun when it naturally completes. `reason` is
+  // forwarded from EngineRun._complete — 'catchup' completions stay
+  // silent (the user was away; the "✓ Chain complete" notification has
+  // already cued them) and don't flash the "Well done." overlay.
+  _onRunComplete(run, totalSeconds, reason) {
+    const wasFocused = this._focusedId === run.id;
+    this._runs.delete(run.id);
+    if (wasFocused) {
+      const next = this.activeRuns()[0] || null;
+      this._focusedId = next ? next.id : null;
+      if (next) {
+        this._promoteToFocused(next);
+      } else if (reason !== 'catchup' && typeof this.onComplete === 'function') {
+        // Last run finished; show the completion overlay for it.
+        // Snapshot details from the completing run BEFORE the coordinator
+        // tries to read Engine.segments — by this point the run is
+        // already removed from _runs and Engine.segments resolves to []
+        // (or the promoted run if there were 3, but the gate above
+        // ensures there isn't a promoted run on this branch).
+        this.onComplete(totalSeconds, run.segments.length);
+      }
+    }
+    this._notifyRunsChange();
+  },
+
+  // ---- catchup orchestration (UI hooks) -------------------------
+  // _catchup / _loop / _emitChainEvent are called from existing UI code
+  // (visibilitychange, nudgereschedule). They fan out to every active
+  // run so a backgrounded second chain ticks correctly on wake too.
+  _catchup() { this._runs.forEach(r => r._catchup()); },
+  _loop()    { this._runs.forEach(r => { if (r.isRunning && !r.isPaused) r._loop(); }); },
+  _emitChainEvent(name) { this._runs.forEach(r => { if (r.isRunning) r._emit(name); }); },
+
+  // ---- restore from persistence -------------------------
+  // Walks the v2 per-run keys + migrates the legacy v1 single-run key.
+  // Returns true if any run was restored to the running state.
+  restoreIfActive() {
+    const keys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith(RUN_PERSIST_PREFIX) || k === RUN_PERSIST_LEGACY)) keys.push(k);
+      }
+    } catch {}
+    // First pass: parse all snapshots so we can sort deterministically
+    // before instantiation. localStorage.key() iteration order is
+    // implementation-defined; sorting by savedAt ascending makes the
+    // newest snapshot the last-added and (with our focus heuristic)
+    // the focused run on cold start — deterministic across reloads.
+    const snaps = [];
+    for (const key of keys) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const snap = JSON.parse(raw);
+        if (!snap || !Array.isArray(snap.segments) || !snap.segments.length) {
+          localStorage.removeItem(key);
+          continue;
+        }
+        const ageMs = Date.now() - (snap.savedAt || 0);
+        if (ageMs > 24 * 3600 * 1000) { localStorage.removeItem(key); continue; }
+        snaps.push({ key, snap });
+      } catch {
+        try { localStorage.removeItem(key); } catch {}
+      }
+    }
+    // Sort oldest → newest. The last one in iteration order wins the
+    // focus slot (set unconditionally below), giving consistent focus
+    // on every cold start.
+    snaps.sort((a, b) => (a.snap.savedAt || 0) - (b.snap.savedAt || 0));
+    const restored = [];
+    for (const { key, snap } of snaps) {
+      try {
+        const chain = Store.getChain(snap.chainId) || {
+          id: snap.chainId,
+          name: snap.chainName || 'Restored chain',
+          segments: snap.segments,
+        };
+        const run = new EngineRun(chain);
+        run.chain = chain;
+        run.segments = snap.segments;
+        run.currentIndex = snap.currentIndex | 0;
+        run.segmentStartedAtWall = Number(snap.segmentStartedAtWall) || Date.now();
+        run.pausedAtWall = Number(snap.pausedAtWall) || Date.now();
+        run.pausedDuration = Number(snap.pausedDuration) || 0;
+        run.isPaused = !!snap.isPaused;
+        run.isRunning = true;
+        run.totalElapsed = Number(snap.totalElapsed) || 0;
+        run.finalThreeFiredFor = -1;
+        run.warningOn = false;
+        this._runs.set(chain.id, run);
+        // Most-recently-saved wins the focus slot. With the sort above
+        // this is deterministic (always the last one in iteration).
+        this._focusedId = chain.id;
+        restored.push(run);
+        // Drop the legacy v1 key once read â€” next _persist writes v2.
+        if (key === RUN_PERSIST_LEGACY) localStorage.removeItem(key);
+      } catch {
+        try { localStorage.removeItem(key); } catch {}
+      }
+    }
+    if (!restored.length) return false;
+    if (Store.getSettings().wake && restored.some(r => !r.isPaused)) Wake.acquire();
+    for (const run of restored) {
+      run._emit('chain:reschedule');
+      if (!run.isPaused) run._catchup();
+      if (!run.isPaused && run.isRunning) run._loop();
+    }
+    // Reap any runs that catchup-completed during restore.
+    let focusedDied = false;
+    for (const run of restored) {
+      if (!run.isRunning) {
+        this._runs.delete(run.id);
+        if (this._focusedId === run.id) { this._focusedId = null; focusedDied = true; }
+      }
+    }
+    if (!this._runs.size) return false;
+    if (!this._focusedId) {
+      const first = this.activeRuns()[0];
+      if (first) this._focusedId = first.id;
+    }
+    // If the focused run died during restore catchup, the surviving
+    // run needs a chain:reschedule so the native FGS rebinds to it —
+    // matches the _onRunComplete / _stopRun promotion paths.
+    if (focusedDied) {
+      const newFocused = this._focused;
+      if (newFocused) newFocused._emit('chain:reschedule');
+    }
+    const focused = this._focused;
+    if (focused) {
+      const runView = document.querySelector('.view-run');
+      if (runView) {
+        runView.classList.toggle('is-paused', focused.isPaused);
+        runView.classList.remove('is-warning');
+      }
+      const seg = focused.segments[focused.currentIndex];
+      if (seg && typeof this.onTick === 'function') {
+        const elapsedSec = focused._elapsedMs() / 1000;
+        const remainingSec = Math.max(0, seg.duration - elapsedSec);
+        this.onTick(seg, remainingSec, elapsedSec);
+      }
+    }
+    this._notifyRunsChange();
     return true;
   },
 };
@@ -1368,7 +1626,7 @@ const Editor = {
       name: '',
       duration: 60,
       color: this.draft.color,
-      // voice: undefined → treated as ON. Stored explicitly only when the
+      // voice: undefined â†’ treated as ON. Stored explicitly only when the
       // user has toggled the per-segment speaker icon to OFF, so legacy
       // chains saved before this field existed keep their original
       // behaviour (announce names) automatically.
@@ -1412,6 +1670,9 @@ const View = {
   history: ['library'],
 
   show(name) {
+    // v1.4 — selection mode is library-only. Navigating away clears it
+    // so a back-trip doesn't restore stale state.
+    if (name !== 'library' && UI.selectMode) UI.exitSelectMode();
     document.querySelectorAll('.view').forEach(v => {
       v.hidden = v.dataset.viewName !== name;
     });
@@ -1433,7 +1694,7 @@ const View = {
       const prev = this.history[this.history.length - 1];
       this.current = prev;
       this.show(prev);
-      // popping show pushes again — fix the duplication:
+      // popping show pushes again â€” fix the duplication:
       this.history.pop();
     } else {
       this.show('library');
@@ -1448,6 +1709,19 @@ const View = {
 const UI = {
 
   // ------- Library -------
+
+  // v1.4 multi-select mode. Activated by long-press on a chain row.
+  // While active, the top bar swaps to "N selected" + Start, taps toggle
+  // selection instead of opening the editor, and the play button on each
+  // card is hidden. Tapping Start fires Engine.startMany() with the
+  // currently-selected chain ids — a synced t=0 launch for up to 2
+  // chains simultaneously.
+  selectMode: false,
+  selectedIds: new Set(),
+
+  // Long-press timing — 500ms matches Android's default. Lower and
+  // accidental long-presses become a paper cut.
+  LONGPRESS_MS: 500,
 
   renderLibrary() {
     const list = document.getElementById('chain-list');
@@ -1486,7 +1760,7 @@ const UI = {
         <div class="chain-card-segments" id="seg-preview-${safeId}"></div>
         <div class="chain-card-meta">
           <span>${expanded.length} ${expanded.length === 1 ? 'segment' : 'segments'}</span>
-          ${loops > 1 ? `<span class="dot"></span><span>×${loops} loop${loops > 1 ? 's' : ''}</span>` : ''}
+          ${loops > 1 ? `<span class="dot"></span><span>Ã—${loops} loop${loops > 1 ? 's' : ''}</span>` : ''}
           ${chain.segments.some(s => s && s.kind === 'subchain') ? `<span class="dot"></span><span>nested</span>` : ''}
         </div>
       `;
@@ -1496,9 +1770,20 @@ const UI = {
       play.setAttribute('aria-label', 'Start chain');
       play.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
 
+      // Selection-mode tick badge (shown via CSS data-select-mode="true").
+      const tick = document.createElement('div');
+      tick.className = 'chain-card-select-tick';
+      tick.setAttribute('aria-hidden', 'true');
+
+      // Reflect already-running state so the user can tell at a glance.
+      if (Engine.isChainRunning(chain.id)) li.classList.add('is-running');
+      // Reflect selection state.
+      if (UI.selectedIds.has(chain.id))    li.classList.add('is-selected');
+
       li.appendChild(stripe);
       li.appendChild(body);
       li.appendChild(play);
+      li.appendChild(tick);
       list.appendChild(li);
 
       // segment preview pills
@@ -1521,35 +1806,260 @@ const UI = {
         preview.appendChild(more);
       }
 
-      // events
-      body.addEventListener('click', () => { Editor.loadChain(chain.id); View.show('editor'); });
-      stripe.addEventListener('click', () => { Editor.loadChain(chain.id); View.show('editor'); });
+      // Tap behavior depends on mode + chain state:
+      //
+      //   selection mode → toggle this row's selection (any zone)
+      //   already running → open run view focused on this chain
+      //   default → open editor
+      //
+      // The body and stripe share the tap target. The play button is a
+      // dedicated start affordance. In selection mode the play button is
+      // hidden by CSS so the whole card is one big toggle.
+      const onCardTap = () => {
+        if (UI.selectMode) { UI.toggleSelected(chain.id); return; }
+        if (Engine.isChainRunning(chain.id)) {
+          Engine.focus(chain.id);
+          View.show('run');
+          return;
+        }
+        Editor.loadChain(chain.id);
+        View.show('editor');
+      };
+      body.addEventListener('click',   onCardTap);
+      stripe.addEventListener('click', onCardTap);
+      tick.addEventListener('click',   onCardTap);
       play.addEventListener('click', e => {
         e.stopPropagation();
+        if (UI.selectMode) { UI.toggleSelected(chain.id); return; }
         Audio.unlock();
         UI.startRunForChain(chain);
       });
+      UI._wireLongPress(li, chain.id);
+    });
+
+    // Reflect the current select-mode + selection set into the topbars.
+    UI._syncLibrarySelectionUI();
+  },
+
+  // Long-press enters selection mode and pre-selects this row.
+  _wireLongPress(li, chainId) {
+    let timer = null;
+    let startX = 0, startY = 0;
+    let triggered = false;
+    const cancel = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    li.addEventListener('pointerdown', (e) => {
+      // Only respond to primary button (not e.g. right-click on desktop)
+      if (e.button !== undefined && e.button !== 0) return;
+      triggered = false;
+      startX = e.clientX; startY = e.clientY;
+      timer = setTimeout(() => {
+        triggered = true;
+        timer = null;
+        // If already in select mode, treat long-press as a toggle —
+        // resetting the selection on every long-press surprises the user.
+        if (UI.selectMode) UI.toggleSelected(chainId);
+        else UI.enterSelectMode(chainId);
+      }, UI.LONGPRESS_MS);
+    });
+    li.addEventListener('pointermove', (e) => {
+      // Cancel on scroll/drag — 8px is the standard touch slop.
+      if (!timer) return;
+      const dx = Math.abs(e.clientX - startX), dy = Math.abs(e.clientY - startY);
+      if (dx > 8 || dy > 8) cancel();
+    });
+    li.addEventListener('pointerup',     cancel);
+    li.addEventListener('pointercancel', cancel);
+    li.addEventListener('pointerleave',  cancel);
+    // Swallow the synthetic click that follows a long-press so the
+    // card's own onTap doesn't immediately undo what enter-select did.
+    li.addEventListener('click', (e) => {
+      if (triggered) { e.stopPropagation(); e.preventDefault(); triggered = false; }
+    }, true);
+  },
+
+  enterSelectMode(chainId) {
+    UI.selectMode = true;
+    UI.selectedIds.clear();
+    if (chainId) UI.selectedIds.add(chainId);
+    UI._syncLibrarySelectionUI();
+    UI._reflectRowSelection();
+  },
+
+  exitSelectMode() {
+    UI.selectMode = false;
+    UI.selectedIds.clear();
+    UI._syncLibrarySelectionUI();
+    UI._reflectRowSelection();
+  },
+
+  // Toggle a row's selection. Caps at MAX_CONCURRENT_RUNS — when the
+  // user adds a 3rd, the OLDEST selection is evicted to make room.
+  // Insertion order is preserved so the eviction is deterministic.
+  toggleSelected(chainId) {
+    if (UI.selectedIds.has(chainId)) {
+      UI.selectedIds.delete(chainId);
+      if (UI.selectedIds.size === 0) {
+        // Empty selection auto-exits selection mode.
+        UI.exitSelectMode();
+        return;
+      }
+    } else {
+      UI.selectedIds.add(chainId);
+      while (UI.selectedIds.size > MAX_CONCURRENT_RUNS) {
+        // Cap reached — drop the oldest entry to make room. Surface a
+        // toast so the user understands why a previous selection
+        // suddenly vanished from the row's checkmark.
+        const oldest = UI.selectedIds.values().next().value;
+        UI.selectedIds.delete(oldest);
+        const oldChain = Store.getChain(oldest);
+        Toast.show(`Up to ${MAX_CONCURRENT_RUNS} at once — dropped "${oldChain?.name || 'a chain'}".`, 'warn');
+      }
+    }
+    UI._syncLibrarySelectionUI();
+    UI._reflectRowSelection();
+  },
+
+  // Update the row .is-selected classes without re-rendering the list.
+  _reflectRowSelection() {
+    const list = document.getElementById('chain-list');
+    if (!list) return;
+    [...list.children].forEach(li => {
+      const id = li.dataset.chainId;
+      li.classList.toggle('is-selected', UI.selectedIds.has(id));
     });
   },
 
+  // Mirror selectMode + count into the topbar and view attribute.
+  _syncLibrarySelectionUI() {
+    const view = document.querySelector('.view-library');
+    if (view) view.dataset.selectMode = UI.selectMode ? 'true' : 'false';
+    const defBar = document.getElementById('library-topbar-default');
+    const selBar = document.getElementById('library-topbar-select');
+    if (defBar && selBar) {
+      defBar.hidden = UI.selectMode;
+      selBar.hidden = !UI.selectMode;
+    }
+    if (UI.selectMode) {
+      const n = UI.selectedIds.size;
+      const countEl = document.getElementById('library-select-count');
+      if (countEl) countEl.textContent = `${n} selected`;
+      const startBtn = document.getElementById('library-select-start');
+      if (startBtn) startBtn.disabled = (n === 0);
+      const eyebrowEl = document.getElementById('library-select-eyebrow');
+      if (eyebrowEl) {
+        eyebrowEl.textContent = (n === MAX_CONCURRENT_RUNS)
+          ? `Max ${MAX_CONCURRENT_RUNS} at once`
+          : 'Select chains';
+      }
+    }
+  },
+
+  // Fire a synced t=0 start for every selected chain.
+  startSelected() {
+    if (!UI.selectedIds.size) return;
+    const chains = [...UI.selectedIds].map(id => Store.getChain(id)).filter(Boolean);
+    if (!chains.length) { UI.exitSelectMode(); return; }
+    Audio.unlock();
+    // Skip the prestart countdown for synced multi-start. Running a
+    // 3-2-1 against 2 chains simultaneously would be confusing — the
+    // intent of multi-start is "begin now."
+    const ok = Engine.startMany(chains);
+    UI.exitSelectMode();
+    if (ok) View.show('run');
+  },
+
   startRunForChain(chain) {
-    // Pre-populate engine state so renderRun has data immediately,
-    // even before the prestart countdown finishes.
-    Engine.chain = chain;
-    Engine.segments = expandChain(chain);
-    Engine.currentIndex = 0;
-    Engine.totalElapsed = 0;
-    if (!Engine.segments.length) {
-      Toast.show('Chain has no segments', 'warn');
+    if (!chain) return;
+    // ALWAYS cancel any in-flight prestart first — defends against the
+    // user double-tapping or starting chain B while chain A's prestart
+    // is still counting down. Without this, the A-prestart interval
+    // would keep ticking and eventually fire Engine.startChain(A) on
+    // top of B.
+    UI.cancelPrestart();
+    const segments = expandChain(chain);
+    if (!segments.length) { Toast.show('Chain has no segments', 'warn'); return; }
+    // Already running? Just focus + navigate. No prestart, no duplicate
+    // run. Matches the "tap a running chain → go to its run view"
+    // contract from the v1.4 design conversation.
+    if (Engine.isChainRunning(chain.id)) {
+      Engine.focus(chain.id);
+      View.show('run');
       return;
     }
-    View.show('run');
+    // Cap check. The same toast that fires from Engine.startChain when
+    // the cap is hit, surfaced here too so the user gets feedback before
+    // we even attempt the run.
+    if (Engine.activeRunningCount() >= MAX_CONCURRENT_RUNS) {
+      Toast.show(`${MAX_CONCURRENT_RUNS} chains already running — stop one to start another.`, 'warn');
+      return;
+    }
     // Prestart is a chain-level concept (no segment is running yet) — it
     // resolves against chain.cues then app defaults. Segments don't get
     // a prestart override on purpose: it makes no sense to "skip the
     // countdown only for segment 3."
-    if (effectiveCue(null, chain, 'prestart')) UI.runPrestart(chain);
-    else Engine.startChain(chain);
+    //
+    // SKIP the prestart entirely when another chain is already running:
+    // the 3-2-1 overlay would clobber the focused chain's clock display
+    // for 3s and hide the chip strip, leaving the user no way back to
+    // the running chain. Match the bulk-start (Engine.startMany) policy
+    // — "begin now" is the right answer when joining an already-active
+    // session. Single-chain users get the countdown as before.
+    const hasOtherRunning = Engine.activeRunningCount() > 0;
+    if (!hasOtherRunning && effectiveCue(null, chain, 'prestart')) {
+      UI._renderRunForChain(chain, segments);
+      View.show('run');
+      UI.runPrestart(chain);
+    } else {
+      if (Engine.startChain(chain)) View.show('run');
+    }
+  },
+
+  // Synthetic render of the run view from a chain that hasn't started
+  // yet (used during the pre-start countdown). Mirrors the read-only
+  // parts of updateRunSegmentInfo + updateRunClock without touching
+  // Engine — there's no focused EngineRun yet.
+  _renderRunForChain(chain, segmentsArg) {
+    const segments = segmentsArg || expandChain(chain);
+    if (!segments.length) return;
+    const seg0 = segments[0];
+    document.getElementById('run-chain-name').textContent  = chain.name || '—';
+    document.getElementById('run-segment-name').textContent = seg0.name;
+    document.getElementById('run-segment-tag').textContent  = 'Segment 1';
+    document.getElementById('run-segment-of').textContent   = `of ${segments.length}`;
+    document.getElementById('run-chain-pos').textContent    = `1 / ${segments.length}`;
+    document.getElementById('run-clock').textContent        = fmt(seg0.duration);
+    const ring = document.getElementById('run-ring-fill');
+    ring.style.stroke = colorHex(seg0.color);
+    document.getElementById('run-bg').style.background =
+      `radial-gradient(ellipse 70% 50% at 50% 25%, ${colorHex(seg0.color)}28, transparent 65%)`;
+    const strip = document.getElementById('run-chain-strip');
+    strip.innerHTML = '';
+    segments.forEach((s, i) => {
+      const t = document.createElement('div');
+      t.className = 'run-chain-strip-tick';
+      if (i === 0) t.classList.add('is-active');
+      t.style.flex = `${Math.max(1, Math.sqrt(s.duration))} 1 0`;
+      strip.appendChild(t);
+    });
+    const nextSeg = segments[1];
+    const nextWrap = document.getElementById('run-next');
+    if (nextSeg) {
+      nextWrap.style.visibility = 'visible';
+      document.getElementById('run-next-name').textContent = nextSeg.name;
+      document.getElementById('run-next-dur').textContent  = fmt(nextSeg.duration);
+    } else {
+      nextWrap.style.visibility = 'hidden';
+    }
+    // Reset progress fill / elapsed during the prestart preview.
+    document.getElementById('run-progress-fill').style.width = '0%';
+    const totalChain = segments.reduce((s, x) => s + x.duration, 0);
+    document.getElementById('run-elapsed').textContent   = `00:00 elapsed`;
+    document.getElementById('run-remaining').textContent = `${fmt(totalChain)} remaining`;
+    // Hide chip strip during prestart (Engine has no runs yet to chip).
+    const chips = document.getElementById('run-chips');
+    if (chips) chips.hidden = true;
   },
 
   prestartIv: null,
@@ -1569,7 +2079,7 @@ const UI = {
     num.textContent = n;
     // Prestart's own audible/vibration ticks resolve at chain level
     // (segment hasn't started yet), so they ride on chain.cues.sound /
-    // chain.cues.vibrate. Captured once at countdown start — the user
+    // chain.cues.vibrate. Captured once at countdown start â€” the user
     // can't realistically toggle settings mid-countdown.
     const sound   = effectiveCue(null, chain, 'sound');
     const vibrate = effectiveCue(null, chain, 'vibrate');
@@ -1609,7 +2119,7 @@ const UI = {
       tpl.segments.forEach(s => {
         const pill = document.createElement('span');
         pill.className = 'template-pill';
-        pill.textContent = `${s.name} · ${fmt(s.duration)}`;
+        pill.textContent = `${s.name} Â· ${fmt(s.duration)}`;
         pill.style.color = colorHex(s.color);
         pill.style.borderColor = colorHex(s.color) + '44';
         segWrap.appendChild(pill);
@@ -1618,7 +2128,7 @@ const UI = {
         const pill = document.createElement('span');
         pill.className = 'template-pill';
         pill.style.borderStyle = 'dashed';
-        pill.textContent = `× ${tpl.loops} loops`;
+        pill.textContent = `Ã— ${tpl.loops} loops`;
         segWrap.appendChild(pill);
       }
       li.addEventListener('click', () => {
@@ -1635,11 +2145,24 @@ const UI = {
     const draft = Editor.draft;
     if (!draft) return;
 
-    document.getElementById('editor-mode-label').textContent = Editor.draftId ? 'Editing' : 'New';
+    // v1.4 — lock the editor if THIS chain (or a chain with the same
+    // id, in case Editor.draftId is the persisted id) is currently
+    // running. Editing a live chain is unsafe: segment names ripple
+    // through the FGS voice cache, segment durations would already be
+    // mid-elapse, the chain expansion that drove the run is frozen in
+    // memory. Show a stop-banner instead.
+    const locked = !!(Editor.draftId && Engine.isChainRunning(Editor.draftId));
+    const viewEd = document.querySelector('.view-editor');
+    if (viewEd) viewEd.dataset.locked = locked ? 'true' : 'false';
+    const banner = document.getElementById('editor-locked-banner');
+    if (banner) banner.hidden = !locked;
+
+    document.getElementById('editor-mode-label').textContent = Editor.draftId ? (locked ? 'Running' : 'Editing') : 'New';
     const nameInput = document.getElementById('editor-name');
     nameInput.value = draft.name;
+    nameInput.disabled = locked;
 
-    // Chain-level cue bell — dot indicator lights up when any chain-level
+    // Chain-level cue bell â€” dot indicator lights up when any chain-level
     // cue is explicitly overridden. Click opens the chain-scoped cue sheet.
     UI._syncChainCueBell();
 
@@ -1697,10 +2220,10 @@ const UI = {
       const subName = sub ? sub.name : '(missing)';
       const subDur  = sub ? chainTotalSeconds(sub) : 0;
       body.innerHTML = `
-        <div class="segment-num">№ ${idx + 1} · embedded chain</div>
+        <div class="segment-num">â„– ${idx + 1} Â· embedded chain</div>
         <div class="segment-sub-name">${escape(subName)}</div>
         <div class="segment-sub-meta">
-          ${sub ? `${expandChain(sub).length} segments · ${fmt(subDur)}` : 'Not found'}
+          ${sub ? `${expandChain(sub).length} segments Â· ${fmt(subDur)}` : 'Not found'}
         </div>
       `;
       li.appendChild(body);
@@ -1710,8 +2233,8 @@ const UI = {
       loopsWrap.className = 'segment-sub-loops';
       const segLoops = Math.max(1, Number(seg.loops) || 1);
       loopsWrap.innerHTML = `
-        <button data-loop="-1" aria-label="Fewer loops">−</button>
-        <span>×${segLoops}</span>
+        <button data-loop="-1" aria-label="Fewer loops">âˆ’</button>
+        <span>Ã—${segLoops}</span>
         <button data-loop="+1" aria-label="More loops">+</button>
       `;
       loopsWrap.querySelectorAll('button').forEach(b => {
@@ -1724,7 +2247,7 @@ const UI = {
       li.appendChild(loopsWrap);
     } else {
       body.innerHTML = `
-        <span class="segment-num">№ ${idx + 1}</span>
+        <span class="segment-num">â„– ${idx + 1}</span>
         <input type="text" class="segment-name-input" value="${escape(seg.name || '')}" placeholder="Segment name" maxlength="48" />
         <div class="segment-meta">
           <button class="seg-color-btn" aria-label="Cycle color" style="background: ${colorHex(seg.color)}"></button>
@@ -1750,7 +2273,7 @@ const UI = {
       li.appendChild(dur);
     }
 
-    // Per-segment cue overrides — bell icon left of trash. Tap opens the
+    // Per-segment cue overrides â€” bell icon left of trash. Tap opens the
     // cue sheet (4 cues: sound, finalTick, voice, vibrate; prestart is
     // chain-only). The bell's accent dot lights up when at least one
     // cue at this scope is explicitly overridden, giving the user a
@@ -1916,7 +2439,7 @@ const UI = {
       li.innerHTML = `
         <div>
           <div class="picker-item-name" style="color: ${colorHex(c.color)}">${escape(c.name)}</div>
-          <div class="picker-item-meta">${expandChain(c).length} segments · ${fmt(chainTotalSeconds(c))}</div>
+          <div class="picker-item-meta">${expandChain(c).length} segments Â· ${fmt(chainTotalSeconds(c))}</div>
         </div>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 6l6 6-6 6"/></svg>
       `;
@@ -1942,7 +2465,7 @@ const UI = {
     document.getElementById('setting-wake').checked      = !!s.wake;
     document.getElementById('setting-prestart').checked  = !!s.prestart;
     document.getElementById('setting-finaltick').checked = !!s.finalTick;
-    // Final-3 tick depends on the sound channel being on at all — hide
+    // Final-3 tick depends on the sound channel being on at all â€” hide
     // the sub-row when sound is off so the user isn't toggling a setting
     // that has no audible effect.
     UI._syncFinalTickRowVisibility();
@@ -1956,7 +2479,7 @@ const UI = {
     // available: on Capacitor we route everything through @capacitor/local-
     // notifications + the ChainTimerPlugin FGS, and on a browser without
     // Notification support (Android WebView, some embedded browsers) we'd
-    // otherwise show "Notifications not supported in this browser" — which
+    // otherwise show "Notifications not supported in this browser" â€” which
     // reads to the user as a broken state when it actually doesn't apply.
     // Hide the row entirely in both cases.
     const hideNotifRow = (window.ChainedNative?.isNative) || perm === 'unsupported';
@@ -1967,7 +2490,7 @@ const UI = {
       else                         { notifBtn.disabled = false;         notifBtn.textContent = 'Enable'; }
     }
 
-    // Native bridge panel — only visible when running inside Capacitor
+    // Native bridge panel â€” only visible when running inside Capacitor
     const N = window.ChainedNative;
     const panel = document.getElementById('native-panel');
     if (N && N.isNative) {
@@ -1978,7 +2501,7 @@ const UI = {
       const body = document.getElementById('native-body');
       const title = document.getElementById('native-title');
 
-      title.textContent = `Native bridge — ${st.platform}`;
+      title.textContent = `Native bridge â€” ${st.platform}`;
 
       if (st.permission === 'granted' && st.channelReady) {
         dot.className = 'native-dot is-on';
@@ -1995,18 +2518,18 @@ const UI = {
       }
 
       const ls = st.lastSchedule;
-      let bodyText = `notifs: ${st.permission} · channel: ${st.channelReady ? 'ready' : '—'} · exact-alarm: ${st.exactAlarm}`;
+      let bodyText = `notifs: ${st.permission} Â· channel: ${st.channelReady ? 'ready' : 'â€”'} Â· exact-alarm: ${st.exactAlarm}`;
       if (st.platform === 'android') {
         const fgState = st.fgService ? 'running' : (st.fgServiceAvailable ? 'idle' : 'unavailable');
-        bodyText += ` · background service: ${fgState}`;
+        bodyText += ` Â· background service: ${fgState}`;
         if (st.batteryOpt && st.batteryOpt !== 'unsupported' && st.batteryOpt !== 'unknown') {
-          bodyText += ` · battery: ${st.batteryOpt}`;
+          bodyText += ` Â· battery: ${st.batteryOpt}`;
         }
         if (st.notifHealth) {
           const h = st.notifHealth;
-          if (!h.appEnabled)                     bodyText += '\n⚠ notifications: BLOCKED app-wide';
-          else if (!h.transitionsChannelEnabled) bodyText += '\n⚠ "Chain transitions" channel disabled';
-          else if (!h.completeChannelEnabled)    bodyText += '\n⚠ "Chain complete" channel disabled';
+          if (!h.appEnabled)                     bodyText += '\nâš  notifications: BLOCKED app-wide';
+          else if (!h.transitionsChannelEnabled) bodyText += '\nâš  "Chain transitions" channel disabled';
+          else if (!h.completeChannelEnabled)    bodyText += '\nâš  "Chain complete" channel disabled';
         }
       }
       if (ls) {
@@ -2028,7 +2551,7 @@ const UI = {
       const needsBatteryFix = (st.batteryOpt === 'optimized');
       batteryBtn.hidden = !needsBatteryFix;
 
-      // Notifications disabled is a CRITICAL failure mode — every alert
+      // Notifications disabled is a CRITICAL failure mode â€” every alert
       // is silent. Make the badge red and unmissable.
       const notifBlocked = st.notifHealth && !st.notifHealth.ok;
 
@@ -2136,7 +2659,7 @@ const UI = {
       row.appendChild(pill);
 
       // Hide finalTick row when the EFFECTIVE sound at this scope is off
-      // — same logic as the App Settings sub-row. The user can't make
+      // â€” same logic as the App Settings sub-row. The user can't make
       // finalTick fire when the sound channel it depends on is silent.
       if (meta.requires) {
         const parentEffective = effectiveCue(
@@ -2171,7 +2694,7 @@ const UI = {
   // Reflect the persisted audio-route value onto the 3-segment pill.
   // Stored value is one of 'headset' | 'both' | 'speaker'; any unknown
   // value collapses to 'headset' (the default). The whole row is hidden
-  // on non-native platforms — browsers route through whatever the OS
+  // on non-native platforms â€” browsers route through whatever the OS
   // picked as the default output and we don't have the permission scope
   // (setSinkId needs persistent device-selection) to override that.
   // Showing the pill on web would be lying about what the setting does.
@@ -2196,12 +2719,78 @@ const UI = {
     document.getElementById('run-chain-name').textContent = Engine.chain.name;
     UI.updateRunSegmentInfo();
     UI.updateRunClock(Engine.segments[Engine.currentIndex], Engine.segments[Engine.currentIndex]?.duration || 0, 0);
+    UI.renderRunChips();
+  },
+
+  // v1.4 — multi-chain chip strip. Hidden when ≤1 chain is running so
+  // the single-chain UX stays byte-identical. Otherwise renders one
+  // chip per active run; the focused chip is highlighted; tapping a
+  // background chip swaps focus.
+  renderRunChips() {
+    const wrap = document.getElementById('run-chips');
+    if (!wrap) return;
+    const runs = Engine.activeRuns();
+    if (runs.length <= 1) {
+      wrap.hidden = true;
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.hidden = false;
+    wrap.innerHTML = '';
+    const focusedId = Engine.focusedRunId();
+    runs.forEach(run => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'run-chip'
+        + (run.id === focusedId ? ' is-focused' : '')
+        + (run.isPaused          ? ' is-paused'  : '');
+      chip.dataset.chainId = run.id;
+      const dot   = document.createElement('span'); dot.className = 'run-chip-dot';
+      const name  = document.createElement('span'); name.className = 'run-chip-name';
+      name.textContent = run.chain?.name || 'Chain';
+      const clock = document.createElement('span'); clock.className = 'run-chip-clock';
+      const cur = run.segments[run.currentIndex];
+      const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
+      clock.textContent = fmt(Math.ceil(remaining));
+      chip.appendChild(dot);
+      chip.appendChild(name);
+      chip.appendChild(clock);
+      chip.addEventListener('click', () => Engine.focus(run.id));
+      // Long-press a chip to stop that specific run.
+      UI._wireChipLongPress(chip, run);
+      wrap.appendChild(chip);
+    });
+  },
+
+  _wireChipLongPress(chip, run) {
+    let timer = null;
+    let startX = 0, startY = 0;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    chip.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      startX = e.clientX; startY = e.clientY;
+      timer = setTimeout(() => {
+        timer = null;
+        if (confirm(`Stop "${run.chain?.name || 'this chain'}"?`)) {
+          Engine.stopRun(run.id);
+        }
+      }, UI.LONGPRESS_MS);
+    });
+    chip.addEventListener('pointermove', (e) => {
+      if (!timer) return;
+      // Match the chain-row long-press slop — touch jitter and small
+      // scroll gestures shouldn't fire the stop-confirm.
+      if (Math.abs(e.clientX - startX) > 8 || Math.abs(e.clientY - startY) > 8) cancel();
+    });
+    chip.addEventListener('pointerup',     cancel);
+    chip.addEventListener('pointercancel', cancel);
+    chip.addEventListener('pointerleave',  cancel);
   },
 
   updateRunSegmentInfo() {
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
-    document.getElementById('run-chain-name').textContent = Engine.chain?.name || '—';
+    document.getElementById('run-chain-name').textContent = Engine.chain?.name || 'â€”';
     document.getElementById('run-segment-name').textContent = seg.name;
     document.getElementById('run-segment-tag').textContent = `Segment ${Engine.currentIndex + 1}`;
     document.getElementById('run-segment-of').textContent  = `of ${Engine.segments.length}`;
@@ -2249,14 +2838,14 @@ const UI = {
     const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
     // Ceiling the displayed second so the clock flips to "00:03" at the
     // SAME instant Audio.finalThree's first pulse fires (the engine arms
-    // the 3-2-1 burst on Math.ceil(remainingSec) == 3 — same calculation).
-    // fmt() rounds — it would flip the digit half a second EARLIER than
+    // the 3-2-1 burst on Math.ceil(remainingSec) == 3 â€” same calculation).
+    // fmt() rounds â€” it would flip the digit half a second EARLIER than
     // the tick, making the sound feel like it's chasing the visual.
     // The notification path uses ceiling for both the displayed remaining
     // and the tick trigger, so we mirror that here for parity.
     document.getElementById('run-clock').textContent = fmt(Math.ceil(r));
 
-    // ring (use inline style — CSS class values otherwise override presentation attrs)
+    // ring (use inline style â€” CSS class values otherwise override presentation attrs)
     const ring = document.getElementById('run-ring-fill');
     const total = seg.duration;
     const progress = Math.max(0, Math.min(1, 1 - r / total));
@@ -2278,6 +2867,31 @@ const UI = {
       ? `<path d="M8 5v14l11-7z"/>`
       : `<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>`;
     if (ico.innerHTML !== target) ico.innerHTML = target;
+
+    // v1.4 — keep background chip clocks live too. We piggyback on the
+    // focused run's rAF tick: the background runs ARE still ticking via
+    // their own _loop (their _cbTick is gated to no-op), so we just
+    // need to re-read their wall-clock state and update the chip text.
+    // Skip when only one run is active — chip strip is hidden, nothing
+    // to redraw.
+    if (Engine._runs.size > 1) UI._updateRunChipClocks();
+  },
+
+  // Update the run-chip clock text in place without rebuilding the
+  // chip elements. Called from updateRunClock on every focused tick.
+  _updateRunChipClocks() {
+    const wrap = document.getElementById('run-chips');
+    if (!wrap || wrap.hidden) return;
+    [...wrap.children].forEach(chip => {
+      const id  = chip.dataset.chainId;
+      const run = Engine.runById(id);
+      if (!run) return;
+      const cur = run.segments[run.currentIndex];
+      const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
+      const clock = chip.querySelector('.run-chip-clock');
+      if (clock) clock.textContent = fmt(Math.ceil(remaining));
+      chip.classList.toggle('is-paused', !!run.isPaused);
+    });
   },
 
   showCompletion(totalSeconds) {
@@ -2355,7 +2969,7 @@ function init() {
     });
   });
 
-  // Chain-level cue overrides — bell in the editor header. The draft is
+  // Chain-level cue overrides â€” bell in the editor header. The draft is
   // mutated in place; the bell's dot indicator refreshes on each pill
   // tap (via the onChange callback) so the user sees their override
   // land without re-rendering the whole editor.
@@ -2370,7 +2984,7 @@ function init() {
       if (key === 'wake' && e.target.checked && Engine.isRunning && !Engine.isPaused) Wake.acquire();
       if (key === 'wake' && !e.target.checked) Wake.release();
       // Sound is the parent of "Final 3 seconds tick" in the Defaults
-      // section — hide/show the nested row as the user flips the parent.
+      // section â€” hide/show the nested row as the user flips the parent.
       if (key === 'sound') UI._syncFinalTickRowVisibility();
     });
   };
@@ -2391,7 +3005,7 @@ function init() {
       // Live-apply to a running chain: re-emit fgsupdate so the FGS
       // re-binds its voice MediaPlayer to the new preferred device on
       // the NEXT boundary. We don't interrupt whatever's currently
-      // playing — that would be jarring for users tapping the pill
+      // playing â€” that would be jarring for users tapping the pill
       // mid-segment.
       if (Engine.isRunning) Engine._emitChainEvent('chain:fgsupdate');
     });
@@ -2419,12 +3033,12 @@ function init() {
     UI.openSettings();
   });
   document.getElementById('native-exact').addEventListener('click', async () => {
-    Toast.show('Opening system settings — toggle "Allow exact alarms" ON, then come back.', 'good');
+    Toast.show('Opening system settings â€” toggle "Allow exact alarms" ON, then come back.', 'good');
     const ok = await window.ChainedNative?.requestExactAlarm();
     setTimeout(() => UI.openSettings(), 500);
   });
   document.getElementById('native-battery').addEventListener('click', async () => {
-    Toast.show('Opening battery settings — choose Unrestricted (or Allow), then come back.', 'good');
+    Toast.show('Opening battery settings â€” choose Unrestricted (or Allow), then come back.', 'good');
     await window.ChainedNative?.requestBatteryOpt?.();
     // Re-render once the user comes back (visibilitychange refreshes state).
     setTimeout(() => UI.openSettings(), 500);
@@ -2496,6 +3110,13 @@ function init() {
   document.getElementById('editor-menu-btn').addEventListener('click', () => {
     if (!Editor.draftId) {
       Toast.show('Save first to use this menu');
+      return;
+    }
+    // v1.4 — block destructive actions while this chain is running.
+    // Delete/Duplicate/Share all mutate Store state in ways that would
+    // either orphan the live EngineRun or surprise the user mid-workout.
+    if (Engine.isChainRunning(Editor.draftId)) {
+      Toast.show('Stop this chain to use the more menu', 'warn');
       return;
     }
     document.getElementById('actions-title').textContent = Editor.draft.name || 'Chain';
@@ -2570,12 +3191,18 @@ function init() {
   // run controls
   document.getElementById('run-stop').addEventListener('click', () => {
     if (Engine.isRunning) {
-      if (!confirm('Stop this chain?')) return;
+      const otherRunning = Engine.activeRunningCount() > 1;
+      const focusedName = Engine.chain?.name || 'this chain';
+      const prompt = otherRunning
+        ? `Stop "${focusedName}"? Another chain will continue.`
+        : 'Stop this chain?';
+      if (!confirm(prompt)) return;
     }
-    UI.cancelPrestart();           // ← prevent the queued startChain from firing
+    UI.cancelPrestart();           // â† prevent the queued startChain from firing
     Engine.stop();
     UI.hideCompletion();
-    View.show('library');
+    if (Engine.activeRunningCount() === 0) View.show('library');
+    else UI.updateRunSegmentInfo();   // redraw for the newly-promoted run
   });
   document.getElementById('run-toggle').addEventListener('click', () => {
     Audio.unlock();
@@ -2607,6 +3234,25 @@ function init() {
   Engine.onTick = (seg, remaining, elapsed) => UI.updateRunClock(seg, remaining, elapsed);
   Engine.onSegmentChange = () => UI.updateRunSegmentInfo();
   Engine.onComplete = (totalSeconds) => UI.showCompletion(totalSeconds);
+  // v1.4 — chip strip wakes up whenever a run is added/removed/focused.
+  // The chip clocks themselves redraw on every focused-run tick (see
+  // updateRunClock) so background clocks stay live.
+  Engine.onRunsChange = () => UI.renderRunChips();
+
+  // v1.4 — selection-mode topbar buttons.
+  document.getElementById('library-select-cancel')?.addEventListener('click', () => UI.exitSelectMode());
+  document.getElementById('library-select-start')?.addEventListener('click', () => UI.startSelected());
+  // Editor lock — Stop button in the locked banner stops the running
+  // chain. Confirm to prevent accidental stops mid-workout.
+  document.getElementById('editor-locked-stop')?.addEventListener('click', () => {
+    if (!Editor.draftId) return;
+    if (!confirm('Stop this chain?')) return;
+    Engine.stopRun(Editor.draftId);
+    UI.renderEditor();   // banner disappears
+  });
+  // Native bridge events for a SPECIFIC run id (notification buttons).
+  // The existing 'chained:enginecommand' listener is below; we replace it
+  // with a runId-aware version inside the same init() — see further down.
 
   // PWA install prompt
   window.addEventListener('beforeinstallprompt', (e) => {
@@ -2650,21 +3296,26 @@ function init() {
   // run view. Without this they're stuck looking at the segment+remaining
   // values frozen from the moment they backgrounded the app, and every
   // in-app control silently does nothing because isRunning flipped to
-  // false — exactly the "pause button doesn't work, timer looks frozen"
-  // symptom. The OS-fired "✓ Chain complete" notification already cued
+  // false â€” exactly the "pause button doesn't work, timer looks frozen"
+  // symptom. The OS-fired "âœ“ Chain complete" notification already cued
   // the user; no point replaying the in-app overlay now.
   function bailOutOfStaleRunView() {
-    if (Engine.isRunning) return;
+    // v1.4 — if ANY run is still active (even a background one) the
+    // run view is meaningful; keep it. Only bail when there's nothing
+    // left to display.
+    if (Engine.activeRunningCount() > 0) return;
     if (document.body.dataset.view !== 'run') return;
     UI.hideCompletion();
     View.show('library');
   }
 
   function refreshFromWallClock() {
-    if (!Engine.isRunning || Engine.isPaused) return;
+    // Wake all runs that need catching up; the coordinator fans out
+    // to every active run.
+    if (Engine.activeRunningCount() === 0) return;
     Engine._catchup();
-    if (Engine.isRunning) {
-      Engine._loop();              // re-prime rAF if it was cancelled
+    if (Engine.activeRunningCount() > 0) {
+      Engine._loop();              // re-prime rAF for any unpaused run
       UI.updateRunSegmentInfo();
     } else {
       bailOutOfStaleRunView();
@@ -2675,7 +3326,7 @@ function init() {
   });
   window.addEventListener('pageshow', refreshFromWallClock);
   window.addEventListener('focus',    refreshFromWallClock);
-  // Capacitor App resume — the native bridge dispatches this when the
+  // Capacitor App resume â€” the native bridge dispatches this when the
   // activity returns to foreground (more reliable than visibilitychange
   // on some Android skins).
   window.addEventListener('chained:appresume', refreshFromWallClock);
@@ -2683,20 +3334,16 @@ function init() {
   // Native-bridge heartbeat: every few minutes (and on every visibility
   // change), the bridge asks the engine to re-emit chain:reschedule so
   // the OS-side AlarmManager queue stays fresh. Defends against the long
-  // tail of "alarms silently lost" scenarios — force-stop, OEM kill,
+  // tail of "alarms silently lost" scenarios â€” force-stop, OEM kill,
   // OS Doze coalescing the inexact-alarm fallback.
   window.addEventListener('chained:nudgereschedule', () => {
-    if (!Engine.isRunning) { bailOutOfStaleRunView(); return; }
-    // Catch up to wall clock FIRST. If the chain elapsed past its end
-    // while the WebView was paused, _catchup → _complete sets isRunning
-    // false and we skip the reschedule entirely. Without this we'd
-    // re-up the FGS service with stale state right before
-    // refreshFromWallClock catches it, and the subsequent
-    // chain:complete event would then post a duplicate
-    // "✓ Chain complete" notification on top of the one the service
-    // already posted when it self-completed in the background.
-    if (!Engine.isPaused) Engine._catchup();
-    if (!Engine.isRunning) { bailOutOfStaleRunView(); return; }
+    if (Engine.activeRunningCount() === 0) { bailOutOfStaleRunView(); return; }
+    // Catch up to wall clock FIRST. If a chain elapsed past its end
+    // while the WebView was paused, _catchup -> _complete removes it
+    // from _runs. Engine._catchup fans out to every active run; we
+    // re-emit only the runs still alive after the catch-up.
+    Engine._catchup();
+    if (Engine.activeRunningCount() === 0) { bailOutOfStaleRunView(); return; }
     Engine._emitChainEvent('chain:reschedule');
   });
 
@@ -2707,30 +3354,34 @@ function init() {
   window.addEventListener('chained:enginecommand', (e) => {
     const cmd = e?.detail?.command;
     if (!cmd) return;
+    // v1.4 — when multiple runs exist, the notification command carries
+    // a runId so we know which run to act on. Without it, target the
+    // focused run (single-chain back-compat).
+    const runId = e?.detail?.runId;
+    const targetRun = runId ? Engine.runById(runId) : Engine._focused;
+    if (!targetRun || !targetRun.isRunning) return;
     if (cmd === 'pause') {
-      if (Engine.isRunning && !Engine.isPaused) Engine.pause();
+      if (!targetRun.isPaused) targetRun.pause();
     } else if (cmd === 'resume') {
-      if (Engine.isRunning && Engine.isPaused) Engine.resume();
+      if (targetRun.isPaused) targetRun.resume();
     } else if (cmd === 'skip-next') {
-      if (Engine.isRunning) Engine.skipNext();
+      targetRun.skipNext();
     } else if (cmd === 'skip-prev') {
-      if (Engine.isRunning) Engine.skipPrev();
+      targetRun.skipPrev();
     } else if (cmd === 'stop') {
-      if (Engine.isRunning) {
-        UI.cancelPrestart();
-        Engine.stop();
-        UI.hideCompletion();
-        // Only force-navigate when the user was on the run view; if they
-        // were in the editor / library / settings when they tapped Stop
-        // from the notification, leave them where they were.
-        if (document.body.dataset.view === 'run') {
-          View.show('library');
-        }
+      UI.cancelPrestart();
+      Engine.stopRun(targetRun.id);
+      UI.hideCompletion();
+      // Only force-navigate when the user was on the run view AND no
+      // other run is left to focus on. If a second run is still going
+      // we let the coordinator promote it and stay on the run view.
+      if (document.body.dataset.view === 'run' && Engine.activeRunningCount() === 0) {
+        View.show('library');
       }
     }
   });
 
-  // Native bridge ↔ web bridge: surface native errors as in-app toasts,
+  // Native bridge â†” web bridge: surface native errors as in-app toasts,
   // and re-render Settings when the native status changes.
   window.addEventListener('chained:toast', (e) => {
     Toast.show(e.detail?.message || '', e.detail?.kind || '');
@@ -2739,7 +3390,7 @@ function init() {
     if (!document.getElementById('settings-sheet')?.hidden) UI.openSettings();
   });
 
-  // Global Escape — close the topmost open sheet (settings, picker, duration,
+  // Global Escape â€” close the topmost open sheet (settings, picker, duration,
   // actions, or the iOS notice). Keyboard users get an obvious dismissal path.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
@@ -2762,7 +3413,7 @@ function init() {
   View.show('library');
 
   // Restore any in-flight chain from a prior session (WebView kill, OOM,
-  // app force-stop, OS reboot…). The engine is wall-clock based, so it
+  // app force-stop, OS rebootâ€¦). The engine is wall-clock based, so it
   // walks past any segments that elapsed while the app was gone. Done
   // after View.show('library') so a successful restore lands us straight
   // in the run view with the correct segment.
@@ -2779,12 +3430,12 @@ function init() {
 
 document.addEventListener('DOMContentLoaded', init);
 
-// Testability hatch — expose the closure-scoped singletons under a single
+// Testability hatch â€” expose the closure-scoped singletons under a single
 // namespace so Playwright smoke tests (tools/smoke-audio-voice.mjs) can
 // spy on Audio / Voice calls and drive Engine state without having to
 // chase every behavior through the DOM. Intentionally NOT frozen so the
 // tests can monkey-patch methods. Production code should never read from
-// here — it has direct closure references. Picking a namespaced object
+// here â€” it has direct closure references. Picking a namespaced object
 // (rather than separate window globals) avoids colliding with the built-in
 // browser `window.Audio` (HTMLAudioElement) constructor.
 if (typeof window !== 'undefined') {

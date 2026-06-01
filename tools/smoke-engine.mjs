@@ -185,6 +185,16 @@ await page.click('#run-toggle');     // pause
 await page.waitForTimeout(200);
 
 const pausedBefore = await page.evaluate(() => {
+  // v1.4 — per-run keys live under 'chained-timers/run/v2/<chainId>'
+  // (the singleton 'chained-timers/run/v1' was migrated away in the
+  // multi-run refactor). We scan because tests don't know the chain id.
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('chained-timers/run/v2/')) {
+      return JSON.parse(localStorage.getItem(k)).isPaused;
+    }
+  }
+  // Fall back to the legacy v1 key for any cold-start migration tests.
   const raw = localStorage.getItem('chained-timers/run/v1');
   return raw ? JSON.parse(raw).isPaused : null;
 });

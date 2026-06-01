@@ -204,6 +204,166 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 
 .icon-btn-ghost { visibility: hidden; }
 
+/* Primary-variant icon button (used as the selection-mode Start button
+   in the library topbar). Filled amber gradient, dark fill icon. */
+.icon-btn-primary {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-warm) 100%);
+  color: #1A0F00;
+  box-shadow: 0 6px 16px -8px rgba(245,176,66,0.55);
+}
+.icon-btn-primary:hover { filter: brightness(1.06); background: linear-gradient(135deg, var(--accent) 0%, var(--accent-warm) 100%); }
+.icon-btn-primary:disabled,
+.icon-btn-primary[disabled] {
+  background: var(--surface-3);
+  color: var(--ink-faint);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* ====================================================================
+   LIBRARY SELECTION MODE
+   ====================================================================
+
+   The default and the selection-mode topbars share the same slot — JS
+   toggles visibility based on `data-select-mode` on the .view-library.
+   Chain rows pick up the selected state via `.is-selected`; a circular
+   tick badge replaces the play-icon on the right side of each card
+   while in selection mode. */
+.view-library[data-select-mode="true"] .chain-card-play {
+  display: none;
+}
+.view-library[data-select-mode="true"] .chain-card-body { padding-right: 14px; }
+.view-library[data-select-mode="true"] .chain-card {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.chain-card-select-tick {
+  display: none;
+  width: 64px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--ink-dim);
+  border-left: 1px solid var(--rule);
+}
+.view-library[data-select-mode="true"] .chain-card-select-tick { display: flex; }
+.chain-card-select-tick svg { width: 26px; height: 26px; }
+.chain-card.is-selected {
+  border-color: var(--accent);
+  background: rgba(245,176,66,0.05);
+}
+.chain-card.is-selected .chain-card-select-tick { color: var(--accent); }
+.chain-card.is-selected .chain-card-stripe { box-shadow: 0 0 0 1px var(--accent); }
+
+/* Visual cue that a chain is currently running — small amber dot on the
+   card. Persists across selection mode so the user can see at a glance
+   which chains are already alive. */
+.chain-card.is-running .chain-card-name::after {
+  content: '';
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(245,176,66,0.7);
+  vertical-align: middle;
+  animation: runningPulse 1.4s ease-in-out infinite;
+}
+@keyframes runningPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.82); }
+}
+
+/* ====================================================================
+   RUN CHIPS (v1.4 — multi-chain switcher in the run view)
+   ==================================================================== */
+
+.run-chips {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 4px 18px 0;
+  flex-wrap: wrap;
+}
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: border-color 140ms, background 140ms, color 140ms;
+  max-width: 45vw;
+  min-width: 0;
+}
+.run-chip:hover { border-color: var(--rule-strong); background: var(--surface-3); }
+.run-chip.is-focused {
+  border-color: var(--accent);
+  background: rgba(245,176,66,0.10);
+  color: var(--ink);
+}
+.run-chip-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex-shrink: 0;
+}
+.run-chip.is-focused .run-chip-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(245,176,66,0.6);
+}
+.run-chip.is-paused .run-chip-dot { background: var(--good); }
+.run-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  min-width: 0;
+}
+.run-chip-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.run-chip.is-paused .run-chip-clock { color: var(--good); }
+
+/* ====================================================================
+   EDITOR LOCKED BANNER (v1.4)
+   ==================================================================== */
+
+.editor-locked-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  margin: 0;
+  background: rgba(245,176,66,0.10);
+  border-bottom: 1px solid var(--accent);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.editor-locked-text strong { color: var(--accent); font-weight: 700; margin-right: 4px; }
+.editor-locked-text { flex: 1; min-width: 0; }
+.view-editor[data-locked="true"] .editor-scroll {
+  pointer-events: none;
+  opacity: 0.55;
+}
+.view-editor[data-locked="true"] .editor-footer { display: none; }
+
 /* ==========================================================================
    RIBBON (library count strip)
    ========================================================================== */
