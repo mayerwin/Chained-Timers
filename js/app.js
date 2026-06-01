@@ -890,7 +890,9 @@ class EngineRun {
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           runId: this.id,
-          isFocused: this._isFocused(),
+          // isFocused was used by the v1.4.0 single-FGS bridge filter;
+          // v1.4.1's per-run native renders it dead. Keeping it absent
+          // so no future code accidentally branches on it.
           name: this.chain?.name,
           segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
           currentIndex: this.currentIndex,
@@ -1149,12 +1151,9 @@ class EngineRun {
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     }
     if (!opts.preserveNotifications) {
-      // isFocused is critical for the bridge filter — without it the
-      // bridge's shouldDriveFgs treats `undefined` as focused, so a
-      // background run cancellation would tear down the focused run's
-      // FGS notification.
+      // v1.4.1 — bridge is per-run now; only this run's slot tears down.
       window.dispatchEvent(new CustomEvent('chain:cancel', {
-        detail: { runId: this.id, isFocused: this._isFocused() },
+        detail: { runId: this.id },
       }));
     }
     this._clearPersist();
@@ -1162,15 +1161,10 @@ class EngineRun {
 
   _complete(reason = 'auto') {
     const total = this.segments.reduce((s, x) => s + x.duration, 0);
-    const wasFocused = this._isFocused();
     this.stop({ preserveNotifications: true });
     window.dispatchEvent(new CustomEvent('chain:complete', {
       detail: {
         runId: this.id,
-        // wasFocused captured before stop()/coordinator demotion to keep
-        // the bridge filter consistent with the run's role at the time
-        // the completion fired.
-        isFocused: wasFocused,
         name: this.chain?.name,
         segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
         currentIndex: this.segments.length - 1,
@@ -1287,11 +1281,11 @@ const Engine = {
         this.onTick(seg, remainingSec, elapsedSec);
       }
     }
-    // The native bridge follows the focused run for FGS purposes
-    // (v1.4.0 ships single-FGS multi-run; per-run notifications come
-    // in v1.4.1). Re-emit chain:reschedule so the bridge re-syncs the
-    // notification + alarm queue to the newly-focused chain.
-    if (run.isRunning) run._emit('chain:reschedule');
+    // v1.4.1 — per-run native means the service already has up-to-date
+    // state for every run; no need to re-emit on focus change. The
+    // bridge state for both runs stays current via their independent
+    // tick/advance events. Removed in v1.4.1 to avoid the redundant
+    // ChainTimer.update round-trip.
     return true;
   },
 
@@ -1429,7 +1423,9 @@ const Engine = {
           this.onTick(seg, remainingSec, elapsedSec);
         }
       }
-      next._emit('chain:reschedule');
+      // v1.4.1 — per-run native already tracks the survivor's slot
+      // (it's been emitting ticks continuously). No re-emit needed
+      // on promotion; the service handles FGS owner switching itself.
     }
   },
 
@@ -1554,13 +1550,9 @@ const Engine = {
       const first = this.activeRuns()[0];
       if (first) this._focusedId = first.id;
     }
-    // If the focused run died during restore catchup, the surviving
-    // run needs a chain:reschedule so the native FGS rebinds to it —
-    // matches the _onRunComplete / _stopRun promotion paths.
-    if (focusedDied) {
-      const newFocused = this._focused;
-      if (newFocused) newFocused._emit('chain:reschedule');
-    }
+    // v1.4.1 — per-run native handles FGS promotion server-side; the
+    // survivor's chain:reschedule already fired in the loop above.
+    // No extra emit needed on focused-died.
     const focused = this._focused;
     if (focused) {
       const runView = document.querySelector('.view-run');

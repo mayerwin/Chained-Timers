@@ -73,11 +73,19 @@ public class ChainTimerPlugin extends Plugin {
      * the right state.
      */
     public static void deliverChainCommand(String command) {
+        deliverChainCommand(command, null);
+    }
+
+    /** v1.4.1 — overload carrying runId so the JS engine knows which
+     *  run the command applies to. The old no-runId overload is kept
+     *  for legacy callers (none expected). */
+    public static void deliverChainCommand(String command, String runId) {
         ChainTimerPlugin p = instance;
         if (p == null || command == null) return;
         try {
             JSObject payload = new JSObject();
             payload.put("command", command);
+            if (runId != null) payload.put("runId", runId);
             p.notifyListeners("chainCommand", payload, true);
         } catch (Throwable ignored) {}
     }
@@ -403,9 +411,15 @@ public class ChainTimerPlugin extends Plugin {
             File voicesDir = new File(getContext().getCacheDir(), "voices");
             if (!voicesDir.exists()) voicesDir.mkdirs();
 
+            // v1.4.1 — per-call UUID prefix so concurrent prerender
+            // calls from two chains with overlapping (index, text) pairs
+            // don't collide in the static ttsLatches map. The Android
+            // TTS engine queues its own synthesizeToFile requests, but
+            // the latch-routing layer needs uniqueness per outstanding
+            // call.
+            String callUuid = java.util.UUID.randomUUID().toString().replace("-", "");
+
             String[] result = new String[n];
-            // First pass: build target file paths + kick off synthesis
-            // for anything not already cached.
             for (int i = 0; i < n; i++) {
                 String text;
                 try { text = texts.getString(i); }
@@ -421,7 +435,7 @@ public class ChainTimerPlugin extends Plugin {
                 if (outFile.exists() && outFile.length() > 0) {
                     continue; // cache hit
                 }
-                String utterId = "u_" + i + "_" + hash;
+                String utterId = "u_" + callUuid + "_" + i + "_" + hash;
                 CountDownLatch latch = new CountDownLatch(1);
                 ttsLatches.put(utterId, latch);
                 int rc;
@@ -490,6 +504,12 @@ public class ChainTimerPlugin extends Plugin {
     private void sendIntent(String action, PluginCall call) {
         Intent intent = new Intent(getContext(), ChainTimerService.class);
         intent.setAction(action);
+        // v1.4.1 — runId routes this intent to a specific ChainRun in
+        // the service. Required for multi-chain; legacy single-chain
+        // callers without a runId fall through to the service's
+        // synthetic "__default__" run id.
+        String runId = call.getString("runId", null);
+        if (runId != null) intent.putExtra(ChainTimerService.EXTRA_RUN_ID, runId);
         intent.putExtra(ChainTimerService.EXTRA_TITLE, call.getString("title", "Chain running"));
         intent.putExtra(ChainTimerService.EXTRA_BODY,  call.getString("body", ""));
         String large = call.getString("largeBody", null);
@@ -620,12 +640,13 @@ public class ChainTimerPlugin extends Plugin {
         if (intent == null) return;
         String cmd = intent.getStringExtra(ChainTimerService.EXTRA_COMMAND);
         if (cmd == null) return;
-        // Consume so the same command doesn't fire on every subsequent
-        // lifecycle event with the same intent attached.
+        String runId = intent.getStringExtra(ChainTimerService.EXTRA_RUN_ID);
         intent.removeExtra(ChainTimerService.EXTRA_COMMAND);
+        intent.removeExtra(ChainTimerService.EXTRA_RUN_ID);
 
         JSObject payload = new JSObject();
         payload.put("command", cmd);
+        if (runId != null) payload.put("runId", runId);
         notifyListeners("chainCommand", payload, true);
     }
 }

@@ -10,8 +10,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
-import android.media.RingtoneManager;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -26,62 +24,53 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Foreground service kept alive while a chain is running.
+ * Foreground service kept alive while ANY chain is running.
+ *
+ * v1.4.1 — per-run multi-chain. The service tracks up to N concurrent
+ * chain runs in a {@link #runs} map keyed by runId. Each run has its
+ * own state (plan, curIndex, MediaPlayer pool, tick runnable) and its
+ * own notification id. One run owns the foreground-service slot (the
+ * {@link #fgsOwnerRunId}); the others post regular ongoing notifications
+ * carrying the same group key. When the FGS owner ends, another run is
+ * promoted into the FGS slot.
  *
  * Two reasons we need this:
  *
- *  1. Doze / App Standby otherwise coalesce our AlarmManager alarms — even
- *     setExactAndAllowWhileIdle() can fire 9+ minutes late on phones with
- *     aggressive battery management. A foreground service exempts the app
- *     from those restrictions, so the per-segment notifications fire on
- *     the second.
+ *  1. Doze / App Standby otherwise coalesce our AlarmManager alarms —
+ *     even setExactAndAllowWhileIdle() can fire 9+ minutes late on
+ *     phones with aggressive battery management. A foreground service
+ *     exempts the app from those restrictions, so the per-segment
+ *     notifications fire on the second.
  *
- *  2. The Capacitor WebView is paused on activity onPause(), which freezes
- *     the JS engine. We hold a partial wake lock and own the persistent
- *     "now playing" notification *natively*: the service stores the chain
- *     plan in memory and ticks the displayed remaining time forward once
- *     per second from a Handler, advancing segments and stopping the
- *     service automatically at chain end. JS doesn't have to be alive for
- *     any of this — which is what makes the on-shade time stay correct
- *     when the user opens it after the screen has been off.
+ *  2. The Capacitor WebView is paused on activity onPause(), which
+ *     freezes the JS engine. We hold a partial wake lock and own the
+ *     persistent "now playing" notifications *natively*: the service
+ *     stores each run's chain plan in memory and ticks the displayed
+ *     remaining time forward once per second from a Handler, advancing
+ *     segments and stopping the service automatically at chain end.
+ *     JS doesn't have to be alive for any of this — which is what makes
+ *     the on-shade time stay correct when the user opens it after the
+ *     screen has been off.
  *
- * Notification UX (single-row):
+ * Notifications:
  *
- *   The persistent FGS notification (id 7000) lives on a HIGH-importance
- *   channel so it CAN play sound, but every per-second tick re-post is
- *   marked silent (setOnlyAlertOnce(true) + setSilent(true)). The only
- *   tick that's allowed to make sound is one where the *service itself*
- *   detects a segment boundary — i.e. the WebView was suspended and JS
- *   couldn't fire its in-app chime. JS-driven UPDATE intents always
- *   re-sync prevTickIndex so the next tick won't double-alert for a
- *   boundary the foreground side already chimed for.
+ *   Each run has its own notification id in the {@link #RUN_NOTIF_BASE}
+ *   range. The FGS owner's notification is what Android's
+ *   FOREGROUND_SERVICE_TYPE_SPECIAL_USE binding refers to; the others
+ *   are regular ongoing notifications. All run notifications carry
+ *   {@link #GROUP_KEY} so Android stacks them visually, and we post a
+ *   {@link #SUMMARY_NOTIFICATION_ID} summary entry whenever 2+ runs
+ *   are active so the stacked view has a header.
  *
- *   At chain end the service replaces the FGS notification with a
- *   one-shot "✓ Chain complete" entry on a separate id (7001) so the
- *   system shows it as heads-up, removes the FGS row, and stops itself.
- *   The user is left with exactly one notification per chain end, no
- *   stack of "Next: …" entries from pre-scheduled alarms (we dropped
- *   those — scheduleAll in js/native.js gates them on !fgsActive so
- *   they only run on the OS-fallback path).
- *
- * Drop-in flow:
- *   ACTION_START / ACTION_UPDATE  — JS sends plan + currentIndex +
- *                                   segmentStartedAtMs + paused. We
- *                                   refresh the in-memory state and
- *                                   the notification (silently), and
- *                                   (if running) schedule the next tick.
- *   ACTION_STOP                   — silent user stop: release wake lock,
- *                                   dismiss notification, stop service.
- *   ACTION_COMPLETE               — natural chain end: post the
- *                                   "✓ Chain complete" heads-up, dismiss
- *                                   the FGS row, stop service.
- *   internal tick                 — advance segments based on wall clock,
- *                                   re-post notification (alerting only
- *                                   if a boundary was detected here),
- *                                   schedule next.
+ *   At chain end the service replaces the FGS row with a one-shot
+ *   "✓ Chain complete" entry on a per-run completion id so the system
+ *   shows it as heads-up. The persistent notification is removed.
  */
 public class ChainTimerService extends Service {
 
@@ -89,11 +78,6 @@ public class ChainTimerService extends Service {
     public static final String ACTION_UPDATE   = "com.github.chainedtimers.action.UPDATE";
     public static final String ACTION_STOP     = "com.github.chainedtimers.action.STOP";
     public static final String ACTION_COMPLETE = "com.github.chainedtimers.action.COMPLETE";
-    // Notification action buttons (Pause / Resume / Skip / Stop) PendingIntent
-    // here directly via getService() so they DON'T launch MainActivity into
-    // the foreground when tapped. The service mutates its own state for
-    // immediate notification feedback and forwards the command to JS via
-    // the plugin's static deliverChainCommand so the engine stays in sync.
     public static final String ACTION_CMD      = "com.github.chainedtimers.action.CMD";
 
     public static final String EXTRA_TITLE       = "title";
@@ -103,9 +87,6 @@ public class ChainTimerService extends Service {
     public static final String EXTRA_PAUSED      = "paused";
     public static final String EXTRA_END_TIME_MS = "endTimeMs";
 
-    // Forwarded by notification action buttons to MainActivity. The
-    // ChainTimerPlugin reads the extra in handleOnNewIntent / handleOnStart
-    // and notifies JS via the "chainCommand" event.
     public static final String EXTRA_COMMAND      = "chainCommand";
     public static final String COMMAND_PAUSE      = "pause";
     public static final String COMMAND_RESUME     = "resume";
@@ -114,615 +95,668 @@ public class ChainTimerService extends Service {
     public static final String COMMAND_SKIP_NEXT  = "skip-next";
 
     public static final String EXTRA_CHAIN_NAME            = "chainName";
-    // Compact JSON: [{"n":"Inhale","d":4},{"n":"Hold","d":4},…]
     public static final String EXTRA_PLAN_JSON             = "planJson";
-    public static final String EXTRA_SEGMENT_INDEX         = "segmentIndex";    // 0-based
-    public static final String EXTRA_SEGMENT_TOTAL         = "segmentTotal";    // count
+    public static final String EXTRA_SEGMENT_INDEX         = "segmentIndex";
+    public static final String EXTRA_SEGMENT_TOTAL         = "segmentTotal";
     public static final String EXTRA_SEGMENT_STARTED_AT_MS = "segmentStartedAtMs";
-    // Pre-computed remaining at the moment of pause — authoritative while
-    // paused so the notification doesn't drift if anything re-renders it
-    // between pause and resume.
     public static final String EXTRA_PAUSED_REMAINING_MS   = "pausedRemainingMs";
     public static final String EXTRA_HAS_PREV              = "hasPrev";
     public static final String EXTRA_HAS_NEXT              = "hasNext";
-    // Suppresses the channel sound/vibration on the "✓ Chain complete"
-    // notification when JS dispatched ACTION_COMPLETE — JS only does so
-    // from the foreground rAF path, where Audio.finale() already played
-    // through Web Audio and the tray entry is just a visual record.
     public static final String EXTRA_SILENT                = "silent";
-    // User's "play tick on last 3 seconds" preference (sound && finalTick).
-    // The service plays final3.wav (three 660Hz pulses pre-mixed at exact
-    // 1-second offsets) via SoundPool in the background since the WebView's
-    // Audio.finalThree() can't play once the WebView is paused; gating on
-    // this respects the same Settings toggle the in-app cue honours.
     public static final String EXTRA_TICK_ENABLED          = "tickEnabled";
-    // User's master "Sound" preference. Mirrors Store.getSettings().sound
-    // and gates ALL SoundPool playback (chime, finale, tick) so the
-    // service respects the same toggle the in-app Web Audio path does.
     public static final String EXTRA_SOUND_ENABLED         = "soundEnabled";
-    // JSON array of pre-rendered voice WAV file paths, one per segment
-    // index (null entries = no voice for that segment). Synthesized by
-    // ChainTimerPlugin.prerenderVoices at chain start and shipped to
-    // the FGS in every update — keeps the per-segment voice contract
-    // even when JS is suspended (the WebView pauses, so Voice.speak in
-    // js/app.js never fires; MediaPlayer in the FGS picks up the slack).
-    // Parallel JSON to planJson — voicePathsJson[i] corresponds to
-    // planJson[i].n.
     public static final String EXTRA_VOICE_PATHS_JSON      = "voicePathsJson";
-    // Per-segment effective voice flag bitset, JSON array of booleans
-    // parallel to planJson. The FGS respects per-segment voice overrides
-    // (chain/seg cues collapsed to a final true/false by the JS-side
-    // resolver) when deciding whether to play the pre-rendered file.
     public static final String EXTRA_VOICE_ENABLED_JSON    = "voiceEnabledJson";
-    // Routing policy for the voice MediaPlayer when a headset is
-    // connected. One of "headset" (default — speaker silent), "both"
-    // (alarm-clock style, plays through both), "speaker" (force
-    // builtin speaker even when headset is connected). The FGS
-    // applies it via setPreferredDevice before each play. Unknown
-    // values collapse to "headset". chime / finalThree / finale stay
-    // on SoundPool with USAGE_ALARM (system policy = both speakers).
     public static final String EXTRA_AUDIO_ROUTE           = "audioRoute";
 
-    // The persistent run notification lives on a HIGH-importance channel
-    // so the OS shows heads-up + vibration when the service detects a
-    // segment boundary autonomously. The channel itself has NO sound:
-    // chime / finale / tick are all played through SoundPool (R.raw.*)
-    // for low-latency, in-sync audio. The notification-channel pipeline
-    // adds 200–500ms before the channel sound starts, which makes the
-    // chain-end finale lag visibly behind the last 3-second tick.
-    // Channel IDs are *-v2 (bumped from "chain-fg" / "chain-end") so existing
-    // users on the v1.3.0–v1.3.2 binaries get fresh channels with alarm-class
-    // AudioAttributes + bypass-DND on first run after upgrade. Channel
-    // settings are immutable from the app once created, so a v1 channel
-    // would otherwise retain its old notification-stream classification
-    // until the user manually wiped data. The old IDs are appended to
-    // LEGACY_CHANNELS below for one-time deletion on next service start.
+    /**
+     * v1.4.1 — identifies which run this intent applies to. Falls back
+     * to a synthetic "__default__" id for back-compat with intents that
+     * don't carry one (shouldn't happen in v1.4.1+ JS).
+     */
+    public static final String EXTRA_RUN_ID = "runId";
+
     public static final String CHANNEL_ID         = "chain-fg-v2";
-    // Separate channel for chain-end so the heads-up popup is freshly
-    // triggered on a new id (Android only fires heads-up on first post
-    // for an id, not on updates). Also silent at the channel level.
     public static final String CHANNEL_FINALE     = "chain-end-v2";
-    // Pre-v1.3 + pre-SoundPool channels we delete on first run so users
-    // don't end up with multiple overlapping entries in System Settings
-    // → Notifications. Safe from the service's path because if we're
-    // running here the FGS plugin is alive and js/native.js no longer
-    // recreates the LocalNotifications-fallback channels.
     private static final String[] LEGACY_CHANNELS = {
-        "chain-running",       // v1.2 LOW persistent FGS channel
-        "chain-transitions",   // v1.2 HIGH boundary-alert channel (LocalNotifications)
-        "chain-status",        // v1.2 LOW persistent indicator (LocalNotifications)
-        "chain-active",        // v1.3.0 had chime.wav as channel sound — now via SoundPool
-        "chain-finale",        // v1.3.0 had finale.wav as channel sound — now via SoundPool
-        "chain-fg",            // v1.3.0–v1.3.2 — replaced by chain-fg-v2 (alarm-class audio + bypass DND)
-        "chain-end"            // v1.3.0–v1.3.2 — replaced by chain-end-v2 (alarm-class audio + bypass DND)
+        "chain-running", "chain-transitions", "chain-status",
+        "chain-active", "chain-finale", "chain-fg", "chain-end"
     };
 
-    private static final int NOTIFICATION_ID          = 7000;
-    private static final int NOTIFICATION_ID_COMPLETE = 7001;
-    private static final String WAKELOCK_TAG = "ChainedTimers::ChainRun";
+    /** Notification group key — Android stacks all entries with the
+     *  same group, and surfaces our {@link #SUMMARY_NOTIFICATION_ID}
+     *  summary entry as the stack header when 2+ are present. */
+    private static final String GROUP_KEY = "chained-timers";
+
+    /** Reserved id for the auto-bundle summary notification (only
+     *  posted when 2+ runs are active). */
+    private static final int SUMMARY_NOTIFICATION_ID = 7099;
+    /** Per-run notification id pool. Each fresh run gets the next slot
+     *  modulo {@link #SLOT_COUNT} — at the cap of 2 concurrent runs
+     *  collisions are impossible. */
+    private static final int RUN_NOTIF_BASE      = 7100;
+    /** Per-run completion notification id pool (separate range so the
+     *  heads-up "Chain complete" entry doesn't replace the persistent
+     *  one — Android only triggers heads-up on first post per id). */
+    private static final int COMPLETION_NOTIF_BASE = 7200;
+    /** Number of distinct slots for concurrent runs. Generous so that
+     *  rapid stop/restart of the same chain id doesn't reuse a slot
+     *  still being rendered. */
+    private static final int SLOT_COUNT = 32;
+
+    private static final String WAKELOCK_TAG  = "ChainedTimers::ChainRun";
     private static final long TICK_INTERVAL_MS = 1000L;
-    // How long to keep the service alive after kicking off the chain-end
-    // finale through SoundPool. finale.wav is ~0.95s; we add a small
-    // margin so audio-thread latency doesn't clip the last note.
     private static final long FINALE_TAIL_MS   = 1500L;
 
-    private static volatile boolean running = false;
+    private static final String DEFAULT_RUN_ID = "__default__";
 
-    /** Whether a chain run is currently keeping the service alive. */
+    /** Set true while ANY run is alive. Static so external probes
+     *  (ChainTimerPlugin.isRunning) work as in v1.3.x. */
+    private static volatile boolean running = false;
     public static boolean isRunning() { return running; }
 
     private PowerManager.WakeLock wakeLock;
-
-    // In-memory chain plan, owned and self-advanced by the service so the
-    // notification keeps ticking even when the JS engine is suspended.
-    private final List<Segment> plan = new ArrayList<>();
-    private String chainName = "Chain";
-    private int curIndex = 0;
-    // Effective wall-clock moment the *current* segment started, with
-    // paused-time excluded. (segmentStartedAtMs + duration*1000) is always
-    // the segment's wall-clock end while not paused.
-    private long segStartedAtMs = 0L;
-    private boolean paused = false;
-    // Authoritative remaining ms while paused — captured from JS at the
-    // pause transition and held verbatim until resume.
-    private long pausedRemainingMs = 0L;
-    // Last segment index posted in the notification — if onTick advances
-    // beyond this we know it's a service-detected boundary (i.e. a real
-    // background segment crossing JS missed) and we let the post chime.
-    // JS-driven UPDATEs sync this back to curIndex so they don't trigger
-    // a duplicate alert in foreground.
-    private int prevAlertIndex = -1;
-    // Segment index for which we've already kicked off the concatenated
-    // 3-2-1 final3.wav playback. Set when remaining first drops into the
-    // ≤3s window; cleared on every segment change so the next segment
-    // gets its own play. Single-shot per segment — the WAV itself
-    // contains all three pulses at exact 1-second offsets, so the OS
-    // audio thread guarantees gap-free spacing.
-    private int finalThreeStartedAtIndex = -1;
-    // User's "play tick in last 3 seconds" preference, mirrored from JS.
-    private boolean tickEnabled = true;
-    // Pre-rendered voice WAV paths, parallel to `plan`. Null entries are
-    // segments with no voice (either rendering failed or the user
-    // disabled voice for that segment via the cue override sheet).
-    private final java.util.List<String>  voicePaths   = new ArrayList<>();
-    private final java.util.List<Boolean> voiceEnabled = new ArrayList<>();
-    // Last segment index for which we fired a voice playback. Set when
-    // the FGS service crosses a boundary into a new segment — guards
-    // against re-playing the same voice if onTick re-enters within the
-    // same segment. Cleared on every plan replace.
-    private int lastVoicedAtIndex = -1;
-    // Routing policy for voice playback when a headset is connected.
-    // "headset" (default) | "both" | "speaker". Mirrors the user's
-    // app-level audioRoute setting; the FGS uses it to pick the
-    // MediaPlayer preferred device per play.
-    private String audioRoute = "headset";
-    // MediaPlayer instance held while playing the current voice file.
-    // Reused (and released) on every new boundary so a long voice that
-    // hasn't finished can't queue up across multiple segments. Routes
-    // through the ALARM stream like every other in-service audio source
-    // so DND-bypass still works.
-    private android.media.MediaPlayer voicePlayer;
-
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
-    private final Runnable tickRunnable = this::onTick;
-    // Pre-prepared MediaPlayer pool for chime / finalThree / finale.
-    // v1.3.7 and earlier used SoundPool here because of its sub-50ms
-    // play latency for short one-shots — but SoundPool has NO
-    // setPreferredDevice, which meant the user's "headset only" routing
-    // setting silently leaked these cues to the speaker even when
-    // headphones were plugged in. MediaPlayer DOES support per-instance
-    // setPreferredDevice (via the AudioRouting interface, API 23+),
-    // so we pre-create + prepare one player per sound at chain start
-    // and replay via seekTo(0)+start(). Per-shot latency stays in the
-    // ~15ms range after prepare because we never tear them down between
-    // plays. Same USAGE_ALARM AudioAttributes as before, so DND bypass
-    // and alarm-stream classification are preserved.
-    private android.media.MediaPlayer chimePlayer;
-    private android.media.MediaPlayer finalThreePlayer;
-    private android.media.MediaPlayer finalePlayer;
-    // Mirrors the user's master "Sound" toggle. Gates SoundPool playback
-    // so the service respects the same Settings switch as the in-app
-    // Web Audio path.
-    private boolean soundEnabled = true;
+
+    /** Per-run state, in insertion order so promotion is deterministic
+     *  (oldest survivor wins the FGS slot when the current owner ends). */
+    private final Map<String, ChainRun> runs = new LinkedHashMap<>();
+    /** runId currently bound to startForeground. Tracking explicitly so
+     *  we can detect when we need to switch the FGS slot to a survivor. */
+    private String fgsOwnerRunId = null;
+    /** Tracks which notification-id slot each run was assigned. The
+     *  same chain id always gets the same slot for the life of THIS
+     *  service instance; reused after the run ends. */
+    private final Map<String, Integer> slotByRun = new HashMap<>();
+    private int nextSlot = 0;
+
+    /**
+     * Per-run state. Each chain run has its own MediaPlayer pool so
+     * audio for one run can't interfere with another; its own tick
+     * runnable so two runs can fire boundary cues independently; its
+     * own notification id (assigned at register-time) so the OS can
+     * keep them separate visually.
+     */
+    static class ChainRun {
+        final String runId;
+        String chainName = "Chain";
+        final List<Segment> plan = new ArrayList<>();
+        int curIndex = 0;
+        long segStartedAtMs = 0L;
+        boolean paused = false;
+        long pausedRemainingMs = 0L;
+        int prevAlertIndex = -1;
+        int finalThreeStartedAtIndex = -1;
+        boolean tickEnabled = true;
+        boolean soundEnabled = true;
+        final List<String> voicePaths = new ArrayList<>();
+        final List<Boolean> voiceEnabled = new ArrayList<>();
+        String audioRoute = "headset";
+        int lastVoicedAtIndex = -1;
+
+        android.media.MediaPlayer chimePlayer;
+        android.media.MediaPlayer finalThreePlayer;
+        android.media.MediaPlayer finalePlayer;
+        // volatile so cross-thread visibility is guaranteed — the
+        // MediaPlayer onCompletion/onError callbacks marshal back onto
+        // the main thread, but a published-but-not-yet-marshalled write
+        // to this field must be visible to releaseVoicePlayer.
+        volatile android.media.MediaPlayer voicePlayer;
+
+        Runnable tickRunnable;
+        final int notificationId;
+        final int completionNotificationId;
+
+        ChainRun(String runId, int slot) {
+            this.runId = runId;
+            this.notificationId = RUN_NOTIF_BASE + (slot % SLOT_COUNT);
+            this.completionNotificationId = COMPLETION_NOTIF_BASE + (slot % SLOT_COUNT);
+        }
+    }
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Defensive: a null intent here means the OS is auto-restarting us
-        // (only possible with START_STICKY, which we don't return). If it
-        // ever happens we have no chain content to display and JS is gone,
-        // so the right move is to bail out cleanly rather than post a
-        // stale "Chain running" notification with the wake lock attached.
         if (intent == null) {
-            stopRun();
+            // OS auto-restart with null intent — we never declared
+            // START_STICKY but defend anyway.
+            stopAllRuns();
             return START_NOT_STICKY;
         }
 
         final String action = intent.getAction();
+        final String runId  = resolveRunId(intent);
 
         if (ACTION_STOP.equals(action)) {
-            stopRun();
+            // ACTION_STOP without a runId stops every run (back-compat
+            // with v1.3.x "stop the service" semantics). With a runId
+            // only that specific run is torn down.
+            if (intent.hasExtra(EXTRA_RUN_ID)) {
+                stopRun(runId, /*alert=*/false);
+            } else {
+                stopAllRuns();
+            }
             return START_NOT_STICKY;
         }
 
         if (ACTION_CMD.equals(action)) {
-            // Notification action button tapped — handle in-process so
-            // the activity isn't dragged into the foreground. Service
-            // mutates its own state for immediate notification feedback,
-            // then forwards to JS so the engine stays in sync.
-            handleNotificationCommand(intent.getStringExtra(EXTRA_COMMAND));
+            handleNotificationCommand(runId, intent.getStringExtra(EXTRA_COMMAND));
             return START_NOT_STICKY;
         }
 
         ensureChannel();
-        ensureMediaPlayers();
+        // v1.4.1 — distinguish "service had no record of this run" from
+        // a JS-driven UPDATE on an existing run. On cold-restart of the
+        // JS layer where the SERVICE process survived (rare but real on
+        // quick WebView reloads), JS will send ACTION_START thinking
+        // this is a fresh run; the service should treat that as an
+        // UPDATE so it doesn't re-fire the current segment's voice cue.
+        boolean wasKnown = runs.containsKey(runId);
+        ChainRun run = getOrCreateRun(runId);
+        ensureMediaPlayers(run);
 
-        // Refresh in-memory state from the intent. JS sends the full plan
-        // on every START/UPDATE/COMPLETE so the service can self-advance
-        // when the WebView is paused, and so the COMPLETE post has the
-        // chain name + total segments to show.
-        chainName = strOr(intent, EXTRA_CHAIN_NAME, "Chain");
+        // Refresh in-memory state from the intent. JS sends the full
+        // plan on every START/UPDATE/COMPLETE so the service can self-
+        // advance when the WebView is paused.
+        run.chainName = strOr(intent, EXTRA_CHAIN_NAME, "Chain");
         String planJson = intent.getStringExtra(EXTRA_PLAN_JSON);
         if (planJson != null) {
             List<Segment> parsed = parsePlan(planJson);
             if (!parsed.isEmpty()) {
-                plan.clear();
-                plan.addAll(parsed);
+                run.plan.clear();
+                run.plan.addAll(parsed);
             }
         }
-        curIndex = clampIndex(intent.getIntExtra(EXTRA_SEGMENT_INDEX, 0));
-        segStartedAtMs = intent.getLongExtra(EXTRA_SEGMENT_STARTED_AT_MS, System.currentTimeMillis());
-        paused = intent.getBooleanExtra(EXTRA_PAUSED, false);
-        pausedRemainingMs = Math.max(0L, intent.getLongExtra(EXTRA_PAUSED_REMAINING_MS, 0L));
-        tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
-        soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
+        run.curIndex = clampIndex(run, intent.getIntExtra(EXTRA_SEGMENT_INDEX, 0));
+        run.segStartedAtMs = intent.getLongExtra(EXTRA_SEGMENT_STARTED_AT_MS, System.currentTimeMillis());
+        run.paused = intent.getBooleanExtra(EXTRA_PAUSED, false);
+        run.pausedRemainingMs = Math.max(0L, intent.getLongExtra(EXTRA_PAUSED_REMAINING_MS, 0L));
+        run.tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
+        run.soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
 
-        // Parallel arrays to the plan: pre-rendered voice file paths and
-        // per-segment effective voice gates. JS resolves chain.cues +
-        // seg.cues against app defaults to a boolean per segment, then
-        // hands the file paths over for the FGS to play at boundaries.
-        // Either array may be missing on legacy callers — voice then
-        // silently falls back to no playback.
         String voicePathsJson = intent.getStringExtra(EXTRA_VOICE_PATHS_JSON);
         if (voicePathsJson != null) {
-            java.util.List<String> parsedPaths = parseStringArray(voicePathsJson);
-            voicePaths.clear();
-            voicePaths.addAll(parsedPaths);
+            List<String> parsedPaths = parseStringArray(voicePathsJson);
+            run.voicePaths.clear();
+            run.voicePaths.addAll(parsedPaths);
         }
         String voiceEnabledJson = intent.getStringExtra(EXTRA_VOICE_ENABLED_JSON);
         if (voiceEnabledJson != null) {
-            java.util.List<Boolean> parsedEnabled = parseBoolArray(voiceEnabledJson);
-            voiceEnabled.clear();
-            voiceEnabled.addAll(parsedEnabled);
+            List<Boolean> parsedEnabled = parseBoolArray(voiceEnabledJson);
+            run.voiceEnabled.clear();
+            run.voiceEnabled.addAll(parsedEnabled);
         }
         String routeExtra = intent.getStringExtra(EXTRA_AUDIO_ROUTE);
         if (routeExtra != null && (routeExtra.equals("headset") || routeExtra.equals("both") || routeExtra.equals("speaker"))) {
-            String previousRoute = audioRoute;
-            audioRoute = routeExtra;
-            // Live-rebind the cue MediaPlayer pool to the freshly-resolved
-            // preferred device. Voice picks up audioRoute per-play (each
-            // play creates a new MediaPlayer) so no extra work is needed
-            // there; the cue pool is long-lived and needs an explicit
-            // re-bind when the user flips the routing pill mid-chain.
-            if (!previousRoute.equals(audioRoute)) applyAudioRouteToCuePool();
+            String previousRoute = run.audioRoute;
+            run.audioRoute = routeExtra;
+            if (!previousRoute.equals(run.audioRoute)) applyAudioRouteToCuePool(run);
         }
 
         if (ACTION_COMPLETE.equals(action)) {
-            // JS-driven completion (foreground rAF reached chain end).
-            // The in-app finale chime has already played through Web
-            // Audio, so post the tray entry silently — alerting again
-            // would just stack a louder Notification-stream sound on
-            // top of what the user just heard from Media stream.
-            //
-            // CRITICAL: the plugin delivers ACTION_COMPLETE via
-            // startForegroundService(), which on Android 8+ obligates
-            // us to call startForeground() within 5 seconds OR the
-            // system crashes the app with ForegroundServiceDidNot-
-            // StartInTimeException. completeChain() ultimately removes
-            // the FGS, so we satisfy the contract by posting the run
-            // notification once here first; completeChain immediately
-            // replaces it with the chain-end entry on id 7001 and
-            // detaches via stopForeground(REMOVE).
-            Notification placeholder = buildNotification(intent, /*alert=*/false);
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIFICATION_ID, placeholder, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-            } else {
-                startForeground(NOTIFICATION_ID, placeholder);
-            }
+            // Ensure FGS contract is satisfied: startForegroundService
+            // delivery obligates us to call startForeground within 5s.
+            // post a placeholder for THIS run (will be immediately
+            // replaced by the completion entry inside completeRun).
+            ensureFgsBinding(run);
             boolean silent = intent.getBooleanExtra(EXTRA_SILENT, false);
-            completeChain(!silent);
+            completeRun(run, !silent);
             return START_NOT_STICKY;
         }
 
-        // ACTION_START or ACTION_UPDATE — both call startForeground with
-        // (potentially new) content. Calling startForeground multiple times
-        // with the same notification id replaces the visible notification
-        // in place, which is exactly what we want for live updates.
-        //
-        // Re-posts driven by JS (segment advance, skip, pause, resume) are
-        // ALWAYS silent: JS already played the in-app chime on foreground
-        // boundaries, so we'd just double-sound here. Sync prevAlertIndex
-        // to the new curIndex so the next autonomous tick doesn't either.
-        prevAlertIndex = curIndex;
+        // ACTION_START or ACTION_UPDATE. JS-driven re-posts are silent
+        // (the in-app cue path already fired Audio.chime); we sync
+        // prevAlertIndex so the next autonomous tick doesn't double-alert.
+        run.prevAlertIndex = run.curIndex;
 
-        Notification n = buildNotification(intent, /*alert=*/false);
-
-        if (Build.VERSION.SDK_INT >= 34) {
-            // API 34 (Android 14)+ requires a foregroundServiceType. We
-            // declare specialUse — the timer doesn't fit camera, location,
-            // mediaPlayback, etc. — and ship a justification property in
-            // the manifest.
-            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        } else {
-            startForeground(NOTIFICATION_ID, n);
+        // "Fresh start" means JS thinks this is a brand-new run AND the
+        // service hadn't already tracked it. Without the !wasKnown
+        // guard, a JS-side restoreIfActive emitting chain:reschedule
+        // (which the bridge calls as ChainTimer.start because the
+        // bridge's per-run state is fresh on page load) would re-fire
+        // the current segment's voice cue on the surviving service.
+        boolean isStart = (ACTION_START.equals(action) || run.plan.isEmpty()) && !wasKnown;
+        if (isStart) {
+            // Sweep any stale "Chain complete" notification for this
+            // run's slot left over from a previous cycle.
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) {
+                try { nm.cancel(run.completionNotificationId); } catch (Throwable ignored) {}
+            }
+            run.lastVoicedAtIndex = -1;
         }
+
+        // Place this run's notification. The FGS owner uses
+        // startForeground; everyone else posts via NotificationManager.
+        ensureFgsBindingOrPost(run, /*alert=*/false);
 
         if (ACTION_START.equals(action) || !running) {
             acquireWakeLock();
-            // Sweep any stale "✓ Chain complete" notification left in the
-            // tray from the previous run. The user explicitly chose to
-            // start again — leaving the old completion entry around is
-            // visual clutter that competes with the persistent FGS row.
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) {
-                try { nm.cancel(NOTIFICATION_ID_COMPLETE); } catch (Throwable ignored) {}
-            }
-            // Fresh chain — reset voice dedup so segment 0 plays.
-            lastVoicedAtIndex = -1;
         }
         running = true;
 
-        // Voice for the current segment. Single source of truth on Android:
-        // JS no longer speaks directly (see Voice.speak in app.js — it
-        // short-circuits on native), so this is the ONLY voice cue. Fires:
-        //   - ACTION_START : segment 0 (lastVoicedAtIndex = -1).
-        //   - ACTION_UPDATE following a JS-driven advance: curIndex
-        //     changed, so we voice the new segment.
-        // The autonomous-tick boundary in onTick() handles backgrounded
-        // segment advances via the same lastVoicedAtIndex dedup.
-        if (!paused && curIndex != lastVoicedAtIndex) {
-            lastVoicedAtIndex = curIndex;
-            maybePlayVoiceForSegment(curIndex);
+        // Voice for the current segment. Same dedup as v1.3.x — only
+        // fire when the segment index actually changed since the last
+        // voiced index.
+        if (!run.paused && run.curIndex != run.lastVoicedAtIndex) {
+            run.lastVoicedAtIndex = run.curIndex;
+            maybePlayVoiceForSegment(run, run.curIndex);
         }
 
-        // Schedule the next tick — only when actively counting down. While
-        // paused we leave the static notification in place; the chain
-        // doesn't move until JS sends a resume UPDATE.
-        tickHandler.removeCallbacks(tickRunnable);
-        if (!paused && !plan.isEmpty()) {
-            scheduleNextTick();
+        // Schedule this run's next tick. Each run has its own runnable,
+        // so two runs tick independently on the shared Handler.
+        cancelTickFor(run);
+        if (!run.paused && !run.plan.isEmpty()) {
+            scheduleNextTick(run);
         }
 
-        // START_NOT_STICKY: if the OS kills us under memory pressure, do
-        // NOT auto-restart with a null intent. JS state is lost too at
-        // that point; the right path back is the user reopening the app,
-        // which calls Engine.restoreIfActive -> chain:reschedule and
-        // re-establishes the FGS with current chain content.
+        // Refresh the summary if 2+ runs are now active.
+        refreshSummary();
+
         return START_NOT_STICKY;
     }
 
-    /**
-     * Tick driven by Handler.postDelayed. Walks past any segments whose
-     * wall-clock duration has fully elapsed (cheap when we're up-to-date,
-     * but bulletproof if the device just woke from a Doze nap or a missed
-     * tick), re-posts the notification with the current remaining time,
-     * and schedules the next tick. When the chain naturally ends we hand
-     * off to {@link #completeChain()} which replaces the FGS row with a
-     * "✓ Chain complete" heads-up entry, releases the wake lock, and stops.
-     */
-    private void onTick() {
-        if (!running || paused) return;
-        long now = System.currentTimeMillis();
-        int idxBefore = curIndex;
+    // --- ChainRun management -------------------------------------
 
-        while (curIndex < plan.size()) {
-            long segEndMs = segStartedAtMs + plan.get(curIndex).durationSec * 1000L;
+    private String resolveRunId(Intent intent) {
+        String id = intent.getStringExtra(EXTRA_RUN_ID);
+        return (id == null || id.isEmpty()) ? DEFAULT_RUN_ID : id;
+    }
+
+    private ChainRun getOrCreateRun(String runId) {
+        ChainRun r = runs.get(runId);
+        if (r != null) return r;
+        Integer existingSlot = slotByRun.get(runId);
+        int slot;
+        if (existingSlot != null) {
+            slot = existingSlot;
+        } else {
+            slot = nextSlot++;
+            slotByRun.put(runId, slot);
+        }
+        r = new ChainRun(runId, slot);
+        runs.put(runId, r);
+        return r;
+    }
+
+    private void releaseRun(ChainRun run) {
+        cancelTickFor(run);
+        releaseVoicePlayer(run);
+        releaseCueMediaPlayers(run);
+        runs.remove(run.runId);
+        // Note: slotByRun entry is kept so a quick restart of the same
+        // chain gets the same notification id slot — avoids visual flicker
+        // if the user re-runs the chain within seconds.
+    }
+
+    private void cancelTickFor(ChainRun run) {
+        if (run.tickRunnable != null) tickHandler.removeCallbacks(run.tickRunnable);
+    }
+
+    // --- per-run tick (formerly the singleton onTick) -------------
+
+    private void onTickForRun(ChainRun run) {
+        if (!running || run.paused) return;
+        if (!runs.containsValue(run)) return;
+
+        long now = System.currentTimeMillis();
+        int idxBefore = run.curIndex;
+
+        while (run.curIndex < run.plan.size()) {
+            long segEndMs = run.segStartedAtMs + run.plan.get(run.curIndex).durationSec * 1000L;
             if (now < segEndMs) break;
-            // Anchor the next segment to the precise boundary so multi-skip
-            // catch-up doesn't drift relative to where the JS engine would
-            // place segmentStartedAtMs after _advance.
-            segStartedAtMs = segEndMs;
-            curIndex++;
+            run.segStartedAtMs = segEndMs;
+            run.curIndex++;
         }
 
-        if (curIndex >= plan.size()) {
-            // Chain naturally ended without JS noticing first (WebView was
-            // asleep). The notification is the user's only chain-end cue
-            // here, so alert: sound + vibration + heads-up.
-            completeChain(/*alert=*/true);
+        if (run.curIndex >= run.plan.size()) {
+            // Chain naturally ended without JS noticing first.
+            completeRun(run, /*alert=*/true);
             return;
         }
 
-        // Boundary-alert gating:
-        //   - we crossed a segment boundary in *this* tick (idxBefore != curIndex), AND
-        //   - JS-driven UPDATEs haven't already synced prevAlertIndex to curIndex
-        //     (i.e. the foreground rAF tick handled it first), AND
-        //   - the app isn't currently in the foreground — when the user is
-        //     looking at the app, in-app Audio.chime() plays through the
-        //     Media stream and a Notification-stream ding on top would just
-        //     feel like a second, louder sound for the same event.
         boolean inForeground = isAppForegroundSafe();
-        boolean boundaryAlert = curIndex != idxBefore
-            && curIndex != prevAlertIndex
+        boolean boundaryAlert = run.curIndex != idxBefore
+            && run.curIndex != run.prevAlertIndex
             && !inForeground;
-        prevAlertIndex = curIndex;
+        run.prevAlertIndex = run.curIndex;
 
-        Notification n = buildNotification(null, boundaryAlert);
+        Notification n = buildNotification(run, null, boundaryAlert);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
-            try { nm.notify(NOTIFICATION_ID, n); } catch (Throwable ignored) {}
+            try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {}
         }
 
-        // Play the chime through SoundPool in lockstep with the
-        // notification post — channel sound is null, so this is the
-        // only audio cue at the boundary in background.
-        if (boundaryAlert) playChime();
+        if (boundaryAlert) playChime(run);
 
-        // Voice announcement for the segment we just entered. Fires on
-        // EVERY autonomous boundary crossing (background) AND on every
-        // JS-driven UPDATE that lands on a new index (foreground). The
-        // dedup is per-segment-index (lastVoicedAtIndex), so a single
-        // segment only ever gets its voice played once — JS doesn't
-        // play voice on its side anymore (it relies on the FGS for
-        // both paths), so there's no double-speak risk. Pre-rendered
-        // file is the only audio source; if it's missing we silently
-        // skip rather than fall back to live TTS (which would put us
-        // back at the original "no voice when minimized" problem on
-        // every cold-start chain).
-        if (curIndex != idxBefore && curIndex != lastVoicedAtIndex) {
-            lastVoicedAtIndex = curIndex;
-            maybePlayVoiceForSegment(curIndex);
+        if (run.curIndex != idxBefore && run.curIndex != run.lastVoicedAtIndex) {
+            run.lastVoicedAtIndex = run.curIndex;
+            maybePlayVoiceForSegment(run, run.curIndex);
         }
 
-        // Last-3-second cue. We fire final3.wav ONCE per segment, the
-        // moment remaining first drops into the ≤3s window. The WAV is
-        // pre-rendered with three 660Hz pulses at exact 1.000s offsets,
-        // so the OS audio thread plays them gap-free — no Handler /
-        // SoundPool / per-tick jitter. Previously we triggered tick.wav
-        // three separate times from this loop (once per second of the
-        // last 3) and users reported audibly irregular spacing; the
-        // wall-clock jitter compounded across three calls. One play =
-        // one timing contract, owned by the audio hardware.
-        Segment cur = plan.get(curIndex);
-        long remainingSec = computeRemainingSec(cur);
-        if (tickEnabled && !inForeground && remainingSec >= 1L && remainingSec <= 3L) {
-            if (finalThreeStartedAtIndex != curIndex) {
-                finalThreeStartedAtIndex = curIndex;
-                playFinalThree();
+        Segment cur = run.plan.get(run.curIndex);
+        long remainingSec = computeRemainingSec(run, cur);
+        if (run.tickEnabled && !inForeground && remainingSec >= 1L && remainingSec <= 3L) {
+            if (run.finalThreeStartedAtIndex != run.curIndex) {
+                run.finalThreeStartedAtIndex = run.curIndex;
+                playFinalThree(run);
             }
         }
 
-        scheduleNextTick();
+        scheduleNextTick(run);
     }
 
-    /** Best-effort foreground probe — defaults to "background" if the
-     *  plugin static reference isn't reachable. */
     private boolean isAppForegroundSafe() {
         try { return ChainTimerPlugin.isAppForeground(); }
         catch (Throwable t) { return false; }
     }
 
-    /**
-     * Pick the next tick delay: either the next 1-second wall clock boundary
-     * within the current segment, or the segment-end moment if it's sooner.
-     * Aligning to wall-clock seconds keeps the displayed MM:SS in sync with
-     * what the user perceives — a 1000ms postDelayed isn't enough on its
-     * own because Handler latency drifts the tick relative to the second
-     * boundary the JS engine is using on-screen.
-     */
-    private void scheduleNextTick() {
-        if (curIndex >= plan.size()) return;
+    private void scheduleNextTick(ChainRun run) {
+        if (run.curIndex >= run.plan.size()) return;
         long now = System.currentTimeMillis();
-        long segEndMs = segStartedAtMs + plan.get(curIndex).durationSec * 1000L;
+        long segEndMs = run.segStartedAtMs + run.plan.get(run.curIndex).durationSec * 1000L;
         long msUntilSegEnd = Math.max(0L, segEndMs - now);
-        // Time to the next whole-second boundary (relative to segStartedAtMs
-        // so the displayed seconds line up with where the JS engine is).
-        long elapsedInSeg = now - segStartedAtMs;
+        long elapsedInSeg = now - run.segStartedAtMs;
         long msToNextSecond = TICK_INTERVAL_MS - (elapsedInSeg % TICK_INTERVAL_MS);
         if (msToNextSecond <= 0) msToNextSecond = TICK_INTERVAL_MS;
         long delay = Math.min(msToNextSecond, msUntilSegEnd);
-        if (delay < 16L) delay = 16L; // never < 1 frame to avoid tight loops
-        tickHandler.postDelayed(tickRunnable, delay);
+        if (delay < 16L) delay = 16L;
+        if (run.tickRunnable == null) run.tickRunnable = () -> onTickForRun(run);
+        tickHandler.postDelayed(run.tickRunnable, delay);
     }
 
-    /** User-initiated stop, or any path that should leave no trace. */
-    private void stopRun() {
+    // --- Stop / complete ------------------------------------------
+
+    /** User-initiated stop of every run (back-compat with v1.3.x). */
+    private void stopAllRuns() {
+        for (ChainRun run : new ArrayList<>(runs.values())) {
+            cancelTickFor(run);
+            releaseVoicePlayer(run);
+            releaseCueMediaPlayers(run);
+        }
+        runs.clear();
         running = false;
-        tickHandler.removeCallbacks(tickRunnable);
-        releaseVoicePlayer();
-        releaseCueMediaPlayers();
+        // Clear every run's notification + the summary.
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) {
+            try { nm.cancel(SUMMARY_NOTIFICATION_ID); } catch (Throwable ignored) {}
+            // Stale per-run + per-completion ids — we don't track all of
+            // them in stopAllRuns since the map was already cleared, but
+            // the slotByRun map still holds historical assignments.
+            for (Integer slot : slotByRun.values()) {
+                try { nm.cancel(RUN_NOTIF_BASE + (slot % SLOT_COUNT)); } catch (Throwable ignored) {}
+            }
+        }
+        fgsOwnerRunId = null;
         releaseWakeLock();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
 
+    /** Stop a specific run — leaves other runs untouched. */
+    private void stopRun(String runId, boolean alert) {
+        ChainRun run = runs.get(runId);
+        if (run == null) return;
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        boolean wasFgsOwner = runId.equals(fgsOwnerRunId);
+        releaseRun(run);
+        if (nm != null) {
+            try { nm.cancel(run.notificationId); } catch (Throwable ignored) {}
+        }
+        if (wasFgsOwner) {
+            promoteNextFgsOwner();
+        }
+        finishIfNoRuns();
+        refreshSummary();
+    }
+
     /**
-     * Natural chain completion. Replaces the FGS row with a single
-     * "✓ Chain complete" entry on a fresh id so it shows heads-up
-     * (Android only triggers heads-up on first post for a given id, not
-     * on updates). The FGS notification is removed in the same step so
-     * the user is left with exactly one notification.
+     * Natural completion of a single run. Replaces the run's persistent
+     * notification with a "✓ Chain complete" heads-up entry on a fresh
+     * id (Android only triggers heads-up on first post for a given id,
+     * not on updates). If this was the FGS owner, promote another run
+     * into the slot. If no runs remain, release wake lock + stopSelf.
      *
      * @param alert when true, the channel sound/vibration/heads-up fire
-     *              — used by the autonomous service-tick path so a user
-     *              who's away from the device gets an actual cue. When
-     *              false (JS-driven foreground completion) the entry is
-     *              posted silently because Audio.finale() in the WebView
-     *              has already played the cue through the Media stream
-     *              and a second sound on the Notification stream just
-     *              feels louder and tackier.
+     *              (autonomous tick path detected the boundary while the
+     *              user was away). When false (JS-driven completion in
+     *              foreground) the entry is posted silently.
      */
-    private void completeChain(boolean alert) {
-        running = false;
-        tickHandler.removeCallbacks(tickRunnable);
-
+    private void completeRun(ChainRun run, boolean alert) {
+        cancelTickFor(run);
         NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) {
-            String safeName = (chainName == null || chainName.isEmpty()) ? "Chain" : chainName;
-            int total = plan.size();
-            String body = total == 1
-                ? "1 segment done"
-                : total + " segments done";
+        if (nm != null) postCompletionNotification(nm, run, alert);
+        boolean playedFinale = alert && !isAppForegroundSafe();
+        if (playedFinale) playFinale(run);
 
-            Intent appIntent = new Intent(this, MainActivity.class);
-            appIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_IMMUTABLE;
-            PendingIntent pi = PendingIntent.getActivity(this, 0, appIntent, piFlags);
+        boolean wasFgsOwner = run.runId.equals(fgsOwnerRunId);
 
-            // Use the dedicated finale channel so the rendered finale.wav
-            // arpeggio plays — same waveform as Audio.finale() in the
-            // WebView. The chain-active channel (with chime.wav) would
-            // otherwise play a 2-note chime instead, which doesn't match
-            // what the in-app sound does on chain end.
-            NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_FINALE)
-                .setSmallIcon(R.drawable.ic_stat_icon)
-                .setColor(0xFFF5B042)
-                .setContentTitle("✓ " + safeName + " complete")
-                .setContentText(body)
-                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setOngoing(false)
-                // CATEGORY_ALARM so the chain-end heads-up + lock-screen entry
-                // bypass DND under the default Android DND policy (alarms
-                // allowed). Without this, the finale would be the cue that
-                // most often gets silenced — exactly when the user has the
-                // phone face-down expecting the chain to wake them.
-                .setCategory(NotificationCompat.CATEGORY_ALARM);
+        // Unregister BEFORE promoting so promoteNextFgsOwner can't pick
+        // this same run. MediaPlayer cleanup is separate (deferred when
+        // a finale is still playing through THIS run's pool).
+        runs.remove(run.runId);
 
-            // Even on the autonomous service-tick path (where alert=true)
-            // we suppress the channel sound if the app turned out to be
-            // in the foreground: in-app Audio.finale() will play through
-            // the Media stream and a Notification-stream sound on top
-            // doubles the cue. The tray entry itself stays — only the
-            // alert decoration changes.
-            boolean shouldAlert = alert && !isAppForegroundSafe();
-            if (shouldAlert) {
-                b.setOnlyAlertOnce(false)
-                 .setPriority(NotificationCompat.PRIORITY_HIGH);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setSilent(false);
-            } else {
-                b.setOnlyAlertOnce(true)
-                 .setPriority(NotificationCompat.PRIORITY_LOW);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setSilent(true);
+        // FGS handoff strategy:
+        //   - SURVIVOR EXISTS: immediately rebind FGS to its notification
+        //     slot (startForeground with new id). Atomic — no gap.
+        //   - NO SURVIVOR + FINALE PLAYING: keep the FGS binding on THIS
+        //     run's notification id for the finale tail so the process
+        //     stays foreground-protected. Aggressive OEMs (Samsung,
+        //     Xiaomi) can otherwise cull a wake-lock-only service in
+        //     under 1500ms, truncating the audible arpeggio. The
+        //     stopForeground happens in the deferred lambda.
+        //   - NO SURVIVOR + NO FINALE: detach FGS immediately.
+        final boolean willKeepFgsForFinale = wasFgsOwner && runs.isEmpty() && playedFinale;
+        if (wasFgsOwner) {
+            ChainRun next = runs.isEmpty() ? null : runs.values().iterator().next();
+            if (next != null) {
+                ensureFgsBinding(next);
+            } else if (!playedFinale) {
+                try { stopForeground(STOP_FOREGROUND_REMOVE); } catch (Throwable ignored) {}
+                fgsOwnerRunId = null;
             }
-
-            try {
-                nm.notify(NOTIFICATION_ID_COMPLETE, b.build());
-            } catch (Throwable ignored) {}
+            // else: defer stopForeground until the finale tail lambda.
         }
 
-        // Play the finale through SoundPool in lockstep with the
-        // notification post (channel sound is null). Same gating as the
-        // notification: we only alert at all when the user isn't already
-        // hearing Audio.finale through the in-app Web Audio path.
-        boolean playedFinale = alert && !isAppForegroundSafe();
-        if (playedFinale) playFinale();
+        // Cancel the completing run's persistent notification — but only
+        // if FGS handoff already moved away from this id. When we're
+        // keeping FGS bound for the finale tail, leaving the notification
+        // up briefly is the price of process survival; the deferred
+        // lambda tears it down with stopForeground(REMOVE).
+        if (nm != null && !willKeepFgsForFinale) {
+            try { nm.cancel(run.notificationId); } catch (Throwable ignored) {}
+        }
 
-        // Removes the FGS notification (id 7000); the chain-complete entry
-        // (id 7001) we just posted persists independently.
-        stopForeground(STOP_FOREGROUND_REMOVE);
-
-        // Defer stopSelf so onDestroy doesn't release the SoundPool while
-        // the finale arpeggio (~0.95s, plus a small tail of audio-thread
-        // latency) is still playing. Without this delay the audio is
-        // pre-empted and the user only hears the 3-2-1 ticks; the finale
-        // never reaches their ears even though playFinale() returned. The
-        // mid-chain chime didn't have this problem because the service
-        // keeps ticking after a boundary, so SoundPool isn't torn down.
-        //
-        // Keep the wake lock held until stopSelf so the CPU can't drop into
-        // a deep sleep that would suspend the audio thread mid-arpeggio.
+        // Defer MediaPlayer cleanup while the finale arpeggio is still
+        // playing through this run's own finalePlayer (per-run pool, so
+        // unaffected by promotion of other runs).
+        final ChainRun finalRun = run;
         if (playedFinale) {
             tickHandler.postDelayed(() -> {
-                releaseWakeLock();
-                stopSelf();
+                cancelTickFor(finalRun);
+                releaseVoicePlayer(finalRun);
+                releaseCueMediaPlayers(finalRun);
+                if (willKeepFgsForFinale) {
+                    try { stopForeground(STOP_FOREGROUND_REMOVE); } catch (Throwable ignored) {}
+                    fgsOwnerRunId = null;
+                }
+                finishIfNoRuns();
+                refreshSummary();
             }, FINALE_TAIL_MS);
         } else {
-            releaseWakeLock();
-            stopSelf();
+            cancelTickFor(finalRun);
+            releaseVoicePlayer(finalRun);
+            releaseCueMediaPlayers(finalRun);
+            finishIfNoRuns();
+            refreshSummary();
         }
     }
+
+    private void postCompletionNotification(NotificationManager nm, ChainRun run, boolean alert) {
+        String safeName = (run.chainName == null || run.chainName.isEmpty()) ? "Chain" : run.chainName;
+        int total = run.plan.size();
+        String body = total == 1 ? "1 segment done" : total + " segments done";
+
+        Intent appIntent = new Intent(this, MainActivity.class);
+        appIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pi = PendingIntent.getActivity(this, 0, appIntent, piFlags);
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_FINALE)
+            .setSmallIcon(R.drawable.ic_stat_icon)
+            .setColor(0xFFF5B042)
+            .setContentTitle("✓ " + safeName + " complete")
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setCategory(NotificationCompat.CATEGORY_ALARM);
+        // v1.4.1 — only group when other runs are still active (the
+        // completing run was just removed from the map; >=1 survivor
+        // means the group is meaningful). Single-chain completion
+        // matches v1.3.x byte-for-byte.
+        if (!runs.isEmpty()) b.setGroup(GROUP_KEY);
+
+        boolean shouldAlert = alert && !isAppForegroundSafe();
+        if (shouldAlert) {
+            b.setOnlyAlertOnce(false).setPriority(NotificationCompat.PRIORITY_HIGH);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setSilent(false);
+        } else {
+            b.setOnlyAlertOnce(true).setPriority(NotificationCompat.PRIORITY_LOW);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setSilent(true);
+        }
+
+        try {
+            nm.notify(run.completionNotificationId, b.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void promoteNextFgsOwner() {
+        // Pick the oldest survivor (LinkedHashMap insertion order).
+        for (Map.Entry<String, ChainRun> e : runs.entrySet()) {
+            ChainRun next = e.getValue();
+            if (next == null) continue;
+            ensureFgsBinding(next);
+            return;
+        }
+    }
+
+    private void finishIfNoRuns() {
+        if (!runs.isEmpty()) return;
+        running = false;
+        fgsOwnerRunId = null;
+        releaseWakeLock();
+        try { stopForeground(STOP_FOREGROUND_REMOVE); } catch (Throwable ignored) {}
+        // Clear summary if any.
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) {
+            try { nm.cancel(SUMMARY_NOTIFICATION_ID); } catch (Throwable ignored) {}
+        }
+        stopSelf();
+    }
+
+    // --- Notification posting / FGS slot management ---------------
+
+    /** Post the run's notification; bind to FGS if no owner yet,
+     *  otherwise use NotificationManager.notify. */
+    private void ensureFgsBindingOrPost(ChainRun run, boolean alert) {
+        Notification n = buildNotification(run, null, alert);
+        if (fgsOwnerRunId == null) {
+            bindForeground(run, n);
+        } else if (run.runId.equals(fgsOwnerRunId)) {
+            // Re-post FGS notification (replaces in place).
+            try {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    startForeground(run.notificationId, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                } else {
+                    startForeground(run.notificationId, n);
+                }
+            } catch (Throwable t) {
+                NotificationManager nm = getSystemService(NotificationManager.class);
+                if (nm != null) { try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {} }
+            }
+        } else {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) { try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {} }
+        }
+    }
+
+    /** Force-rebind FGS to this run. Used when the previous owner ended
+     *  and we need to keep the foreground commitment alive. */
+    private void ensureFgsBinding(ChainRun run) {
+        Notification n = buildNotification(run, null, /*alert=*/false);
+        bindForeground(run, n);
+    }
+
+    private void bindForeground(ChainRun run, Notification n) {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(run.notificationId, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(run.notificationId, n);
+            }
+            fgsOwnerRunId = run.runId;
+        } catch (Throwable t) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) { try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {} }
+        }
+    }
+
+    /** Post (or clear) the group summary notification. Required for
+     *  Android to render the bundled-notification stack header when
+     *  2+ runs are active. */
+    private void refreshSummary() {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        if (runs.size() < 2) {
+            try { nm.cancel(SUMMARY_NOTIFICATION_ID); } catch (Throwable ignored) {}
+            return;
+        }
+        StringBuilder names = new StringBuilder();
+        int count = 0;
+        for (ChainRun r : runs.values()) {
+            if (count++ > 0) names.append(" · ");
+            names.append((r.chainName == null || r.chainName.isEmpty()) ? "Chain" : r.chainName);
+        }
+        Intent appIntent = new Intent(this, MainActivity.class);
+        appIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pi = PendingIntent.getActivity(this, 0, appIntent, piFlags);
+
+        Notification summary = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_icon)
+            .setColor(0xFFF5B042)
+            .setContentTitle(runs.size() + " chains running")
+            .setContentText(names.toString())
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(names.toString()))
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setGroup(GROUP_KEY)
+            .setGroupSummary(true)
+            .setShowWhen(false)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .build();
+        try { nm.notify(SUMMARY_NOTIFICATION_ID, summary); } catch (Throwable ignored) {}
+    }
+
+    // --- Channel setup --------------------------------------------
 
     private void ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
 
-        // One-time cleanup of pre-v1.3 + pre-SoundPool channels. Safe to
-        // call repeatedly: Android no-ops if the channel doesn't exist
-        // or was already deleted.
         for (String legacy : LEGACY_CHANNELS) {
             try { nm.deleteNotificationChannel(legacy); } catch (Throwable ignored) {}
         }
 
-        // Alarm-class audio attributes — used on both channels so the system
-        // classifies them under the ALARM stream for vibration/light handling
-        // and DND policy decisions (channel sound is null; SoundPool handles
-        // playback through this same stream).
         AudioAttributes alarmAttrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -730,86 +764,51 @@ public class ChainTimerService extends Service {
 
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             NotificationChannel ch = new NotificationChannel(
-                CHANNEL_ID,
-                "Chain transitions",
-                NotificationManager.IMPORTANCE_HIGH
-            );
+                CHANNEL_ID, "Chain transitions", NotificationManager.IMPORTANCE_HIGH);
             ch.setDescription("Persistent chain status + segment-boundary alert");
             ch.setShowBadge(false);
             ch.enableLights(true);
             ch.setLightColor(0xFFF5B042);
             ch.enableVibration(true);
-            // No channel sound — chime is played via SoundPool from R.raw.chime
-            // for low-latency, in-sync audio (the OS notification pipeline
-            // adds 200–500ms which lags behind the SoundPool-played ticks).
-            // The AudioAttributes still tell the system this channel belongs
-            // to the alarm stream (matters for DND classification on some
-            // OEM ROMs even when sound is null).
             ch.setSound(null, alarmAttrs);
-            // Best-effort DND bypass. The system silently ignores this for
-            // apps without ACCESS_NOTIFICATION_POLICY (we don't request it),
-            // but the notification-level CATEGORY_ALARM + USAGE_ALARM audio
-            // already give us alarm-through-DND behaviour under the default
-            // DND policy. This call is a free win where it is honoured (e.g.
-            // when the user has granted Notification policy access to the app
-            // for any reason).
             ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
-
         if (nm.getNotificationChannel(CHANNEL_FINALE) == null) {
             NotificationChannel ch = new NotificationChannel(
-                CHANNEL_FINALE,
-                "Chain complete",
-                NotificationManager.IMPORTANCE_HIGH
-            );
+                CHANNEL_FINALE, "Chain complete", NotificationManager.IMPORTANCE_HIGH);
             ch.setDescription("Heads-up entry when a chain naturally ends");
             ch.setShowBadge(false);
             ch.enableLights(true);
             ch.setLightColor(0xFFF5B042);
             ch.enableVibration(true);
-            // No channel sound — finale is played via SoundPool from
-            // R.raw.finale so it lands immediately after the last tick
-            // instead of trailing the channel-pipeline latency. Alarm-stream
-            // AudioAttributes are kept here for the same DND-classification
-            // reason as the chain-fg channel above.
             ch.setSound(null, alarmAttrs);
             ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
     }
 
-    /**
-     * Build the persistent notification.
-     *
-     * @param intent the intent that triggered this build, or null when called
-     *               from an internal tick. Used only for hasPrev/hasNext
-     *               action button gating.
-     * @param alert  if true, allow the channel to sound/vibrate this update
-     *               (used for service-detected segment boundaries while the
-     *               WebView is suspended). False for every per-second tick
-     *               and every JS-driven UPDATE so we never double-sound.
-     */
-    private Notification buildNotification(Intent intent, boolean alert) {
-        // Tap the notification body itself -> open the app on its current view.
+    // --- Notification building (per-run) --------------------------
+
+    private Notification buildNotification(ChainRun run, Intent intent, boolean alert) {
         Intent appIntent = new Intent(this, MainActivity.class);
         appIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent pi = PendingIntent.getActivity(this, 0, appIntent, piFlags);
 
-        Segment cur = (curIndex >= 0 && curIndex < plan.size()) ? plan.get(curIndex) : null;
-        Segment next = (curIndex + 1 < plan.size()) ? plan.get(curIndex + 1) : null;
-        int total = plan.size();
+        Segment cur = (run.curIndex >= 0 && run.curIndex < run.plan.size()) ? run.plan.get(run.curIndex) : null;
+        Segment next = (run.curIndex + 1 < run.plan.size()) ? run.plan.get(run.curIndex + 1) : null;
+        int total = run.plan.size();
 
-        long remainingSec = computeRemainingSec(cur);
-        String prefix = paused ? "⏸" : "▶"; // ⏸ / ▶
+        long remainingSec = computeRemainingSec(run, cur);
+        String prefix = run.paused ? "⏸" : "▶";
         String segName = (cur != null && cur.name != null && !cur.name.isEmpty()) ? cur.name : "Segment";
         String title = prefix + " " + segName + " · " + fmtClock(remainingSec);
-        String body = "Segment " + (curIndex + 1) + " of " + total + " · " + chainName;
-        String sub  = (curIndex + 1) + "/" + total;
+        String body = "Segment " + (run.curIndex + 1) + " of " + total + " · " + run.chainName;
+        String sub  = (run.curIndex + 1) + "/" + total;
         StringBuilder large = new StringBuilder();
-        large.append(chainName).append(" · Segment ").append(curIndex + 1).append(" of ").append(total).append('\n');
+        large.append(run.chainName).append(" · Segment ").append(run.curIndex + 1).append(" of ").append(total).append('\n');
         if (cur != null) large.append(segName).append(" — ").append(fmtDur(cur.durationSec)).append('\n');
         if (next != null) {
             String nextName = (next.name != null && !next.name.isEmpty()) ? next.name : "segment";
@@ -830,19 +829,14 @@ public class ChainTimerService extends Service {
             .setOngoing(true)
             .setShowWhen(false)
             .setUsesChronometer(false)
-            // CATEGORY_ALARM (not _STOPWATCH) so Android's DND filter treats
-            // this as an alarm: the default DND policy allows alarms through,
-            // so the boundary heads-up + lock-screen entry still appear when
-            // the phone is in DND or silent mode. Paired with the SoundPool's
-            // USAGE_ALARM routing, the chain rings exactly like an alarm
-            // clock with no user-side "Override DND" toggle required.
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE);
+        // v1.4.1 — only group the notification when 2+ runs are active.
+        // A solo group can render an "expand chevron" on some OEM ROMs
+        // even with no siblings; gating preserves byte-for-byte single-
+        // chain UX with v1.3.x.
+        if (runs.size() >= 2) b.setGroup(GROUP_KEY);
 
-        // Per-tick re-posts must NEVER alert: the channel is HIGH so the
-        // first post would otherwise sound, and every subsequent update
-        // would re-sound without setOnlyAlertOnce. Boundary alerts pass
-        // alert=true to clear both flags so the channel sound plays once.
         if (alert) {
             b.setOnlyAlertOnce(false);
             b.setPriority(NotificationCompat.PRIORITY_HIGH);
@@ -854,61 +848,47 @@ public class ChainTimerService extends Service {
         }
 
         if (total > 0 && cur != null && cur.durationSec > 0) {
-            // Per-chain progress = completed segments + fraction-of-current.
-            // Smooth across boundaries so the bar ticks in lockstep with
-            // the on-screen ring rather than snapping segment-by-segment.
             float segFrac = 1f - ((float) remainingSec / (float) cur.durationSec);
             if (segFrac < 0f) segFrac = 0f;
             if (segFrac > 1f) segFrac = 1f;
-            int progress = Math.round(100f * (curIndex + segFrac) / (float) total);
+            int progress = Math.round(100f * (run.curIndex + segFrac) / (float) total);
             b.setProgress(100, Math.max(0, Math.min(100, progress)), false);
         }
 
         boolean hasPrev = intent != null
-            ? intent.getBooleanExtra(EXTRA_HAS_PREV, curIndex > 0)
-            : (curIndex > 0);
+            ? intent.getBooleanExtra(EXTRA_HAS_PREV, run.curIndex > 0)
+            : (run.curIndex > 0);
         boolean hasNext = intent != null
-            ? intent.getBooleanExtra(EXTRA_HAS_NEXT, curIndex < total - 1)
-            : (curIndex < total - 1);
+            ? intent.getBooleanExtra(EXTRA_HAS_NEXT, run.curIndex < total - 1)
+            : (run.curIndex < total - 1);
 
-        // Action order matters — Android's compact (collapsed) view shows
-        // the first ~3 actions only. We put the most-used media-style trio
-        // (skip-prev / pause / skip-next) up front so they're always
-        // reachable without expanding the notification, like YouTube
-        // Music. Stop trails as a 4th, only visible when expanded.
         if (hasPrev) {
             b.addAction(R.drawable.ic_notif_prev, "Previous segment",
-                commandPendingIntent(COMMAND_SKIP_PREV, 10));
+                commandPendingIntent(run.runId, COMMAND_SKIP_PREV, 10));
         }
         b.addAction(
-            paused ? R.drawable.ic_notif_play : R.drawable.ic_notif_pause,
-            paused ? "Resume" : "Pause",
-            commandPendingIntent(paused ? COMMAND_RESUME : COMMAND_PAUSE, 11));
+            run.paused ? R.drawable.ic_notif_play : R.drawable.ic_notif_pause,
+            run.paused ? "Resume" : "Pause",
+            commandPendingIntent(run.runId, run.paused ? COMMAND_RESUME : COMMAND_PAUSE, 11));
         if (hasNext) {
             b.addAction(R.drawable.ic_notif_next, "Next segment",
-                commandPendingIntent(COMMAND_SKIP_NEXT, 13));
+                commandPendingIntent(run.runId, COMMAND_SKIP_NEXT, 13));
         }
         b.addAction(R.drawable.ic_notif_stop, "Stop chain",
-            commandPendingIntent(COMMAND_STOP, 12));
+            commandPendingIntent(run.runId, COMMAND_STOP, 12));
 
         return b.build();
     }
 
-    private long computeRemainingSec(Segment cur) {
+    private long computeRemainingSec(ChainRun run, Segment cur) {
         if (cur == null) return 0L;
-        if (paused) {
-            // While paused, JS captured the authoritative remaining at the
-            // pause transition. Use it verbatim — anything else would let
-            // the displayed value drift if the notification is re-rendered
-            // at any point before resume.
-            return Math.max(0L, (pausedRemainingMs + 999L) / 1000L);
+        if (run.paused) {
+            return Math.max(0L, (run.pausedRemainingMs + 999L) / 1000L);
         }
         long now = System.currentTimeMillis();
-        long endMs = segStartedAtMs + cur.durationSec * 1000L;
+        long endMs = run.segStartedAtMs + cur.durationSec * 1000L;
         long remMs = endMs - now;
         if (remMs < 0L) return 0L;
-        // Round up so a "0.4s remaining" still reads as "1" until it
-        // actually crosses zero — feels less laggy than truncating to 0.
         return (remMs + 999L) / 1000L;
     }
 
@@ -925,11 +905,13 @@ public class ChainTimerService extends Service {
         return r == 0 ? (m + "m") : (m + "m " + r + "s");
     }
 
-    private int clampIndex(int idx) {
+    private int clampIndex(ChainRun run, int idx) {
         if (idx < 0) return 0;
-        if (plan.isEmpty()) return 0;
-        return Math.min(idx, plan.size() - 1);
+        if (run.plan.isEmpty()) return 0;
+        return Math.min(idx, run.plan.size() - 1);
     }
+
+    // --- Plan parsing --------------------------------------------
 
     private static List<Segment> parsePlan(String json) {
         List<Segment> result = new ArrayList<>();
@@ -948,187 +930,166 @@ public class ChainTimerService extends Service {
         return result;
     }
 
-    private PendingIntent commandPendingIntent(String command, int requestCode) {
-        // Critically NOT getActivity: the action-button PendingIntents would
-        // otherwise launch MainActivity into the foreground every time the
-        // user taps Pause / Resume / Skip / Stop. With getService the
-        // intent is delivered straight to onStartCommand → handleNotification-
-        // Command, which mutates service state in place and forwards the
-        // command to JS via the plugin. The user stays where they were.
+    // --- Notification action plumbing -----------------------------
+
+    /** Build a PendingIntent for a notification action that delivers a
+     *  command to this service, routed by runId. Request code is
+     *  derived from the run's notification id slot (unique per active
+     *  run — sequential slots, no hash collisions) shifted left by 4
+     *  to leave room for a per-command nibble. Avoids the
+     *  Math.abs(Integer.MIN_VALUE) negative-modulo hazard and the
+     *  pause/resume "both share code 11" collision the v1.3.x code had. */
+    private PendingIntent commandPendingIntent(String runId, String command, int unusedRequestCode) {
         Intent intent = new Intent(this, ChainTimerService.class);
         intent.setAction(ACTION_CMD);
         intent.putExtra(EXTRA_COMMAND, command);
+        intent.putExtra(EXTRA_RUN_ID, runId);
+        ChainRun r = runs.get(runId);
+        // Per-run unique base from the run's notification id; fall back
+        // to runId hash with the sign bit masked off (never negative).
+        int base = (r != null)
+            ? r.notificationId
+            : ((runId == null ? 0 : (runId.hashCode() & 0x7FFFFFFF) % 1000) + RUN_NOTIF_BASE);
+        int code = (base << 4) | commandCode(command);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags |= PendingIntent.FLAG_IMMUTABLE;
-        return PendingIntent.getService(this, requestCode, intent, flags);
+        return PendingIntent.getService(this, code, intent, flags);
     }
 
-    /**
-     * Handle a notification-action button tap. The service mutates its own
-     * state synchronously so the persistent notification reflects the
-     * change immediately (pause icon flips, time freezes, etc.) regardless
-     * of whether the WebView is awake. The command is also forwarded to
-     * JS via the plugin so the engine state stays in sync; if the
-     * WebView is fully torn down the JS side will reconcile on next
-     * cold start via Engine.restoreIfActive.
-     */
-    private void handleNotificationCommand(String cmd) {
-        if (cmd == null) return;
+    private static int commandCode(String command) {
+        if (COMMAND_PAUSE.equals(command))      return 1;
+        if (COMMAND_RESUME.equals(command))     return 2;
+        if (COMMAND_STOP.equals(command))       return 3;
+        if (COMMAND_SKIP_PREV.equals(command))  return 4;
+        if (COMMAND_SKIP_NEXT.equals(command))  return 5;
+        return 0;
+    }
 
-        Segment cur = (curIndex >= 0 && curIndex < plan.size()) ? plan.get(curIndex) : null;
+    private void handleNotificationCommand(String runId, String cmd) {
+        if (cmd == null) return;
+        ChainRun run = runs.get(runId);
+        if (run == null) {
+            // Action button on a notification for a run we no longer
+            // track — defensively forward to JS for state sync but
+            // don't mutate any service state.
+            ChainTimerPlugin.deliverChainCommand(cmd, runId);
+            return;
+        }
+
+        Segment cur = (run.curIndex >= 0 && run.curIndex < run.plan.size()) ? run.plan.get(run.curIndex) : null;
         long now = System.currentTimeMillis();
         boolean updated = false;
 
         if (COMMAND_STOP.equals(cmd)) {
-            // Forward first so JS can hide the run view + clear persistence,
-            // then tear down the service ourselves so the wake lock is
-            // released even if the WebView never picks up the command.
-            ChainTimerPlugin.deliverChainCommand(cmd);
-            stopRun();
+            ChainTimerPlugin.deliverChainCommand(cmd, runId);
+            stopRun(runId, /*alert=*/false);
             return;
         }
 
         if (COMMAND_PAUSE.equals(cmd)) {
-            if (!paused && cur != null) {
-                long endMs = segStartedAtMs + cur.durationSec * 1000L;
-                pausedRemainingMs = Math.max(0L, endMs - now);
-                paused = true;
-                tickHandler.removeCallbacks(tickRunnable);
+            if (!run.paused && cur != null) {
+                long endMs = run.segStartedAtMs + cur.durationSec * 1000L;
+                run.pausedRemainingMs = Math.max(0L, endMs - now);
+                run.paused = true;
+                cancelTickFor(run);
                 updated = true;
             }
         } else if (COMMAND_RESUME.equals(cmd)) {
-            if (paused && cur != null) {
-                // Shift segStartedAtMs so that "now + pausedRemainingMs"
-                // hits the segment-end exactly — i.e. the notification
-                // continues from where it froze instead of jumping back
-                // to the value it would have shown without the pause.
-                segStartedAtMs = now + pausedRemainingMs - cur.durationSec * 1000L;
-                pausedRemainingMs = 0L;
-                paused = false;
-                scheduleNextTick();
+            if (run.paused && cur != null) {
+                run.segStartedAtMs = now + run.pausedRemainingMs - cur.durationSec * 1000L;
+                run.pausedRemainingMs = 0L;
+                run.paused = false;
+                scheduleNextTick(run);
                 updated = true;
             }
         } else if (COMMAND_SKIP_NEXT.equals(cmd)) {
-            if (curIndex < plan.size() - 1) {
-                curIndex++;
-                segStartedAtMs = now;
-                pausedRemainingMs = 0L;
-                paused = false;
-                prevAlertIndex = curIndex;        // user-driven, no boundary alert
-                finalThreeStartedAtIndex = -1;
-                // Voice the new segment on user-skip too — the user
-                // wants to know what they jumped into.
-                if (curIndex != lastVoicedAtIndex) {
-                    lastVoicedAtIndex = curIndex;
-                    maybePlayVoiceForSegment(curIndex);
+            if (run.curIndex < run.plan.size() - 1) {
+                run.curIndex++;
+                run.segStartedAtMs = now;
+                run.pausedRemainingMs = 0L;
+                run.paused = false;
+                run.prevAlertIndex = run.curIndex;
+                run.finalThreeStartedAtIndex = -1;
+                if (run.curIndex != run.lastVoicedAtIndex) {
+                    run.lastVoicedAtIndex = run.curIndex;
+                    maybePlayVoiceForSegment(run, run.curIndex);
                 }
-                tickHandler.removeCallbacks(tickRunnable);
-                scheduleNextTick();
+                cancelTickFor(run);
+                scheduleNextTick(run);
                 updated = true;
             } else if (cur != null) {
-                // Skip past the last segment → chain complete (no alert
-                // because user-driven, foreground in-app cue or visible
-                // notification update is enough).
-                ChainTimerPlugin.deliverChainCommand(cmd);
-                completeChain(/*alert=*/false);
+                ChainTimerPlugin.deliverChainCommand(cmd, runId);
+                completeRun(run, /*alert=*/false);
                 return;
             }
         } else if (COMMAND_SKIP_PREV.equals(cmd)) {
-            // Mirror Engine.skipPrev: if elapsed > 2.5s in the current
-            // segment OR we're already at index 0, restart current;
-            // otherwise jump to the previous segment.
-            long elapsedInSeg = paused
-                ? (cur != null ? cur.durationSec * 1000L - pausedRemainingMs : 0L)
-                : (now - segStartedAtMs);
-            if (curIndex > 0 && elapsedInSeg <= 2500L) {
-                curIndex--;
+            long elapsedInSeg = run.paused
+                ? (cur != null ? cur.durationSec * 1000L - run.pausedRemainingMs : 0L)
+                : (now - run.segStartedAtMs);
+            if (run.curIndex > 0 && elapsedInSeg <= 2500L) {
+                run.curIndex--;
             }
-            segStartedAtMs = now;
-            pausedRemainingMs = 0L;
-            paused = false;
-            prevAlertIndex = curIndex;
-            finalThreeStartedAtIndex = -1;
-            if (curIndex != lastVoicedAtIndex) {
-                lastVoicedAtIndex = curIndex;
-                maybePlayVoiceForSegment(curIndex);
+            run.segStartedAtMs = now;
+            run.pausedRemainingMs = 0L;
+            run.paused = false;
+            run.prevAlertIndex = run.curIndex;
+            run.finalThreeStartedAtIndex = -1;
+            if (run.curIndex != run.lastVoicedAtIndex) {
+                run.lastVoicedAtIndex = run.curIndex;
+                maybePlayVoiceForSegment(run, run.curIndex);
             }
-            tickHandler.removeCallbacks(tickRunnable);
-            scheduleNextTick();
+            cancelTickFor(run);
+            scheduleNextTick(run);
             updated = true;
         }
 
         if (updated) {
-            Notification n = buildNotification(null, /*alert=*/false);
+            Notification n = buildNotification(run, null, false);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) {
-                try { nm.notify(NOTIFICATION_ID, n); } catch (Throwable ignored) {}
+                if (run.runId.equals(fgsOwnerRunId)) {
+                    bindForeground(run, n);
+                } else {
+                    try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {}
+                }
             }
         }
 
-        // Forward to JS so the engine syncs (no-op if the WebView is gone).
-        ChainTimerPlugin.deliverChainCommand(cmd);
+        ChainTimerPlugin.deliverChainCommand(cmd, runId);
     }
 
-    private void ensureMediaPlayers() {
-        if (chimePlayer != null) return; // pool already up
+    // --- Per-run MediaPlayer pool ---------------------------------
+
+    private void ensureMediaPlayers(ChainRun run) {
+        if (run.chimePlayer != null) return;
         try {
-            chimePlayer      = createPreparedPlayer(R.raw.chime);
-            finalThreePlayer = createPreparedPlayer(R.raw.final3);
-            finalePlayer     = createPreparedPlayer(R.raw.finale);
-            applyAudioRouteToCuePool();
-            // Silent pre-warm so the FIRST real cue play has the same
-            // low latency as subsequent plays. MediaPlayer lazily allocates
-            // its audio thread / output-buffer on the first start(); doing
-            // that allocation under volume=0 means no audible chirp, but
-            // the buffer is ready for the real play that follows. Order
-            // matters: applyAudioRouteToCuePool() sets the preferred
-            // device BEFORE warming so the warmup binds to the right
-            // output the first time (otherwise the first real play would
-            // pay a re-binding hit). Pause + seek-back-to-0 leaves each
-            // player in the same "ready to replay" state as it would be
-            // after a normal cue fire.
-            warmCueMediaPlayers();
+            run.chimePlayer      = createPreparedPlayer(R.raw.chime);
+            run.finalThreePlayer = createPreparedPlayer(R.raw.final3);
+            run.finalePlayer     = createPreparedPlayer(R.raw.finale);
+            applyAudioRouteToCuePool(run);
+            warmCueMediaPlayers(run);
         } catch (Throwable t) {
-            releaseCueMediaPlayers();
+            releaseCueMediaPlayers(run);
         }
     }
 
-    private void warmCueMediaPlayers() {
-        warmOneCue(chimePlayer);
-        warmOneCue(finalThreePlayer);
-        warmOneCue(finalePlayer);
+    private void warmCueMediaPlayers(ChainRun run) {
+        warmOneCue(run.chimePlayer);
+        warmOneCue(run.finalThreePlayer);
+        warmOneCue(run.finalePlayer);
     }
 
     private void warmOneCue(android.media.MediaPlayer mp) {
         if (mp == null) return;
         try {
-            mp.setVolume(0f, 0f); // silence — no audible output during warmup
-            mp.start();           // triggers audio-thread + buffer allocation
-            mp.pause();            // immediately stop; buffer remains warm
-            mp.seekTo(0);          // reset playback position for the real play
-            mp.setVolume(1f, 1f); // restore normal volume for subsequent plays
-        } catch (Throwable ignored) {
-            // A failed warmup just means the FIRST real play might cost
-            // an extra ~50ms; not worth aborting setup over.
-        }
+            mp.setVolume(0f, 0f);
+            mp.start();
+            mp.pause();
+            mp.seekTo(0);
+            mp.setVolume(1f, 1f);
+        } catch (Throwable ignored) {}
     }
 
-    /**
-     * Build a MediaPlayer for an R.raw resource, in prepared state, with
-     * the alarm-stream AudioAttributes that keep our DND-bypass story
-     * intact:
-     *
-     *   USAGE_ALARM routes playback through the ALARM stream, which is
-     *   never muted by silent mode, DND, or the Notification-stream
-     *   volume slider. This is the "this is a timer, ring like an alarm"
-     *   contract from v1.3.3 -- when a segment boundary fires, the
-     *   chime / 3-2-1 / finale ring even on silent / DND. CONTENT_TYPE_-
-     *   SONIFICATION marks the audio as a short cue, not music.
-     *
-     * MediaPlayer.create returns a prepared player; we set attributes
-     * AFTER prepare in case the system wants to re-bind. Throws on
-     * any error so the caller can release the partial pool.
-     */
     private android.media.MediaPlayer createPreparedPlayer(int resId) throws Exception {
         android.media.MediaPlayer mp = android.media.MediaPlayer.create(this, resId);
         if (mp == null) throw new Exception("MediaPlayer.create returned null for resId=" + resId);
@@ -1137,39 +1098,18 @@ public class ChainTimerService extends Service {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
         try { mp.setAudioAttributes(attrs); } catch (Throwable ignored) {}
-        // Tag the player as "completed" — sits in PlaybackCompleted state
-        // ready for seekTo(0)+start() to replay.
         return mp;
     }
 
-    /**
-     * Re-bind every cue MediaPlayer to the currently-resolved preferred
-     * output device. Called at pool creation, on every START/UPDATE
-     * intent (so a user flipping the audioRoute pill mid-chain takes
-     * effect on the next play), and after the user changes audio devices
-     * physically (unhandled — we just rebind on next intent).
-     */
-    private void applyAudioRouteToCuePool() {
-        android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(audioRoute);
-        // null is fine here — passing null clears any preference and lets
-        // USAGE_ALARM's default routing win (which is "all alarm outputs"
-        // a.k.a. the v1.3.6 "Both" mode).
-        if (chimePlayer      != null) try { chimePlayer.setPreferredDevice(preferred); }      catch (Throwable ignored) {}
-        if (finalThreePlayer != null) try { finalThreePlayer.setPreferredDevice(preferred); } catch (Throwable ignored) {}
-        if (finalePlayer     != null) try { finalePlayer.setPreferredDevice(preferred); }     catch (Throwable ignored) {}
+    private void applyAudioRouteToCuePool(ChainRun run) {
+        android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(run.audioRoute);
+        if (run.chimePlayer      != null) try { run.chimePlayer.setPreferredDevice(preferred); }      catch (Throwable ignored) {}
+        if (run.finalThreePlayer != null) try { run.finalThreePlayer.setPreferredDevice(preferred); } catch (Throwable ignored) {}
+        if (run.finalePlayer     != null) try { run.finalePlayer.setPreferredDevice(preferred); }     catch (Throwable ignored) {}
     }
 
-    /**
-     * Single-shot replay. After PlaybackCompleted, seekTo(0)+start()
-     * replays from the beginning at low latency (~15ms after the first
-     * play warms the audio buffer). If the player is somehow still in
-     * the playing state from a previous fire (e.g. a 3.2s finalThree
-     * still tailing when the next boundary lands), we restart from 0 —
-     * the user is more likely to want the new cue to be sharp than to
-     * wait for the previous one to finish.
-     */
-    private void playCueSound(android.media.MediaPlayer mp) {
-        if (!soundEnabled || mp == null) return;
+    private void playCueSound(ChainRun run, android.media.MediaPlayer mp) {
+        if (!run.soundEnabled || mp == null) return;
         try {
             if (mp.isPlaying()) mp.pause();
             mp.seekTo(0);
@@ -1177,39 +1117,26 @@ public class ChainTimerService extends Service {
         } catch (Throwable ignored) {}
     }
 
-    private void playChime()      { playCueSound(chimePlayer); }
-    private void playFinale()     { playCueSound(finalePlayer); }
-    private void playFinalThree() { playCueSound(finalThreePlayer); }
+    private void playChime(ChainRun run)      { playCueSound(run, run.chimePlayer); }
+    private void playFinale(ChainRun run)     { playCueSound(run, run.finalePlayer); }
+    private void playFinalThree(ChainRun run) { playCueSound(run, run.finalThreePlayer); }
 
-    private void releaseCueMediaPlayers() {
-        if (chimePlayer != null)      { try { chimePlayer.release(); }      catch (Throwable ignored) {} chimePlayer = null; }
-        if (finalThreePlayer != null) { try { finalThreePlayer.release(); } catch (Throwable ignored) {} finalThreePlayer = null; }
-        if (finalePlayer != null)     { try { finalePlayer.release(); }     catch (Throwable ignored) {} finalePlayer = null; }
+    private void releaseCueMediaPlayers(ChainRun run) {
+        if (run.chimePlayer != null)      { try { run.chimePlayer.release(); }      catch (Throwable ignored) {} run.chimePlayer = null; }
+        if (run.finalThreePlayer != null) { try { run.finalThreePlayer.release(); } catch (Throwable ignored) {} run.finalThreePlayer = null; }
+        if (run.finalePlayer != null)     { try { run.finalePlayer.release(); }     catch (Throwable ignored) {} run.finalePlayer = null; }
     }
 
-    /**
-     * Play the pre-rendered voice WAV for the given segment index, if
-     * it's allowed and exists. Routed through MediaPlayer (not SoundPool,
-     * which doesn't easily handle arbitrary file paths) on the ALARM
-     * audio stream so the chain remains DND-bypass-clean. Idempotent
-     * across overlapping calls: any in-flight playback is torn down
-     * before the new one starts.
-     */
-    private void maybePlayVoiceForSegment(int segIdx) {
-        if (segIdx < 0 || segIdx >= voicePaths.size()) return;
-        // Per-segment effective voice gate. Defaults to ON when the
-        // bitset wasn't supplied (legacy callers / first-run JS that
-        // hasn't shipped the new payload yet).
-        boolean voiceOn = segIdx >= voiceEnabled.size() || Boolean.TRUE.equals(voiceEnabled.get(segIdx));
+    private void maybePlayVoiceForSegment(ChainRun run, int segIdx) {
+        if (segIdx < 0 || segIdx >= run.voicePaths.size()) return;
+        boolean voiceOn = segIdx >= run.voiceEnabled.size() || Boolean.TRUE.equals(run.voiceEnabled.get(segIdx));
         if (!voiceOn) return;
-        String path = voicePaths.get(segIdx);
+        String path = run.voicePaths.get(segIdx);
         if (path == null) return;
         File f = new File(path);
         if (!f.exists() || f.length() == 0) return;
 
-        // Tear down any in-flight playback so a quick skip-skip can't
-        // pile two voices on top of each other.
-        releaseVoicePlayer();
+        releaseVoicePlayer(run);
         try {
             android.media.MediaPlayer mp = new android.media.MediaPlayer();
             android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
@@ -1218,45 +1145,33 @@ public class ChainTimerService extends Service {
                 .build();
             mp.setAudioAttributes(attrs);
             mp.setDataSource(path);
-            mp.setOnCompletionListener(p -> {
+            // Marshal completion/error callbacks onto the main thread — the
+            // MediaPlayer's internal threads fire these handlers, and they
+            // touch run.voicePlayer which is otherwise only written from
+            // the main thread (onStartCommand, handleNotificationCommand,
+            // completeRun deferred lambda). Without this hop, a concurrent
+            // releaseVoicePlayer could double-release the same MediaPlayer.
+            mp.setOnCompletionListener(p -> tickHandler.post(() -> {
                 try { p.release(); } catch (Throwable ignored) {}
-                if (voicePlayer == p) voicePlayer = null;
-            });
+                if (run.voicePlayer == p) run.voicePlayer = null;
+            }));
             mp.setOnErrorListener((p, what, extra) -> {
-                try { p.release(); } catch (Throwable ignored) {}
-                if (voicePlayer == p) voicePlayer = null;
+                tickHandler.post(() -> {
+                    try { p.release(); } catch (Throwable ignored) {}
+                    if (run.voicePlayer == p) run.voicePlayer = null;
+                });
                 return true;
             });
             mp.prepare();
-            // Apply the routing policy AFTER prepare() (per Android
-            // docs setPreferredDevice may need an active audio stream
-            // to bind). On "both" we leave the preferred device unset
-            // so USAGE_ALARM's default routing (speaker + headset) wins.
-            android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(audioRoute);
+            android.media.AudioDeviceInfo preferred = pickPreferredOutputDevice(run.audioRoute);
             if (preferred != null) mp.setPreferredDevice(preferred);
             mp.start();
-            voicePlayer = mp;
+            run.voicePlayer = mp;
         } catch (Throwable t) {
-            releaseVoicePlayer();
+            releaseVoicePlayer(run);
         }
     }
 
-    /**
-     * Resolve the user's audioRoute setting against currently-connected
-     * output devices.
-     *
-     *   "headset" → first non-builtin output device (wired/BT/USB
-     *               headset); null when nothing is plugged in (so
-     *               playback falls back to the system default, which
-     *               is the speaker — exactly what the user wants).
-     *   "speaker" → TYPE_BUILTIN_SPEAKER, always (overrides any
-     *               connected headset).
-     *   "both"    → null (preserve USAGE_ALARM's default "play through
-     *               every output" behaviour).
-     *
-     * Returns null on any error or when no matching device exists; the
-     * caller treats null as "use system default."
-     */
     private android.media.AudioDeviceInfo pickPreferredOutputDevice(String route) {
         try {
             android.media.AudioManager am = (android.media.AudioManager) getSystemService(Context.AUDIO_SERVICE);
@@ -1270,9 +1185,6 @@ public class ChainTimerService extends Service {
                 return null;
             }
             if ("headset".equals(route)) {
-                // Preference order: USB > wired > BT (LE/A2DP) > BT SCO.
-                // The user is most likely to expect "the thing actually
-                // in my ears" if they have multiple connected.
                 android.media.AudioDeviceInfo wired = null, bt = null, btSco = null, usb = null;
                 for (android.media.AudioDeviceInfo d : outs) {
                     int t = d.getType();
@@ -1286,30 +1198,24 @@ public class ChainTimerService extends Service {
                 if (wired != null) return wired;
                 if (bt    != null) return bt;
                 if (btSco != null) return btSco;
-                return null; // no headset → system default (speaker)
+                return null;
             }
-            // "both" or unknown → no preference, let USAGE_ALARM route
-            // through whatever the system thinks alarms should go to.
             return null;
         } catch (Throwable t) {
             return null;
         }
     }
 
-    private void releaseVoicePlayer() {
-        android.media.MediaPlayer mp = voicePlayer;
-        voicePlayer = null;
+    private void releaseVoicePlayer(ChainRun run) {
+        android.media.MediaPlayer mp = run.voicePlayer;
+        run.voicePlayer = null;
         if (mp == null) return;
         try { if (mp.isPlaying()) mp.stop(); } catch (Throwable ignored) {}
         try { mp.release(); } catch (Throwable ignored) {}
     }
 
-    /** Parse a JSON array of strings (with JSONObject.NULL → null
-     *  entries) into a Java List. Tolerant of malformed JSON: returns
-     *  an empty list and the FGS treats missing entries as "no voice
-     *  for this segment." */
-    private static java.util.List<String> parseStringArray(String json) {
-        java.util.List<String> out = new ArrayList<>();
+    private static List<String> parseStringArray(String json) {
+        List<String> out = new ArrayList<>();
         if (json == null || json.isEmpty()) return out;
         try {
             JSONArray arr = new JSONArray(json);
@@ -1321,8 +1227,8 @@ public class ChainTimerService extends Service {
         return out;
     }
 
-    private static java.util.List<Boolean> parseBoolArray(String json) {
-        java.util.List<Boolean> out = new ArrayList<>();
+    private static List<Boolean> parseBoolArray(String json) {
+        List<Boolean> out = new ArrayList<>();
         if (json == null || json.isEmpty()) return out;
         try {
             JSONArray arr = new JSONArray(json);
@@ -1339,18 +1245,7 @@ public class ChainTimerService extends Service {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG);
             wakeLock.setReferenceCounted(false);
         }
-        if (!wakeLock.isHeld()) {
-            // No timeout — chains can be arbitrarily long (multi-hour
-            // Pomodoro days, sleep-cycle timers, ultra-endurance sessions).
-            // Releasing the lock prematurely would let Doze freeze the
-            // process and silently break the timer.
-            //
-            // Cleanup is handled deterministically by every termination
-            // path: stopRun(), completeChain(), onDestroy(), and the
-            // Android kernel itself on process death — wake locks are
-            // tied to the process and released automatically when it dies.
-            wakeLock.acquire();
-        }
+        if (!wakeLock.isHeld()) wakeLock.acquire();
     }
 
     private void releaseWakeLock() {
@@ -1362,10 +1257,13 @@ public class ChainTimerService extends Service {
     @Override
     public void onDestroy() {
         running = false;
-        tickHandler.removeCallbacks(tickRunnable);
+        for (ChainRun run : new ArrayList<>(runs.values())) {
+            cancelTickFor(run);
+            releaseVoicePlayer(run);
+            releaseCueMediaPlayers(run);
+        }
+        runs.clear();
         releaseWakeLock();
-        releaseVoicePlayer();
-        releaseCueMediaPlayers();
         super.onDestroy();
     }
 
@@ -1375,7 +1273,7 @@ public class ChainTimerService extends Service {
         return v != null ? v : def;
     }
 
-    private static class Segment {
+    static class Segment {
         String name;
         int durationSec;
     }

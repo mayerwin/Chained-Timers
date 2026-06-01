@@ -1,9 +1,8 @@
-v1.4.0 — Run two chains at once
+v1.4.1 — Per-chain background notifications
 
-• Long-press a chain in the library to enter selection, tap a second, then Start — both begin at t=0.
-• A chip strip on the run view lets you swap focus with a tap. Long-press a chip to stop just that chain.
-• Tap an already-running chain to jump to its run view.
-• Editing is disabled while a chain is running.
-• Single-chain UX unchanged.
+• Each running chain now has its own lock-screen notification — both stay live, with pause/skip/stop targeting the right chain.
+• Stacked tray view with a "2 chains running" summary header.
+• Per-chain MediaPlayer pool so audio for one can't interfere with the other.
+• Fixes a TTS prerender collision when two chains share a segment name.
 
-Background lock-screen notifications track only the focused chain in v1.4.0; per-chain stacks ship in v1.4.1.
+Builds on v1.4.0: long-press to select, chip strip, editor lock while running.

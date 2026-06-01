@@ -161,8 +161,28 @@
   const STATUS_CHANNEL_ID  = 'chain-status';
   const NOTIF_BASE         = 9_000;   // transitions: 9000..9000+N-1
   const STATUS_ID          = 8_999;   // single sticky "now playing" entry
-  let scheduledIds  = [];
-  let statusActive  = false;
+
+  // v1.4.1 — per-run state tracking. Each runId gets its own bag of
+  // bridge state (scheduledIds for OS-fallback alarms, statusActive
+  // for the sticky LocalNotification, started for plugin start/update
+  // routing). Singletons stayed singleton in v1.3.x; multi-chain
+  // requires per-run since each run owns its own FGS notification slot
+  // in the new ChainTimerService.
+  //
+  // Legacy global names kept as views into the focused run's state for
+  // any debug surface (Settings panel uses anyStarted() etc.). Reads
+  // of these names that need the cumulative answer are switched to
+  // anyStarted() / anyScheduled() / anyStatusActive() below.
+  const runStates = new Map();   // runId -> { started, scheduledIds, statusActive }
+  function getRunState(runId) {
+    if (!runStates.has(runId)) {
+      runStates.set(runId, { started: false, scheduledIds: [], statusActive: false });
+    }
+    return runStates.get(runId);
+  }
+  function anyStarted()      { return [...runStates.values()].some(s => s.started); }
+  function anyStatusActive() { return [...runStates.values()].some(s => s.statusActive); }
+  function anyScheduled()    { return [...runStates.values()].some(s => s.scheduledIds.length > 0); }
 
   async function ensurePermission() {
     try {
@@ -273,27 +293,44 @@
     return r ? `${m}m ${r}s` : `${m}m`;
   }
 
-  async function cancelAll() {
-    // Order matters: cancel pre-scheduled AlarmManager alarms FIRST,
-    // THEN stop the foreground service. If we stopped the service first
-    // there'd be a brief window where the FGS notification is gone but
-    // a transition alarm could still fire and confuse the user with
-    // a "Next: X" pop-up while the chain is being cancelled.
-    const ids = [...scheduledIds];
-    if (statusActive) ids.push(STATUS_ID);
+  /**
+   * Cancel a specific run's bridge state, or all if no runId.
+   * Back-compat: v1.3.x called cancelAll() with no args to stop the
+   * service entirely. With multi-run, v1.4.1 routes per-runId.
+   */
+  async function cancelAll(detail) {
+    const runId = detail?.runId || null;
+    const targets = runId ? [getRunState(runId)] : [...runStates.values()];
+    const ids = [];
+    for (const s of targets) {
+      ids.push(...s.scheduledIds);
+      if (s.statusActive) ids.push(STATUS_ID);
+      s.scheduledIds = [];
+      s.statusActive = false;
+    }
     if (ids.length) {
       try {
-        await LocalNotifications.cancel({
-          notifications: ids.map(id => ({ id })),
-        });
-        log(`cancelled ${ids.length} notifications`);
+        await LocalNotifications.cancel({ notifications: ids.map(id => ({ id })) });
+        log(`cancelled ${ids.length} notifications for ${runId || 'all runs'}`);
       } catch (e) {
         log('cancel failed:', e);
       }
     }
-    scheduledIds = [];
-    statusActive = false;
-    await stopService();
+    if (runId) {
+      await stopRunInService(runId);
+      runStates.delete(runId);
+      // v1.4.1 — recompute the global fgService flag after the per-run
+      // teardown. Without this, if `runId` was the last live run,
+      // fgService stays stuck at true and the Settings panel reports
+      // "background service: running" forever.
+      if (!anyStarted() && window.ChainedNativeStatus.fgService) {
+        window.ChainedNativeStatus.fgService = false;
+        notifyStatusChanged();
+      }
+    } else {
+      await stopService();
+      runStates.clear();
+    }
   }
 
   // Post (or replace) the persistent "▶ now playing" notification on the
@@ -304,7 +341,10 @@
   // start, reschedule after skip, app resume).
   async function postStatus(detail) {
     if (!detail || !Array.isArray(detail.segments)) return;
-    const { name, segments, currentIndex = 0, isPaused } = detail;
+    const { name, segments, currentIndex = 0, isPaused, runId } = detail;
+    // OS-fallback path is single-status — multi-chain isn't supported
+    // here; only the focused run gets the sticky tray entry.
+    const s = runId ? getRunState(runId) : null;
     const cur = segments[currentIndex];
     if (!cur) return;
     const next = segments[currentIndex + 1];
@@ -335,7 +375,7 @@
           autoCancel: false,
         }],
       });
-      statusActive = true;
+      if (s) s.statusActive = true;
     } catch (e) {
       log('postStatus failed:', e);
     }
@@ -359,19 +399,21 @@
   // cancels pending transition alarms; here the chain ended naturally
   // so any pending alarms for THIS chain are already past their fire
   // time and will be cleaned up in-memory below.
+  /**
+   * v1.4.1 — per-run completion. Only this specific run is completed;
+   * other runs continue ticking. ChainTimer.complete(runId) drives the
+   * Java service's per-run completion path (posts "✓ Chain complete"
+   * for THIS run, removes its persistent notification, promotes another
+   * run into the FGS slot if one's still alive).
+   */
   async function completeStatus(detail) {
-    scheduledIds = [];
+    const runId = detail?.runId || null;
+    if (runId) {
+      const s = getRunState(runId);
+      s.scheduledIds = [];
+    }
     if (chainTimerAvailable) {
-      // Probe the service's actual state. JS-side serviceRunning is just
-      // a hint: when the service self-completed (background tick reached
-      // chain end while the WebView was suspended) it stopped silently
-      // and posted its "✓ Chain complete" notification — we never got
-      // told. Calling ChainTimer.complete() again here would re-post a
-      // fresh duplicate the moment the user taps the existing one to
-      // open the app (Android auto-cancels the tapped notification, then
-      // we'd put another one straight back). Skip it if the service is
-      // already gone — the in-tray entry is enough.
-      let stillRunning = serviceRunning;
+      let stillRunning = anyStarted();
       try {
         const r = await ChainTimer.isRunning();
         stillRunning = !!(r && r.running);
@@ -380,36 +422,38 @@
       }
       if (stillRunning) {
         const content = detail ? buildStatusContent(detail) : null;
-        // Foreground rAF reached chain end → JS already played
-        // Audio.finale() through Web Audio. Tell the service to post
-        // the "✓ Chain complete" notification SILENTLY (it's still a
-        // tray record, but no second sound on top of the in-app one).
-        // The service's autonomous chain-end path (background tick
-        // detecting end while the WebView was asleep) keeps alerting
-        // — that's the only path where this is the user's only cue.
         const completePayload = Object.assign({}, content || {}, { silent: true });
+        if (runId) completePayload.runId = runId;
         try {
           await ChainTimer.complete(completePayload);
         } catch (e) {
           log('ChainTimer.complete failed:', e);
-          // Best-effort fallback so the tray doesn't stay sticky.
           try { await ChainTimer.stop(); } catch {}
         }
       }
-      serviceRunning = false;
-      window.ChainedNativeStatus.fgService = false;
+      if (runId) {
+        runStates.delete(runId);
+      }
+      // Service-level FGS flag is "any run alive after this completion."
+      const stillAlive = anyStarted();
+      window.ChainedNativeStatus.fgService = stillAlive;
       notifyStatusChanged();
       return;
     }
-    if (statusActive) {
-      try {
-        await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
-      } catch (e) {
-        log('completeStatus cancel failed:', e);
+    // OS-fallback path (no ChainTimer plugin): clear per-run status.
+    if (runId) {
+      const s = getRunState(runId);
+      if (s.statusActive) {
+        try {
+          await LocalNotifications.cancel({ notifications: [{ id: STATUS_ID }] });
+        } catch (e) {
+          log('completeStatus cancel failed:', e);
+        }
+        s.statusActive = false;
       }
-      statusActive = false;
+      runStates.delete(runId);
     }
-    await stopService();
+    if (!anyStarted()) await stopService();
   }
 
   // ---------- Foreground service control plane ----------
@@ -418,7 +462,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset' } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', runId = null } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -491,19 +535,34 @@
       // finalThree / finale still go through SoundPool USAGE_ALARM
       // (system policy = both speakers).
       audioRoute: typeof audioRoute === 'string' ? audioRoute : 'headset',
+      // v1.4.1 — runId routes this payload to the per-run state in the
+      // Java service. Absent for legacy single-chain callers (fall back
+      // to the synthetic "__default__" id on the Java side).
+      runId,
     };
   }
 
-  let serviceRunning = false;
+  /**
+   * v1.4.1 — per-run start/update. The Java service registers each
+   * runId in its own ChainRun slot; first run becomes the FGS owner,
+   * subsequent runs post regular ongoing notifications. JS routes by
+   * runId: first call for a given runId issues ChainTimer.start,
+   * follow-ups for the same runId issue ChainTimer.update.
+   */
   async function startOrUpdateService(detail) {
     if (!chainTimerAvailable) return false;
     const content = buildStatusContent(detail);
+    const runId = content.runId;
+    // Without a runId we fall back to the singleton key — preserves
+    // v1.3.x behavior for callers that haven't been migrated yet.
+    const key = runId || '__default__';
+    const s = getRunState(key);
     try {
-      if (serviceRunning) {
+      if (s.started) {
         await ChainTimer.update(content);
       } else {
         await ChainTimer.start(content);
-        serviceRunning = true;
+        s.started = true;
       }
       if (!window.ChainedNativeStatus.fgService) {
         window.ChainedNativeStatus.fgService = true;
@@ -516,10 +575,21 @@
     }
   }
 
+  /** Stop just ONE run in the service (multi-chain user-stop). The
+   *  service keeps running for any other live runs; FGS owner promotion
+   *  happens server-side. */
+  async function stopRunInService(runId) {
+    if (!chainTimerAvailable) return;
+    try { await ChainTimer.stop({ runId }); } catch (e) { log('ChainTimer.stop(run) failed:', e); }
+    // Don't flip the global fgService flag here — other runs may still
+    // be active. completeStatus / cancelAll already recompute it.
+  }
+
+  /** Stop the service entirely (all runs). Back-compat with v1.3.x. */
   async function stopService() {
-    if (!chainTimerAvailable || !serviceRunning) return;
+    if (!chainTimerAvailable || !anyStarted()) return;
     try { await ChainTimer.stop(); } catch (e) { log('ChainTimer.stop failed:', e); }
-    serviceRunning = false;
+    for (const s of runStates.values()) s.started = false;
     window.ChainedNativeStatus.fgService = false;
     notifyStatusChanged();
   }
@@ -622,28 +692,25 @@
     }
     await ensureChannel();
 
-    // Snapshot "is this a fresh chain start?" BEFORE the cancel block
-    // wipes scheduledIds. Used below to gate the noisy reliability probes
-    // (notif-health + battery-opt toasts) so they only fire on the first
-    // schedule of a fresh run -- not on every skip / pause / resume /
-    // heartbeat. True on initial chain:start, true on cold-start
-    // restoreIfActive (no prior scheduledIds, no live service), false on
-    // every mid-chain reschedule.
-    const wasFreshStart = !scheduledIds.length && !statusActive && !serviceRunning;
+    // v1.4.1 — per-run state. "Fresh start" gates the noisy reliability
+    // probes (notif-health, battery-opt) so they only toast on the
+    // first schedule for a new run.
+    const runId = detail?.runId || null;
+    const s = runId ? getRunState(runId) : null;
+    const wasFreshStart = !s || (!s.scheduledIds.length && !s.statusActive && !s.started);
 
-    // Cancel pre-scheduled alarms but don't tear down the foreground
-    // service — startOrUpdateService below will replace its notification
-    // in place. Stopping the FGS would briefly drop the wake lock and
-    // could let Android freeze the process between cancel and re-schedule.
-    {
-      const ids = [...scheduledIds];
-      if (statusActive) ids.push(STATUS_ID);
+    // Cancel pre-scheduled alarms for THIS run but don't tear down the
+    // foreground service — startOrUpdateService below will refresh its
+    // notification in place for the run. Other runs are unaffected.
+    if (s) {
+      const ids = [...s.scheduledIds];
+      if (s.statusActive) ids.push(STATUS_ID);
       if (ids.length) {
         try { await LocalNotifications.cancel({ notifications: ids.map(id => ({ id })) }); }
         catch (e) { log('cancel pending failed:', e); }
       }
-      scheduledIds = [];
-      statusActive = false;
+      s.scheduledIds = [];
+      s.statusActive = false;
     }
 
     const { name, segments, currentIndex = 0, segmentStartedAtMs, isPaused } = detail;
@@ -770,7 +837,7 @@
 
     try {
       await LocalNotifications.schedule({ notifications: notifs });
-      scheduledIds = notifs.map(n => n.id);
+      if (s) s.scheduledIds = notifs.map(n => n.id);
       window.ChainedNativeStatus.lastSchedule = { count: notifs.length, error: null, when: Date.now() };
       log(`scheduled ${notifs.length} notifications, first @ ${notifs[0].schedule.at.toISOString()}`);
       // Re-check exact-alarm grant now that notifications are queued — if denied,
@@ -857,43 +924,25 @@
     if (type === 'fgs-update')     return serialize(() => refreshFgsOnly(detail));
   }
 
-  // v1.4 — multi-run filter. Events carry isFocused; the bridge only
-  // forwards focused-run events to the native FGS slot. Background runs
-  // tick in JS but don't drive the (singleton, for now) native service.
-  // chain:cancel and chain:complete from a focused run are kept; from a
-  // background run we just cancel that run's per-run state (no FGS work).
-  // v1.4.1 will replace this with true per-run FGS notifications.
-  const shouldDriveFgs = (detail) => !!detail && detail.isFocused !== false;
-
+  // v1.4.1 — every event drives the bridge regardless of focus. The
+  // ChainTimerService is now per-run: each runId has its own slot in
+  // the service, its own MediaPlayer pool, its own notification id.
+  // Background-run events update their own state in parallel; the FGS
+  // owner is whichever run was started first (the service promotes the
+  // next survivor when the owner ends).
   window.addEventListener('chain:start',      e => {
-    if (!shouldDriveFgs(e.detail)) return;
     preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail });
   });
   window.addEventListener('chain:reschedule', e => {
-    if (!shouldDriveFgs(e.detail)) return;
     preWarmDone ? dispatch('schedule', e.detail) : queuedEvents.push({ type: 'schedule', detail: e.detail });
   });
-  // Natural segment advance: alarms still valid, just refresh the FGS
-  // notification (title, chronometer, action button). No alarm churn.
   window.addEventListener('chain:fgsupdate',  e => {
-    if (!shouldDriveFgs(e.detail)) return;
     preWarmDone ? dispatch('fgs-update', e.detail) : queuedEvents.push({ type: 'fgs-update', detail: e.detail });
   });
-  // chain:cancel always goes through — when the focused run is stopped
-  // by the user, we tear down the FGS. A background run's cancel still
-  // arrives here too, but the bridge treats it as a no-op for the FGS
-  // (there's nothing to tear down for a background run in v1.4.0).
   window.addEventListener('chain:cancel',     e => {
-    // If still running runs in JS, only release the FGS when no focused
-    // run remains. Cheap check: the engine fires chain:reschedule for
-    // the newly-focused run right after (see Engine.focus + Engine._stopRun
-    // promote path), so we can just always cancel and let the next
-    // reschedule reinstate the FGS for whoever's focused now.
-    if (e && e.detail && e.detail.isFocused === false) return;
     preWarmDone ? dispatch('cancel', e?.detail) : queuedEvents.push({ type: 'cancel', detail: e?.detail });
   });
   window.addEventListener('chain:complete',   e => {
-    if (!shouldDriveFgs(e.detail)) return;
     preWarmDone ? dispatch('complete', e?.detail) : queuedEvents.push({ type: 'complete', detail: e?.detail });
   });
 
@@ -940,7 +989,12 @@
   // way through.
   function nudgeReschedule() {
     if (!preWarmDone) return;
-    if (!serviceRunning && (window.ChainedNativeStatus.lastSchedule?.count ?? 0) === 0) return;
+    // v1.4.1 — `serviceRunning` was removed when the bridge moved to a
+    // per-run state map. anyStarted() is the equivalent "is at least
+    // one run alive on the native side." Without this fix the strict-
+    // mode ReferenceError silently broke EVERY heartbeat tick and every
+    // visibility/focus/pageshow nudge.
+    if (!anyStarted() && (window.ChainedNativeStatus.lastSchedule?.count ?? 0) === 0) return;
     // The engine owns the truth — ask it to re-emit chain:reschedule
     // with current state. Falls back to a no-op if the engine isn't loaded.
     try {
