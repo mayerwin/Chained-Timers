@@ -337,13 +337,7 @@ public class ChainTimerService extends Service {
         }
         running = true;
 
-        // Voice for the current segment. Same dedup as v1.3.x — only
-        // fire when the segment index actually changed since the last
-        // voiced index.
-        if (!run.paused && run.curIndex != run.lastVoicedAtIndex) {
-            run.lastVoicedAtIndex = run.curIndex;
-            maybePlayVoiceForSegment(run, run.curIndex);
-        }
+        tryVoiceForCurrentSegment(run);
 
         // Schedule this run's next tick. Each run has its own runnable,
         // so two runs tick independently on the shared Handler.
@@ -395,6 +389,36 @@ public class ChainTimerService extends Service {
         if (run.tickRunnable != null) tickHandler.removeCallbacks(run.tickRunnable);
     }
 
+    /**
+     * v1.4.2 — single source of truth for "should I voice this segment
+     * now?" Returns true only when voice playback ACTUALLY happens
+     * (or would happen if the per-segment path were available),
+     * gated on:
+     *
+     *   - voicePaths is the same size as the plan (the JS-side TTS
+     *     prerender resolved and shipped a complete payload). Empty
+     *     voicePaths on the very first ACTION_START is the cold-start
+     *     race that left segment 0 silent — this gate makes the service
+     *     wait for the chain:fgsupdate that carries the populated paths.
+     *
+     *   - the segment index actually changed since the last voicing
+     *     (regular dedup so a per-second tick UPDATE doesn't re-fire
+     *     the same voice cue).
+     *
+     * Caller is responsible for setting lastVoicedAtIndex; we update
+     * here only when the play is committed so a non-ready state retries
+     * on the next intent. Returns true if voice was attempted/committed.
+     */
+    private boolean tryVoiceForCurrentSegment(ChainRun run) {
+        if (run.paused) return false;
+        if (run.plan.isEmpty()) return false;
+        if (run.voicePaths.size() != run.plan.size()) return false;
+        if (run.curIndex == run.lastVoicedAtIndex) return false;
+        run.lastVoicedAtIndex = run.curIndex;
+        maybePlayVoiceForSegment(run, run.curIndex);
+        return true;
+    }
+
     // --- per-run tick (formerly the singleton onTick) -------------
 
     private void onTickForRun(ChainRun run) {
@@ -431,9 +455,8 @@ public class ChainTimerService extends Service {
 
         if (boundaryAlert) playChime(run);
 
-        if (run.curIndex != idxBefore && run.curIndex != run.lastVoicedAtIndex) {
-            run.lastVoicedAtIndex = run.curIndex;
-            maybePlayVoiceForSegment(run, run.curIndex);
+        if (run.curIndex != idxBefore) {
+            tryVoiceForCurrentSegment(run);
         }
 
         Segment cur = run.plan.get(run.curIndex);
@@ -1010,10 +1033,7 @@ public class ChainTimerService extends Service {
                 run.paused = false;
                 run.prevAlertIndex = run.curIndex;
                 run.finalThreeStartedAtIndex = -1;
-                if (run.curIndex != run.lastVoicedAtIndex) {
-                    run.lastVoicedAtIndex = run.curIndex;
-                    maybePlayVoiceForSegment(run, run.curIndex);
-                }
+                tryVoiceForCurrentSegment(run);
                 cancelTickFor(run);
                 scheduleNextTick(run);
                 updated = true;
@@ -1034,10 +1054,7 @@ public class ChainTimerService extends Service {
             run.paused = false;
             run.prevAlertIndex = run.curIndex;
             run.finalThreeStartedAtIndex = -1;
-            if (run.curIndex != run.lastVoicedAtIndex) {
-                run.lastVoicedAtIndex = run.curIndex;
-                maybePlayVoiceForSegment(run, run.curIndex);
-            }
+            tryVoiceForCurrentSegment(run);
             cancelTickFor(run);
             scheduleNextTick(run);
             updated = true;

@@ -1,8 +1,5 @@
-v1.4.1 — Per-chain background notifications
+v1.4.2 — Cold-start voice + multi-select polish
 
-• Each running chain now has its own lock-screen notification — both stay live, with pause/skip/stop targeting the right chain.
-• Stacked tray view with a "2 chains running" summary header.
-• Per-chain MediaPlayer pool so audio for one can't interfere with the other.
-• Fixes a TTS prerender collision when two chains share a segment name.
-
-Builds on v1.4.0: long-press to select, chip strip, editor lock while running.
+• First segment now speaks its name on the very first run after a cold app start (TTS prerender race fix).
+• Multi-select: stronger amber border on selected chains + Top/Below arrows showing which one will be focused vs run in the background.
+• Fixes mojibake in editor segment numbers (№ glyph was rendering as garbled "â„–" after a file-encoding regression in v1.4.0).

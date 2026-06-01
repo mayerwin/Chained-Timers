@@ -33,13 +33,13 @@ const DEFAULT_SETTINGS = {
   finalTick: true,
   notifsAsked: false,
   // Audio routing when a headset is connected:
-  //   'headset' (default) â€” audio plays only on the headset; speaker stays silent
-  //   'both'              â€” audio plays on speaker + headset (alarm-clock style)
-  //   'speaker'           â€” audio plays only on the speaker
+  //   'headset' (default) — audio plays only on the headset; speaker stays silent
+  //   'both'              — audio plays on speaker + headset (alarm-clock style)
+  //   'speaker'           — audio plays only on the speaker
   // When no headset is connected all three behave the same (speaker).
   // Currently honored by the FGS voice MediaPlayer; chime/finalThree/finale
   // still route via USAGE_ALARM (system policy = both speakers) because
-  // SoundPool has no per-play setPreferredDevice. Native-platform only â€”
+  // SoundPool has no per-play setPreferredDevice. Native-platform only —
   // browsers route through the system default output, which is what the
   // OS chose when the user plugged in.
   audioRoute: 'headset',
@@ -53,11 +53,11 @@ const TEMPLATES = [
     loops: 1,
     segments: [
       { kind: 'segment', name: 'Front plank',    duration: 90, color: 'amber' },
-      { kind: 'segment', name: 'Side plank â€” L', duration: 60, color: 'rust'  },
-      { kind: 'segment', name: 'Side plank â€” R', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank — L', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank — R', duration: 60, color: 'rust'  },
       { kind: 'segment', name: 'Front plank',    duration: 90, color: 'amber' },
-      { kind: 'segment', name: 'Side plank â€” L', duration: 60, color: 'rust'  },
-      { kind: 'segment', name: 'Side plank â€” R', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank — L', duration: 60, color: 'rust'  },
+      { kind: 'segment', name: 'Side plank — R', duration: 60, color: 'rust'  },
       { kind: 'segment', name: 'Final hold',     duration: 90, color: 'sage'  },
     ],
   },
@@ -73,7 +73,7 @@ const TEMPLATES = [
   },
   {
     name: 'EMOM 10',
-    desc: 'Every Minute on the Minute â€” ten rounds of one minute. Do your reps, then rest.',
+    desc: 'Every Minute on the Minute — ten rounds of one minute. Do your reps, then rest.',
     color: 'indigo',
     loops: 10,
     segments: [
@@ -262,7 +262,7 @@ function expandChain(rootChain, opts = {}) {
           expanded.forEach(es => {
             out.push({
               ...es,
-              path: [`${rootChain.name}${loops > 1 ? ` Â· ${loop+1}/${loops}` : ''}`, ...es.path],
+              path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`, ...es.path],
             });
           });
         }
@@ -271,7 +271,7 @@ function expandChain(rootChain, opts = {}) {
           name: seg.name || 'Segment',
           duration: Math.max(1, seg.duration | 0),
           color: seg.color || rootChain.color || 'amber',
-          path: [`${rootChain.name}${loops > 1 ? ` Â· ${loop+1}/${loops}` : ''}`],
+          path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
         };
         // Propagate per-segment cue overrides through expansion so the
         // engine resolver can see them. Both the v1.3.5 `seg.cues` shape
@@ -305,7 +305,7 @@ function isAncestorOf(maybeAncestorId, descendantChain, visited = new Set()) {
 }
 
 // ============================================================
-// Audio cues (Web Audio API â€” generated tones, no asset files)
+// Audio cues (Web Audio API — generated tones, no asset files)
 // ============================================================
 
 const Audio = {
@@ -357,12 +357,12 @@ const Audio = {
     setTimeout(() => this.beep({ freq: 1320, duration: 0.28, volume: 0.22, type: 'sine' }), 120);
   },
 
-  // 3-2-1 countdown â€” three 660Hz square pulses scheduled in ONE call
+  // 3-2-1 countdown — three 660Hz square pulses scheduled in ONE call
   // via the Web Audio scheduler at the precise audio-clock moments
   // t+0.000, t+1.000, t+2.000. Before v1.3.4 these fired as three
   // separate Audio.tick() calls from the engine's rAF loop, with the
   // spacing depending on whichever rAF frame happened to cross each
-  // Math.ceil boundary â€” and the user reported the spacing felt
+  // Math.ceil boundary — and the user reported the spacing felt
   // irregular. Scheduling all three at once moves the timing guarantee
   // out of the JS event loop and into the audio thread, which plays
   // them gap-free at sample-rate precision (same approach as concatenated
@@ -417,7 +417,7 @@ const Voice = {
   // never fire at segment boundaries. We pre-render every segment
   // name to a WAV via the ChainTimer plugin BEFORE the chain starts,
   // hand the file paths to the FGS, and let the service play the
-  // right file via MediaPlayer at each boundary â€” runs whether the
+  // right file via MediaPlayer at each boundary — runs whether the
   // WebView is alive or asleep, and has zero TTS latency because the
   // audio is already on disk. On non-native (web/PWA) we still use
   // window.speechSynthesis as the synth pathway.
@@ -436,7 +436,7 @@ const Voice = {
     return typeof window !== 'undefined' && 'speechSynthesis' in window;
   },
 
-  // Fire-and-forget speak. On native this is a NO-OP â€” the FGS service
+  // Fire-and-forget speak. On native this is a NO-OP — the FGS service
   // owns voice playback (it has the pre-rendered files and fires them
   // at boundaries autonomously). Letting JS also speak via the plugin
   // would double-speak in foreground. On web (no FGS), this still
@@ -470,7 +470,7 @@ const Voice = {
 
   // Synthesize every segment name to a WAV file ON NATIVE, return the
   // parallel array of paths (one per segment). On non-native this is
-  // a no-op â€” Web Speech can't pre-render to an addressable URL and
+  // a no-op — Web Speech can't pre-render to an addressable URL and
   // window.speechSynthesis.speak() is already low-latency enough.
   async prerenderForChain(segments, chainId) {
     if (!window.ChainedNative?.isNative) return [];
@@ -503,7 +503,7 @@ const Voice = {
     if (this._warmed) return;
     this._warmed = true;
     // Native voice playback is now via pre-rendered files (FGS +
-    // MediaPlayer) â€” no warmup needed here. Warm-up only matters for
+    // MediaPlayer) — no warmup needed here. Warm-up only matters for
     // the web/PWA Web Speech path, which is high-latency on first call
     // because Chromium loads the voice list asynchronously.
     if (window.ChainedNative?.isNative) return;
@@ -523,7 +523,7 @@ const Voice = {
 
   // Per-chain re-warm. No-op on native (FGS owns playback; pre-render
   // happens via prerenderForChain). On web, kick the Web Speech engine
-  // back to life â€” it can cool off during long idle stretches.
+  // back to life — it can cool off during long idle stretches.
   warmupForChain(/* segments */) {
     if (window.ChainedNative?.isNative) return;
     if (!('speechSynthesis' in window)) return;
@@ -602,13 +602,13 @@ const Notif = {
     // In the native shell, the OS-scheduled LocalNotifications handle every
     // segment transition. Firing a duplicate Web Notification here would
     // either show twice or hang on navigator.serviceWorker.ready (no SW
-    // is registered in native builds â€” see init()).
+    // is registered in native builds — see init()).
     if (window.ChainedNative?.isNative) return;
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
     try {
       // Prefer SW registration so notifications persist if tab becomes inactive,
-      // but never block on it â€” Promise.race with a short timeout.
+      // but never block on it — Promise.race with a short timeout.
       const reg = await Promise.race([
         navigator.serviceWorker?.ready ?? Promise.resolve(null),
         new Promise(resolve => setTimeout(() => resolve(null), 500)),
@@ -654,12 +654,12 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 }[c]));
 
 // ============================================================
-// Cue overrides â€” 3-level inheritance (app default â†’ chain â†’ segment)
+// Cue overrides — 3-level inheritance (app default â†’ chain â†’ segment)
 // ============================================================
 //
 // Five user-facing cues can be overridden: sound, finalTick, voice,
 // vibrate, prestart. Segment level supports the first four (prestart
-// is meaningless on a single segment â€” it only fires once at chain
+// is meaningless on a single segment — it only fires once at chain
 // start). Each level stores its overrides under a `cues` object whose
 // keys are tri-state:
 //
@@ -690,7 +690,7 @@ function readChainCue(chain, key) {
 }
 
 // Public resolver. Walks segment â†’ chain â†’ app default. Returns a
-// concrete boolean â€” never undefined â€” so callsites can `if (cue)`
+// concrete boolean — never undefined — so callsites can `if (cue)`
 // without extra guards.
 function effectiveCue(seg, chain, key) {
   const s = readSegCue(seg, key);
@@ -716,7 +716,7 @@ function inheritedCue(level, chain, key) {
   return !!Store.getSettings()[key];
 }
 
-// Setter â€” writes only when the user actually overrides, deletes the key
+// Setter — writes only when the user actually overrides, deletes the key
 // when they reset to "inherit." Keeps stored JSON minimal.
 function setCueOverride(holder, key, value) {
   if (value == null) {
@@ -731,15 +731,15 @@ function setCueOverride(holder, key, value) {
 }
 
 // ============================================================
-// Timer Engine â€” multi-run capable
+// Timer Engine — multi-run capable
 // ============================================================
 //
-// v1.4 â€” the engine supports up to 2 concurrent chain runs. Each
+// v1.4 — the engine supports up to 2 concurrent chain runs. Each
 // active chain has its own EngineRun instance with independent state
 // (currentIndex, segmentStartedAtWall, paused state, rAF loop,
 // persistence key). The Engine coordinator keeps the focused run's
 // state surfaced under the old singleton API (Engine.chain, .segments,
-// .isRunning, .pause(), .skipNext(), â€¦) so all existing single-chain
+// .isRunning, .pause(), .skipNext(), …) so all existing single-chain
 // callsites continue to work without modification. When 2 chains are
 // running, UI calls Engine.focus(chainId) to swap which run the
 // coordinator's fields point at; the chip strip in the run view drives
@@ -786,7 +786,7 @@ class EngineRun {
   // Fire UI callbacks ONLY when this run is the focused one (the only
   // one drawing the big timer). Background runs still tick autonomously
   // but their state surfaces via the chip strip + native notification,
-  // not the big clock â€” so onTick / onSegmentChange must be silent for
+  // not the big clock — so onTick / onSegmentChange must be silent for
   // them. onComplete fires regardless (a finished background run wants
   // to be cleaned up + announced; the run view promotes another run if
   // possible or returns to the library).
@@ -826,7 +826,7 @@ class EngineRun {
 
     // Chain-start sound/vibration are CHAIN-level events (no segment is
     // "the one being celebrated"), so they resolve through chain.cues
-    // and app defaults â€” segment overrides don't apply. Audio.unlock() is
+    // and app defaults — segment overrides don't apply. Audio.unlock() is
     // unconditional because the user gesture window closes after this
     // function returns; locking it behind a cue gate would silently break
     // sound on iOS for users who later flip the setting on.
@@ -850,7 +850,7 @@ class EngineRun {
       Voice.speak(this.segments[0].name);
     }
 
-    // Pre-render every segment's voice â€” see the v1.3.6 comment block
+    // Pre-render every segment's voice — see the v1.3.6 comment block
     // in Voice.prerenderForChain for the rationale.
     if (window.ChainedNative?.isNative && willAnyVoiceFire) {
       Voice.prerenderForChain(this.segments, this.id).then(() => {
@@ -944,7 +944,7 @@ class EngineRun {
 
       const elapsedMs = this._elapsedMs();
 
-      // Multi-boundary catch-up â€” same logic as the singleton path.
+      // Multi-boundary catch-up — same logic as the singleton path.
       if (!this.isPaused && elapsedMs >= seg.duration * 1000) {
         const nextSeg = this.segments[this.currentIndex + 1];
         const overshootMs = elapsedMs - seg.duration * 1000;
@@ -958,12 +958,12 @@ class EngineRun {
       const remainingSec = Math.max(0, seg.duration - elapsedMs / 1000);
       const remainingInt = Math.ceil(remainingSec);
 
-      // Final-3-second burst â€” only when focused, AND when not paused.
+      // Final-3-second burst — only when focused, AND when not paused.
       // Background runs intentionally don't fire the in-app burst (the
       // FGS plays final3.wav from the service even when the WebView is
       // backgrounded, so the user still hears the cue; firing here for
       // a background run would either be redundant in foreground or
-      // silent in background â€” net zero benefit, net possible doubling).
+      // silent in background — net zero benefit, net possible doubling).
       if (!this.isPaused && this._isFocused() && effectiveCue(seg, this.chain, 'finalTick')) {
         if (remainingInt <= 3 && remainingInt >= 1 && this.finalThreeFiredFor !== this.currentIndex) {
           this.finalThreeFiredFor = this.currentIndex;
@@ -972,7 +972,7 @@ class EngineRun {
         }
       }
 
-      // Warning state for last 5 seconds â€” only on the focused run (the
+      // Warning state for last 5 seconds — only on the focused run (the
       // background run isn't drawing the ring, no point colouring it).
       const shouldWarn = remainingInt <= 5 && !this.isPaused && remainingInt > 0;
       if (this._isFocused() && shouldWarn !== this.warningOn) {
@@ -1024,7 +1024,7 @@ class EngineRun {
 
     // Cue ownership rules are unchanged from the singleton path.
     // In-app chime / vibe / voice only fire if this run is the focused
-    // one â€” same reason as final-3: background runs lean on the FGS for
+    // one — same reason as final-3: background runs lean on the FGS for
     // audible cues to avoid double-firing when foreground.
     const isUserSkip = reason === 'skip';
     if (reason !== 'catchup' && this._isFocused()) {
@@ -1033,7 +1033,7 @@ class EngineRun {
       if (!isUserSkip && effectiveCue(seg,     this.chain, 'vibrate')) Vibe.segmentEnd();
       if (nextSeg && effectiveCue(nextSeg, this.chain, 'voice')) Voice.speak(nextSeg.name);
       if (!isUserSkip && nextSeg) {
-        Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} Â· ${this.currentIndex + 1} of ${this.segments.length}`);
+        Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
       }
     }
 
@@ -1175,7 +1175,7 @@ class EngineRun {
     if (reason !== 'catchup' && this._isFocused()) {
       if (effectiveCue(lastSeg, this.chain, 'sound'))   Audio.finale();
       if (effectiveCue(lastSeg, this.chain, 'vibrate')) Vibe.finale();
-      Notif.show(`${this.chain.name} complete`, `${fmtLong(total)} Â· ${this.segments.length} segments`);
+      Notif.show(`${this.chain.name} complete`, `${fmtLong(total)} · ${this.segments.length} segments`);
     }
     this._cbComplete(total, reason);
   }
@@ -1306,7 +1306,7 @@ const Engine = {
       return true;
     }
     if (this.activeRunningCount() >= MAX_CONCURRENT_RUNS) {
-      Toast.show(`${MAX_CONCURRENT_RUNS} chains already running â€” stop one to start another.`, 'warn');
+      Toast.show(`${MAX_CONCURRENT_RUNS} chains already running — stop one to start another.`, 'warn');
       return false;
     }
     const run = new EngineRun(chain);
@@ -1326,7 +1326,7 @@ const Engine = {
     return true;
   },
 
-  // Synced bulk start â€” every chain begins at the same t=0. The first
+  // Synced bulk start — every chain begins at the same t=0. The first
   // chain in the array becomes focused. Used by long-press multi-select.
   // Caller passes resolved chain objects.
   startMany(chains) {
@@ -1524,7 +1524,7 @@ const Engine = {
         // this is deterministic (always the last one in iteration).
         this._focusedId = chain.id;
         restored.push(run);
-        // Drop the legacy v1 key once read â€” next _persist writes v2.
+        // Drop the legacy v1 key once read — next _persist writes v2.
         if (key === RUN_PERSIST_LEGACY) localStorage.removeItem(key);
       } catch {
         try { localStorage.removeItem(key); } catch {}
@@ -1686,7 +1686,7 @@ const View = {
       const prev = this.history[this.history.length - 1];
       this.current = prev;
       this.show(prev);
-      // popping show pushes again â€” fix the duplication:
+      // popping show pushes again — fix the duplication:
       this.history.pop();
     } else {
       this.show('library');
@@ -1752,7 +1752,7 @@ const UI = {
         <div class="chain-card-segments" id="seg-preview-${safeId}"></div>
         <div class="chain-card-meta">
           <span>${expanded.length} ${expanded.length === 1 ? 'segment' : 'segments'}</span>
-          ${loops > 1 ? `<span class="dot"></span><span>Ã—${loops} loop${loops > 1 ? 's' : ''}</span>` : ''}
+          ${loops > 1 ? `<span class="dot"></span><span>×${loops} loop${loops > 1 ? 's' : ''}</span>` : ''}
           ${chain.segments.some(s => s && s.kind === 'subchain') ? `<span class="dot"></span><span>nested</span>` : ''}
         </div>
       `;
@@ -2071,7 +2071,7 @@ const UI = {
     num.textContent = n;
     // Prestart's own audible/vibration ticks resolve at chain level
     // (segment hasn't started yet), so they ride on chain.cues.sound /
-    // chain.cues.vibrate. Captured once at countdown start â€” the user
+    // chain.cues.vibrate. Captured once at countdown start — the user
     // can't realistically toggle settings mid-countdown.
     const sound   = effectiveCue(null, chain, 'sound');
     const vibrate = effectiveCue(null, chain, 'vibrate');
@@ -2111,7 +2111,7 @@ const UI = {
       tpl.segments.forEach(s => {
         const pill = document.createElement('span');
         pill.className = 'template-pill';
-        pill.textContent = `${s.name} Â· ${fmt(s.duration)}`;
+        pill.textContent = `${s.name} · ${fmt(s.duration)}`;
         pill.style.color = colorHex(s.color);
         pill.style.borderColor = colorHex(s.color) + '44';
         segWrap.appendChild(pill);
@@ -2120,7 +2120,7 @@ const UI = {
         const pill = document.createElement('span');
         pill.className = 'template-pill';
         pill.style.borderStyle = 'dashed';
-        pill.textContent = `Ã— ${tpl.loops} loops`;
+        pill.textContent = `× ${tpl.loops} loops`;
         segWrap.appendChild(pill);
       }
       li.addEventListener('click', () => {
@@ -2154,7 +2154,7 @@ const UI = {
     nameInput.value = draft.name;
     nameInput.disabled = locked;
 
-    // Chain-level cue bell â€” dot indicator lights up when any chain-level
+    // Chain-level cue bell — dot indicator lights up when any chain-level
     // cue is explicitly overridden. Click opens the chain-scoped cue sheet.
     UI._syncChainCueBell();
 
@@ -2212,10 +2212,10 @@ const UI = {
       const subName = sub ? sub.name : '(missing)';
       const subDur  = sub ? chainTotalSeconds(sub) : 0;
       body.innerHTML = `
-        <div class="segment-num">â„– ${idx + 1} Â· embedded chain</div>
+        <div class="segment-num">№ ${idx + 1} · embedded chain</div>
         <div class="segment-sub-name">${escape(subName)}</div>
         <div class="segment-sub-meta">
-          ${sub ? `${expandChain(sub).length} segments Â· ${fmt(subDur)}` : 'Not found'}
+          ${sub ? `${expandChain(sub).length} segments · ${fmt(subDur)}` : 'Not found'}
         </div>
       `;
       li.appendChild(body);
@@ -2225,8 +2225,8 @@ const UI = {
       loopsWrap.className = 'segment-sub-loops';
       const segLoops = Math.max(1, Number(seg.loops) || 1);
       loopsWrap.innerHTML = `
-        <button data-loop="-1" aria-label="Fewer loops">âˆ’</button>
-        <span>Ã—${segLoops}</span>
+        <button data-loop="-1" aria-label="Fewer loops">−</button>
+        <span>×${segLoops}</span>
         <button data-loop="+1" aria-label="More loops">+</button>
       `;
       loopsWrap.querySelectorAll('button').forEach(b => {
@@ -2239,7 +2239,7 @@ const UI = {
       li.appendChild(loopsWrap);
     } else {
       body.innerHTML = `
-        <span class="segment-num">â„– ${idx + 1}</span>
+        <span class="segment-num">№ ${idx + 1}</span>
         <input type="text" class="segment-name-input" value="${escape(seg.name || '')}" placeholder="Segment name" maxlength="48" />
         <div class="segment-meta">
           <button class="seg-color-btn" aria-label="Cycle color" style="background: ${colorHex(seg.color)}"></button>
@@ -2265,7 +2265,7 @@ const UI = {
       li.appendChild(dur);
     }
 
-    // Per-segment cue overrides â€” bell icon left of trash. Tap opens the
+    // Per-segment cue overrides — bell icon left of trash. Tap opens the
     // cue sheet (4 cues: sound, finalTick, voice, vibrate; prestart is
     // chain-only). The bell's accent dot lights up when at least one
     // cue at this scope is explicitly overridden, giving the user a
@@ -2431,7 +2431,7 @@ const UI = {
       li.innerHTML = `
         <div>
           <div class="picker-item-name" style="color: ${colorHex(c.color)}">${escape(c.name)}</div>
-          <div class="picker-item-meta">${expandChain(c).length} segments Â· ${fmt(chainTotalSeconds(c))}</div>
+          <div class="picker-item-meta">${expandChain(c).length} segments · ${fmt(chainTotalSeconds(c))}</div>
         </div>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 6l6 6-6 6"/></svg>
       `;
@@ -2457,7 +2457,7 @@ const UI = {
     document.getElementById('setting-wake').checked      = !!s.wake;
     document.getElementById('setting-prestart').checked  = !!s.prestart;
     document.getElementById('setting-finaltick').checked = !!s.finalTick;
-    // Final-3 tick depends on the sound channel being on at all â€” hide
+    // Final-3 tick depends on the sound channel being on at all — hide
     // the sub-row when sound is off so the user isn't toggling a setting
     // that has no audible effect.
     UI._syncFinalTickRowVisibility();
@@ -2471,7 +2471,7 @@ const UI = {
     // available: on Capacitor we route everything through @capacitor/local-
     // notifications + the ChainTimerPlugin FGS, and on a browser without
     // Notification support (Android WebView, some embedded browsers) we'd
-    // otherwise show "Notifications not supported in this browser" â€” which
+    // otherwise show "Notifications not supported in this browser" — which
     // reads to the user as a broken state when it actually doesn't apply.
     // Hide the row entirely in both cases.
     const hideNotifRow = (window.ChainedNative?.isNative) || perm === 'unsupported';
@@ -2482,7 +2482,7 @@ const UI = {
       else                         { notifBtn.disabled = false;         notifBtn.textContent = 'Enable'; }
     }
 
-    // Native bridge panel â€” only visible when running inside Capacitor
+    // Native bridge panel — only visible when running inside Capacitor
     const N = window.ChainedNative;
     const panel = document.getElementById('native-panel');
     if (N && N.isNative) {
@@ -2493,7 +2493,7 @@ const UI = {
       const body = document.getElementById('native-body');
       const title = document.getElementById('native-title');
 
-      title.textContent = `Native bridge â€” ${st.platform}`;
+      title.textContent = `Native bridge — ${st.platform}`;
 
       if (st.permission === 'granted' && st.channelReady) {
         dot.className = 'native-dot is-on';
@@ -2510,12 +2510,12 @@ const UI = {
       }
 
       const ls = st.lastSchedule;
-      let bodyText = `notifs: ${st.permission} Â· channel: ${st.channelReady ? 'ready' : 'â€”'} Â· exact-alarm: ${st.exactAlarm}`;
+      let bodyText = `notifs: ${st.permission} · channel: ${st.channelReady ? 'ready' : '—'} · exact-alarm: ${st.exactAlarm}`;
       if (st.platform === 'android') {
         const fgState = st.fgService ? 'running' : (st.fgServiceAvailable ? 'idle' : 'unavailable');
-        bodyText += ` Â· background service: ${fgState}`;
+        bodyText += ` · background service: ${fgState}`;
         if (st.batteryOpt && st.batteryOpt !== 'unsupported' && st.batteryOpt !== 'unknown') {
-          bodyText += ` Â· battery: ${st.batteryOpt}`;
+          bodyText += ` · battery: ${st.batteryOpt}`;
         }
         if (st.notifHealth) {
           const h = st.notifHealth;
@@ -2543,7 +2543,7 @@ const UI = {
       const needsBatteryFix = (st.batteryOpt === 'optimized');
       batteryBtn.hidden = !needsBatteryFix;
 
-      // Notifications disabled is a CRITICAL failure mode â€” every alert
+      // Notifications disabled is a CRITICAL failure mode — every alert
       // is silent. Make the badge red and unmissable.
       const notifBlocked = st.notifHealth && !st.notifHealth.ok;
 
@@ -2651,7 +2651,7 @@ const UI = {
       row.appendChild(pill);
 
       // Hide finalTick row when the EFFECTIVE sound at this scope is off
-      // â€” same logic as the App Settings sub-row. The user can't make
+      // — same logic as the App Settings sub-row. The user can't make
       // finalTick fire when the sound channel it depends on is silent.
       if (meta.requires) {
         const parentEffective = effectiveCue(
@@ -2686,7 +2686,7 @@ const UI = {
   // Reflect the persisted audio-route value onto the 3-segment pill.
   // Stored value is one of 'headset' | 'both' | 'speaker'; any unknown
   // value collapses to 'headset' (the default). The whole row is hidden
-  // on non-native platforms â€” browsers route through whatever the OS
+  // on non-native platforms — browsers route through whatever the OS
   // picked as the default output and we don't have the permission scope
   // (setSinkId needs persistent device-selection) to override that.
   // Showing the pill on web would be lying about what the setting does.
@@ -2782,7 +2782,7 @@ const UI = {
   updateRunSegmentInfo() {
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
-    document.getElementById('run-chain-name').textContent = Engine.chain?.name || 'â€”';
+    document.getElementById('run-chain-name').textContent = Engine.chain?.name || '—';
     document.getElementById('run-segment-name').textContent = seg.name;
     document.getElementById('run-segment-tag').textContent = `Segment ${Engine.currentIndex + 1}`;
     document.getElementById('run-segment-of').textContent  = `of ${Engine.segments.length}`;
@@ -2830,14 +2830,14 @@ const UI = {
     const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
     // Ceiling the displayed second so the clock flips to "00:03" at the
     // SAME instant Audio.finalThree's first pulse fires (the engine arms
-    // the 3-2-1 burst on Math.ceil(remainingSec) == 3 â€” same calculation).
-    // fmt() rounds â€” it would flip the digit half a second EARLIER than
+    // the 3-2-1 burst on Math.ceil(remainingSec) == 3 — same calculation).
+    // fmt() rounds — it would flip the digit half a second EARLIER than
     // the tick, making the sound feel like it's chasing the visual.
     // The notification path uses ceiling for both the displayed remaining
     // and the tick trigger, so we mirror that here for parity.
     document.getElementById('run-clock').textContent = fmt(Math.ceil(r));
 
-    // ring (use inline style â€” CSS class values otherwise override presentation attrs)
+    // ring (use inline style — CSS class values otherwise override presentation attrs)
     const ring = document.getElementById('run-ring-fill');
     const total = seg.duration;
     const progress = Math.max(0, Math.min(1, 1 - r / total));
@@ -2961,7 +2961,7 @@ function init() {
     });
   });
 
-  // Chain-level cue overrides â€” bell in the editor header. The draft is
+  // Chain-level cue overrides — bell in the editor header. The draft is
   // mutated in place; the bell's dot indicator refreshes on each pill
   // tap (via the onChange callback) so the user sees their override
   // land without re-rendering the whole editor.
@@ -2976,7 +2976,7 @@ function init() {
       if (key === 'wake' && e.target.checked && Engine.isRunning && !Engine.isPaused) Wake.acquire();
       if (key === 'wake' && !e.target.checked) Wake.release();
       // Sound is the parent of "Final 3 seconds tick" in the Defaults
-      // section â€” hide/show the nested row as the user flips the parent.
+      // section — hide/show the nested row as the user flips the parent.
       if (key === 'sound') UI._syncFinalTickRowVisibility();
     });
   };
@@ -2997,7 +2997,7 @@ function init() {
       // Live-apply to a running chain: re-emit fgsupdate so the FGS
       // re-binds its voice MediaPlayer to the new preferred device on
       // the NEXT boundary. We don't interrupt whatever's currently
-      // playing â€” that would be jarring for users tapping the pill
+      // playing — that would be jarring for users tapping the pill
       // mid-segment.
       if (Engine.isRunning) Engine._emitChainEvent('chain:fgsupdate');
     });
@@ -3025,12 +3025,12 @@ function init() {
     UI.openSettings();
   });
   document.getElementById('native-exact').addEventListener('click', async () => {
-    Toast.show('Opening system settings â€” toggle "Allow exact alarms" ON, then come back.', 'good');
+    Toast.show('Opening system settings — toggle "Allow exact alarms" ON, then come back.', 'good');
     const ok = await window.ChainedNative?.requestExactAlarm();
     setTimeout(() => UI.openSettings(), 500);
   });
   document.getElementById('native-battery').addEventListener('click', async () => {
-    Toast.show('Opening battery settings â€” choose Unrestricted (or Allow), then come back.', 'good');
+    Toast.show('Opening battery settings — choose Unrestricted (or Allow), then come back.', 'good');
     await window.ChainedNative?.requestBatteryOpt?.();
     // Re-render once the user comes back (visibilitychange refreshes state).
     setTimeout(() => UI.openSettings(), 500);
@@ -3190,7 +3190,7 @@ function init() {
         : 'Stop this chain?';
       if (!confirm(prompt)) return;
     }
-    UI.cancelPrestart();           // â† prevent the queued startChain from firing
+    UI.cancelPrestart();           // ← prevent the queued startChain from firing
     Engine.stop();
     UI.hideCompletion();
     if (Engine.activeRunningCount() === 0) View.show('library');
@@ -3288,8 +3288,8 @@ function init() {
   // run view. Without this they're stuck looking at the segment+remaining
   // values frozen from the moment they backgrounded the app, and every
   // in-app control silently does nothing because isRunning flipped to
-  // false â€” exactly the "pause button doesn't work, timer looks frozen"
-  // symptom. The OS-fired "âœ“ Chain complete" notification already cued
+  // false — exactly the "pause button doesn't work, timer looks frozen"
+  // symptom. The OS-fired "✓ Chain complete" notification already cued
   // the user; no point replaying the in-app overlay now.
   function bailOutOfStaleRunView() {
     // v1.4 — if ANY run is still active (even a background one) the
@@ -3318,7 +3318,7 @@ function init() {
   });
   window.addEventListener('pageshow', refreshFromWallClock);
   window.addEventListener('focus',    refreshFromWallClock);
-  // Capacitor App resume â€” the native bridge dispatches this when the
+  // Capacitor App resume — the native bridge dispatches this when the
   // activity returns to foreground (more reliable than visibilitychange
   // on some Android skins).
   window.addEventListener('chained:appresume', refreshFromWallClock);
@@ -3326,7 +3326,7 @@ function init() {
   // Native-bridge heartbeat: every few minutes (and on every visibility
   // change), the bridge asks the engine to re-emit chain:reschedule so
   // the OS-side AlarmManager queue stays fresh. Defends against the long
-  // tail of "alarms silently lost" scenarios â€” force-stop, OEM kill,
+  // tail of "alarms silently lost" scenarios — force-stop, OEM kill,
   // OS Doze coalescing the inexact-alarm fallback.
   window.addEventListener('chained:nudgereschedule', () => {
     if (Engine.activeRunningCount() === 0) { bailOutOfStaleRunView(); return; }
@@ -3382,7 +3382,7 @@ function init() {
     if (!document.getElementById('settings-sheet')?.hidden) UI.openSettings();
   });
 
-  // Global Escape â€” close the topmost open sheet (settings, picker, duration,
+  // Global Escape — close the topmost open sheet (settings, picker, duration,
   // actions, or the iOS notice). Keyboard users get an obvious dismissal path.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
@@ -3405,7 +3405,7 @@ function init() {
   View.show('library');
 
   // Restore any in-flight chain from a prior session (WebView kill, OOM,
-  // app force-stop, OS rebootâ€¦). The engine is wall-clock based, so it
+  // app force-stop, OS reboot…). The engine is wall-clock based, so it
   // walks past any segments that elapsed while the app was gone. Done
   // after View.show('library') so a successful restore lands us straight
   // in the run view with the correct segment.
@@ -3422,12 +3422,12 @@ function init() {
 
 document.addEventListener('DOMContentLoaded', init);
 
-// Testability hatch â€” expose the closure-scoped singletons under a single
+// Testability hatch — expose the closure-scoped singletons under a single
 // namespace so Playwright smoke tests (tools/smoke-audio-voice.mjs) can
 // spy on Audio / Voice calls and drive Engine state without having to
 // chase every behavior through the DOM. Intentionally NOT frozen so the
 // tests can monkey-patch methods. Production code should never read from
-// here â€” it has direct closure references. Picking a namespaced object
+// here — it has direct closure references. Picking a namespaced object
 // (rather than separate window globals) avoids colliding with the built-in
 // browser `window.Audio` (HTMLAudioElement) constructor.
 if (typeof window !== 'undefined') {

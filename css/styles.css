@@ -238,23 +238,46 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   user-select: none;
   -webkit-user-select: none;
 }
+/* Selection-mode badge that replaces the play button. Hidden until the
+   library is in select mode. Shows a position-based glyph:
+     - unselected: dim plus (tap to add)
+     - 1st selected (will be focused / on top of the run view): up arrow
+     - 2nd selected (will be the background chip / on bottom): down arrow
+   The icon is set by UI._setTickContent based on selectedIds order. */
 .chain-card-select-tick {
   display: none;
   width: 64px;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   background: transparent;
-  color: var(--ink-dim);
+  color: var(--ink-faint);
   border-left: 1px solid var(--rule);
+  transition: color 140ms, background 140ms, border-color 140ms;
 }
 .view-library[data-select-mode="true"] .chain-card-select-tick { display: flex; }
-.chain-card-select-tick svg { width: 26px; height: 26px; }
-.chain-card.is-selected {
-  border-color: var(--accent);
-  background: rgba(245,176,66,0.05);
+.chain-card-select-tick svg { width: 28px; height: 28px; }
+.chain-card-select-tick-lbl {
+  font-family: var(--f-mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1;
 }
-.chain-card.is-selected .chain-card-select-tick { color: var(--accent); }
-.chain-card.is-selected .chain-card-stripe { box-shadow: 0 0 0 1px var(--accent); }
+
+.chain-card.is-selected {
+  /* 2px-effective amber outline via combined border + outer shadow.
+     box-shadow doesn't reflow, so there's no layout shift on toggle. */
+  border-color: var(--accent);
+  background: rgba(245,176,66,0.12);
+  box-shadow: 0 0 0 1px var(--accent), 0 18px 36px -24px rgba(0,0,0,0.55);
+}
+.chain-card.is-selected .chain-card-select-tick {
+  color: var(--accent);
+  background: rgba(245,176,66,0.10);
+  border-left-color: var(--accent);
+}
 
 /* Visual cue that a chain is currently running — small amber dot on the
    card. Persists across selection mode so the user can see at a glance
