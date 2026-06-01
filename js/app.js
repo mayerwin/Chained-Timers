@@ -654,7 +654,7 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 }[c]));
 
 // ============================================================
-// Cue overrides — 3-level inheritance (app default â†’ chain â†’ segment)
+// Cue overrides — 3-level inheritance (app default → chain → segment)
 // ============================================================
 //
 // Five user-facing cues can be overridden: sound, finalTick, voice,
@@ -663,11 +663,11 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 // start). Each level stores its overrides under a `cues` object whose
 // keys are tri-state:
 //
-//   undefined  â†’ inherit from the next level up (or the app default)
-//   true       â†’ explicit ON, regardless of inherited value
-//   false      â†’ explicit OFF, regardless of inherited value
+//   undefined  → inherit from the next level up (or the app default)
+//   true       → explicit ON, regardless of inherited value
+//   false      → explicit OFF, regardless of inherited value
 //
-// Resolution walks segment.cues â†’ chain.cues â†’ Store.getSettings().
+// Resolution walks segment.cues → chain.cues → Store.getSettings().
 // Stored explicitly only when the user has flipped away from the
 // inherited value, so unmodified chains/segments serialize cleanly
 // without dragging along default-redundant cue objects. The legacy
@@ -689,7 +689,7 @@ function readChainCue(chain, key) {
   return chain?.cues?.[key];
 }
 
-// Public resolver. Walks segment â†’ chain â†’ app default. Returns a
+// Public resolver. Walks segment → chain → app default. Returns a
 // concrete boolean — never undefined — so callsites can `if (cue)`
 // without extra guards.
 function effectiveCue(seg, chain, key) {
@@ -1226,7 +1226,7 @@ class EngineRun {
 // Engine singleton API (chain, segments, isRunning, pause(), ...) for
 // the focused run so existing UI code works untouched.
 const Engine = {
-  _runs: new Map(),       // chainId â†’ EngineRun
+  _runs: new Map(),       // chainId → EngineRun
   _focusedId: null,
 
   // UI callbacks (set by app init). Fire only for the focused run.
@@ -1618,7 +1618,7 @@ const Editor = {
       name: '',
       duration: 60,
       color: this.draft.color,
-      // voice: undefined â†’ treated as ON. Stored explicitly only when the
+      // voice: undefined → treated as ON. Stored explicitly only when the
       // user has toggled the per-segment speaker icon to OFF, so legacy
       // chains saved before this field existed keep their original
       // behaviour (announce names) automatically.
@@ -2519,9 +2519,9 @@ const UI = {
         }
         if (st.notifHealth) {
           const h = st.notifHealth;
-          if (!h.appEnabled)                     bodyText += '\nâš  notifications: BLOCKED app-wide';
-          else if (!h.transitionsChannelEnabled) bodyText += '\nâš  "Chain transitions" channel disabled';
-          else if (!h.completeChannelEnabled)    bodyText += '\nâš  "Chain complete" channel disabled';
+          if (!h.appEnabled)                     bodyText += '\n⚠ notifications: BLOCKED app-wide';
+          else if (!h.transitionsChannelEnabled) bodyText += '\n⚠ "Chain transitions" channel disabled';
+          else if (!h.completeChannelEnabled)    bodyText += '\n⚠ "Chain complete" channel disabled';
         }
       }
       if (ls) {
@@ -3373,7 +3373,7 @@ function init() {
     }
   });
 
-  // Native bridge â†” web bridge: surface native errors as in-app toasts,
+  // Native bridge ↔ web bridge: surface native errors as in-app toasts,
   // and re-render Settings when the native status changes.
   window.addEventListener('chained:toast', (e) => {
     Toast.show(e.detail?.message || '', e.detail?.kind || '');

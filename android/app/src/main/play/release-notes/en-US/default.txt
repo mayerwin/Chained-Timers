@@ -1,5 +1,4 @@
-v1.4.2 — Cold-start voice + multi-select polish
+v1.4.3 — Final mojibake cleanup
 
-• First segment now speaks its name on the very first run after a cold app start (TTS prerender race fix).
-• Multi-select: stronger amber border on selected chains + Top/Below arrows showing which one will be focused vs run in the background.
-• Fixes mojibake in editor segment numbers (№ glyph was rendering as garbled "â„–" after a file-encoding regression in v1.4.0).
+• Cleans up 15 remaining mojibake artifacts in source comments that the v1.4.2 fix missed (right-arrow →, warning sign ⚠, left-right arrow ↔). All in JavaScript comments — no runtime impact, but the source now matches what the published code does.
+• Adds three scanner tools (tools/mojibake-{scan,diff,final}.mjs) so any future PowerShell-style encoding regression is caught immediately.
