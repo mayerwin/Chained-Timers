@@ -69,3 +69,6 @@ xcuserdata/
 
 # Gradle bundle build log
 bundle-out.txt
+
+# 4-publish-to-play.ps1 scratch log
+publish-out.txt

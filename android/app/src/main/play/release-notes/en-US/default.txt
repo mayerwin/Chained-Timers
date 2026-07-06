@@ -1,4 +1,7 @@
-v1.4.3 — Final mojibake cleanup
+v1.4.4 — Reliability + navigation
 
-• Cleans up 15 remaining mojibake artifacts in source comments that the v1.4.2 fix missed (right-arrow →, warning sign ⚠, left-right arrow ↔). All in JavaScript comments — no runtime impact, but the source now matches what the published code does.
-• Adds three scanner tools (tools/mojibake-{scan,diff,final}.mjs) so any future PowerShell-style encoding regression is caught immediately.
+• Voice cues now honestly share the alarm-volume slider with the beeps (they used to sit on media volume, so voice sounded "always max"). Same output device foreground and background.
+• Back arrow + swipe-left in the run view — return to the library without stopping the chain.
+• Library now shows a live "now playing" strip for each running chain.
+• Up to 5 concurrent chains (was 2).
+• In-app update prompt via Play In-App Updates.
