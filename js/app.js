@@ -11,6 +11,153 @@
 
 const STORAGE_KEY = 'chained-timers/v1';
 
+// Bumped in tools/build-www.mjs at build time to match package.json's
+// version field. Kept as a literal here (not injected via <script>) so
+// the file is self-contained when opened directly in a browser during
+// development. Update by hand if editing this file outside the build.
+const APP_VERSION = '1.4.4';
+
+// Where "Update available" points on native. Selection order at run time:
+//   1. If the plugin reports the install came from the Play Store, the
+//      Play Store URL is used (and if we ever wire the Play In-App Updates
+//      API, that native flow supersedes this URL entirely).
+//   2. Else if we know it came from the App Store, that URL.
+//   3. Else fall back to the GitHub Releases page — this is the sideload
+//      path (installed the APK directly, not via any store) which is
+//      currently how every user reaches the app; Android doesn't
+//      auto-update sideloaded APKs so the manual re-download prompt is
+//      what makes updates work at all.
+const UPDATE_URLS = {
+  play:      'https://play.google.com/store/apps/details?id=com.mayerwin.chainedtimers',
+  appstore:  'https://apps.apple.com/app/chained-timers/id0000000000', // TODO: replace after App Store submission
+  sideload:  'https://github.com/mayerwin/Chained-Timers/releases/latest',
+};
+// GitHub Releases API — checked at launch on native to see if a newer
+// tag exists than APP_VERSION. This is the mechanism that actually works
+// today because most users are on sideload APK installs which the Play
+// Store has no record of, so the Play In-App Updates API would return
+// UPDATE_NOT_AVAILABLE for them regardless. Set to null to disable.
+const UPDATE_CHECK_URL = 'https://api.github.com/repos/mayerwin/Chained-Timers/releases/latest';
+
+// ============================================================
+// Updater — "is a newer version out?"
+// ============================================================
+//
+// On native launch we (a) ping the GitHub Releases API to see if there's
+// a tag newer than APP_VERSION, and (b) surface the result in Settings and
+// as a one-time modal per version.
+//
+// Why not the on-device Play In-App Updates API? — That's the proper path
+// for Play Store installs, but it only reports NEWER-ON-STORE if the
+// device knows this app came from the Play Store. Every user today
+// installed by downloading a signed APK from the GitHub Release, which
+// makes the install "sideload" from Android's point of view; the Play
+// Store has no record of it, so the API returns UPDATE_NOT_AVAILABLE
+// regardless of what's actually published. Once we're on the Play Store
+// AND some users install from there, extending this module to prefer the
+// Play API (com.google.android.play:app-update) is a small delta — see
+// ChainTimerPlugin for the intended hook shape. For now, GitHub Releases
+// is the mechanism that actually works today.
+const Updater = {
+  _latest:    null,   // {tag: 'v1.4.5', name: 'v1.4.5', html_url: '…'}
+  _installer: 'unknown',  // 'play' | 'appstore' | 'sideload' | 'unknown'
+
+  latestVersion() {
+    return this._latest ? Updater._stripV(this._latest.tag) : null;
+  },
+
+  isNewer(latest, current) {
+    if (!latest || !current) return false;
+    const a = Updater._stripV(latest).split('.').map(n => parseInt(n, 10) || 0);
+    const b = Updater._stripV(current).split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = a[i] || 0, y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
+  },
+
+  _stripV(tag) { return String(tag || '').replace(/^v/i, ''); },
+
+  storeUrl() {
+    const platform = window.Capacitor?.getPlatform?.() || 'web';
+    if (this._installer === 'play' || platform === 'android') return UPDATE_URLS.play;
+    if (this._installer === 'appstore' || platform === 'ios')  return UPDATE_URLS.appstore;
+    return UPDATE_URLS.sideload;
+  },
+
+  openStore() {
+    const url = this.storeUrl();
+    try {
+      // Capacitor routes external URLs through the system browser without
+      // stealing them into the WebView. On PWA/desktop, plain window.open
+      // opens a new tab.
+      window.open(url, '_blank', 'noopener');
+    } catch (e) { /* noop */ }
+    // Once the user tapped through, remember we've offered this version
+    // so we don't re-nag when they come back.
+    try {
+      if (this._latest?.tag) {
+        localStorage.setItem('chained-updater/lastPrompted', this._latest.tag);
+      }
+    } catch {}
+  },
+
+  // Fetch the latest release tag from GitHub. Cached in localStorage with
+  // a 6-hour TTL so we don't hammer the API on every launch. On PWA we
+  // still check — a fresh tab load will bypass the SW anyway, but the
+  // in-app "update available" hint is still useful there too. Fires the
+  // one-time modal via UI.showUpdateModal if we found something newer.
+  async checkAsync() {
+    if (!UPDATE_CHECK_URL) return null;
+    try {
+      const cached = JSON.parse(localStorage.getItem('chained-updater/cache') || 'null');
+      if (cached && (Date.now() - cached.at) < 6 * 3600 * 1000) {
+        this._latest = cached.latest;
+      } else {
+        const res = await fetch(UPDATE_CHECK_URL, { headers: { Accept: 'application/vnd.github+json' } });
+        if (!res.ok) return null;
+        const json = await res.json();
+        this._latest = { tag: json.tag_name, name: json.name, html_url: json.html_url };
+        localStorage.setItem('chained-updater/cache', JSON.stringify({ at: Date.now(), latest: this._latest }));
+      }
+    } catch {
+      return null;
+    }
+    const latest = this.latestVersion();
+    if (!latest) return null;
+    if (!this.isNewer(latest, APP_VERSION)) return null;
+    return latest;
+  },
+
+  // Show the modal at most once per version (per install). If the user
+  // dismisses with "Not now", we won't nag again for the same tag —
+  // unless they go into Settings and tap the "↑ vX.Y.Z available" link
+  // there, which always opens the store URL directly.
+  async maybePromptOnLaunch() {
+    // Only prompt on native — PWA users get updates automatically via the
+    // service worker's network-first HTML strategy.
+    if (!window.ChainedNative?.isNative) return;
+    const latest = await this.checkAsync();
+    if (!latest) return;
+    let dismissed = '';
+    try { dismissed = localStorage.getItem('chained-updater/lastDismissed') || ''; } catch {}
+    if (dismissed === this._latest.tag) return;
+    // Defer briefly so the modal doesn't compete with the initial paint
+    // + native bridge init messages.
+    setTimeout(() => UI.showUpdateModal(latest), 1500);
+  },
+
+  markDismissed() {
+    try {
+      if (this._latest?.tag) {
+        localStorage.setItem('chained-updater/lastDismissed', this._latest.tag);
+      }
+    } catch {}
+  },
+};
+
 const COLORS = [
   { id: 'amber',  hex: '#F5B042' },
   { id: 'rust',   hex: '#C97847' },
@@ -351,8 +498,19 @@ const Audio = {
     osc.stop(t + duration + 0.05);
   },
 
+  // v1.4.4: on native the FGS's MediaPlayer pool owns every in-chain cue
+  // (chime / final-3 / finale / start) so that all playback rides
+  // STREAM_ALARM with the user's setPreferredDevice route honoured. Web
+  // Audio is stuck on STREAM_MUSIC and would otherwise fight the alarm
+  // stream — that mismatch is what the user perceived as "voice at max,
+  // beeps at some other volume". These helpers still exist and are used
+  // on the PWA path (and for prestart, which happens before the FGS is
+  // even started).
+  _skipOnNative() { return !!window.ChainedNative?.isNative; },
+
   // distinctive end-of-segment chime: two stacked tones
   chime() {
+    if (this._skipOnNative()) return;
     this.beep({ freq: 880, duration: 0.18, volume: 0.22, type: 'sine' });
     setTimeout(() => this.beep({ freq: 1320, duration: 0.28, volume: 0.22, type: 'sine' }), 120);
   },
@@ -368,6 +526,7 @@ const Audio = {
   // them gap-free at sample-rate precision (same approach as concatenated
   // final3.wav in the native FGS path). Total scheduled length ~2.08s.
   finalThree() {
+    if (this._skipOnNative()) return;
     this.ensure();
     if (!this.ctx) return;
     const t0 = this.ctx.currentTime;
@@ -388,11 +547,15 @@ const Audio = {
 
   // start chime
   start() {
+    if (this._skipOnNative()) return;
     this.beep({ freq: 523, duration: 0.10, volume: 0.18, type: 'sine' });
     setTimeout(() => this.beep({ freq: 784, duration: 0.18, volume: 0.20, type: 'sine' }), 100);
   },
 
-  // pre-start countdown beep
+  // pre-start countdown beep — intentionally NOT gated on native. Prestart
+  // runs before the FGS is started so there's no MediaPlayer pool yet;
+  // and it's a UI-timer effect on top of the run screen the user is
+  // definitely looking at, so Web Audio latency is fine here.
   prestart(isFinal = false) {
     if (isFinal) this.beep({ freq: 880, duration: 0.22, volume: 0.24, type: 'sine' });
     else this.beep({ freq: 523, duration: 0.12, volume: 0.18, type: 'sine' });
@@ -400,6 +563,7 @@ const Audio = {
 
   // grand finale
   finale() {
+    if (this._skipOnNative()) return;
     this.beep({ freq: 523, duration: 0.16, volume: 0.22, type: 'sine' });
     setTimeout(() => this.beep({ freq: 659, duration: 0.16, volume: 0.22, type: 'sine' }), 120);
     setTimeout(() => this.beep({ freq: 784, duration: 0.16, volume: 0.22, type: 'sine' }), 240);
@@ -734,22 +898,23 @@ function setCueOverride(holder, key, value) {
 // Timer Engine — multi-run capable
 // ============================================================
 //
-// v1.4 — the engine supports up to 2 concurrent chain runs. Each
+// v1.4 — the engine supports up to 5 concurrent chain runs. Each
 // active chain has its own EngineRun instance with independent state
 // (currentIndex, segmentStartedAtWall, paused state, rAF loop,
 // persistence key). The Engine coordinator keeps the focused run's
 // state surfaced under the old singleton API (Engine.chain, .segments,
 // .isRunning, .pause(), .skipNext(), …) so all existing single-chain
-// callsites continue to work without modification. When 2 chains are
-// running, UI calls Engine.focus(chainId) to swap which run the
-// coordinator's fields point at; the chip strip in the run view drives
-// this on tap.
+// callsites continue to work without modification. When several chains
+// are running, UI calls Engine.focus(chainId) to swap which run the
+// coordinator's fields point at; the chip strip in the run view + the
+// now-playing strip on the library view both drive this on tap.
 //
-// Why 2 (not N): the user constraint is "no more than 2." Capping at 2
-// keeps the UX surface manageable (one chip strip, one focused timer,
-// trivial promotion logic when the primary ends) and the audio mixing
-// honest (Android can mix unlimited USAGE_ALARM streams but two
-// simultaneous cues is the realistic upper bound).
+// Why 5 (v1.4.4): raised from 2. Cap is a sanity limit — Android can
+// mix unlimited USAGE_ALARM streams and the FGS handles arbitrarily
+// many run objects. The user-visible caveat is that simultaneous
+// segment-boundary chimes may overlap when several chains finish
+// segments at the same instant; keeping the cap small keeps that noise
+// manageable.
 //
 // All elapsed-time math is wall-clock (Date.now) because the Capacitor
 // Android WebView pauses JS timers + frame callbacks (and may freeze
@@ -758,7 +923,7 @@ function setCueOverride(holder, key, value) {
 // so the engine can correctly catch up multiple segments when the user
 // returns to the app. performance.now is used only for the rAF cadence.
 
-const MAX_CONCURRENT_RUNS = 2;
+const MAX_CONCURRENT_RUNS = 5;
 const RUN_PERSIST_PREFIX  = 'chained-timers/run/v2/';
 const RUN_PERSIST_LEGACY  = 'chained-timers/run/v1';  // single-run v1.3.x snapshot
 
@@ -1723,6 +1888,12 @@ const UI = {
     list.innerHTML = '';
     empty.hidden = chains.length > 0;
 
+    // v1.4.4: refresh the now-playing strip whenever we redraw the library
+    // (fired on view mount, store changes, chain start/stop, etc.). The
+    // clock text is kept live by _updateNowPlayingClocks piggybacking on
+    // the engine's tick, so this is only the structural rebuild path.
+    UI.renderNowPlaying();
+
     document.getElementById('library-count').textContent =
       `${chains.length} ${chains.length === 1 ? 'chain' : 'chains'}`;
     const totalSecs = chains.reduce((s, c) => s + chainTotalSeconds(c), 0);
@@ -2564,6 +2735,27 @@ const UI = {
       panel.hidden = true;
     }
 
+    // v1.4.4: version footer above the credit line. If a newer release
+    // is known (Updater has run and cached a "newer" verdict), append a
+    // tappable "Update available" pill that opens the store URL.
+    const verEl = document.getElementById('setting-version');
+    if (verEl) {
+      const latest = Updater.latestVersion();
+      const isNewer = latest && Updater.isNewer(latest, APP_VERSION);
+      let html = `Version ${escape(APP_VERSION)}`;
+      if (isNewer) {
+        html += ` <a class="setting-version-update" href="#" data-open-update="1">↑ ${escape(latest)} available</a>`;
+      }
+      verEl.innerHTML = html;
+      const updateLink = verEl.querySelector('[data-open-update]');
+      if (updateLink) {
+        updateLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          Updater.openStore();
+        });
+      }
+    }
+
     document.getElementById('settings-sheet').hidden = false;
   },
 
@@ -2884,6 +3076,147 @@ const UI = {
       if (clock) clock.textContent = fmt(Math.ceil(remaining));
       chip.classList.toggle('is-paused', !!run.isPaused);
     });
+    // v1.4.4: same piggyback for the library now-playing strip. Guarded
+    // internally against the library view being hidden.
+    UI._updateNowPlayingClocks();
+  },
+
+  // Render the library "now-playing" strip. Called on every library render
+  // + on Engine.onRunsChange. Rebuilds the DOM only when the set of
+  // running chains changes; clock text is updated in-place by
+  // _updateNowPlayingClocks. Idempotent.
+  renderNowPlaying() {
+    const wrap = document.getElementById('library-now-playing');
+    if (!wrap) return;
+    const runs = Engine.activeRuns();
+    if (!runs.length) {
+      wrap.hidden = true;
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.hidden = false;
+    wrap.innerHTML = '';
+    runs.forEach(run => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'now-playing-row' + (run.isPaused ? ' is-paused' : '');
+      row.dataset.chainId = run.id;
+      row.setAttribute('aria-label', `Resume ${run.chain?.name || 'chain'}`);
+
+      const stripe = document.createElement('div');
+      stripe.className = 'now-playing-stripe';
+      stripe.style.background = colorHex(run.chain?.color) || 'var(--accent)';
+
+      const body = document.createElement('div');
+      body.className = 'now-playing-body';
+
+      const cur     = run.segments[run.currentIndex];
+      const next    = run.segments[run.currentIndex + 1];
+      const total   = run.segments.length;
+      const curName = cur?.name || 'Segment';
+      const nextName = next?.name || null;
+
+      const title = document.createElement('div');
+      title.className = 'now-playing-title';
+      title.innerHTML =
+        `<span class="now-playing-icon">${run.isPaused ? '⏸' : '▶'}</span>` +
+        escape(run.chain?.name || 'Untitled');
+      body.appendChild(title);
+
+      const sub = document.createElement('div');
+      sub.className = 'now-playing-sub';
+      sub.innerHTML =
+        `<span class="now-playing-seg">${escape(curName)}</span>` +
+        `<span class="now-playing-sep">·</span>` +
+        `<span>Segment ${run.currentIndex + 1} of ${total}</span>`;
+      body.appendChild(sub);
+
+      if (nextName) {
+        const nxt = document.createElement('div');
+        nxt.className = 'now-playing-next';
+        nxt.textContent = `next: ${nextName}`;
+        body.appendChild(nxt);
+      }
+
+      const clock = document.createElement('div');
+      clock.className = 'now-playing-clock';
+      const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
+      clock.textContent = fmt(Math.ceil(remaining));
+
+      row.appendChild(stripe);
+      row.appendChild(body);
+      row.appendChild(clock);
+
+      // Tap → focus that run and open its run view. Symmetric with the
+      // run-back button — same navigation, opposite direction.
+      row.addEventListener('click', () => {
+        Engine.focus(run.id);
+        View.show('run');
+      });
+      wrap.appendChild(row);
+    });
+  },
+
+  // Refresh only the mutable text of the now-playing strip (clock, pause
+  // pill, segment counter). Called from _updateRunChipClocks every tick.
+  // Cheap: reads run state, writes text; no DOM structure changes.
+  _updateNowPlayingClocks() {
+    const wrap = document.getElementById('library-now-playing');
+    if (!wrap || wrap.hidden) return;
+    // Only walk the DOM if the library view is currently visible; the
+    // rAF frame is spent regardless but this avoids layout thrash.
+    const libView = document.querySelector('.view-library');
+    if (libView && libView.hidden) return;
+    [...wrap.children].forEach(row => {
+      const id  = row.dataset.chainId;
+      const run = Engine.runById(id);
+      if (!run) return;
+      const cur = run.segments[run.currentIndex];
+      const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
+      const clock = row.querySelector('.now-playing-clock');
+      if (clock) clock.textContent = fmt(Math.ceil(remaining));
+      row.classList.toggle('is-paused', !!run.isPaused);
+      const icon = row.querySelector('.now-playing-icon');
+      if (icon) icon.textContent = run.isPaused ? '⏸' : '▶';
+    });
+  },
+
+  // ------- Update modal -------
+  //
+  // Called from Updater.maybePromptOnLaunch (native only, deferred a bit
+  // so it doesn't compete with the first paint / native bridge init).
+  // Also usable directly from Settings if the user taps the "↑ vX.Y.Z"
+  // hint (though we route that to openStore() directly for a shorter
+  // flow — the modal is the "first time we tell them" moment).
+  showUpdateModal(latestVersion) {
+    const modal = document.getElementById('update-modal');
+    if (!modal) return;
+    const versEl = document.getElementById('update-modal-versions');
+    if (versEl) {
+      versEl.innerHTML =
+        `<span class="from">v${escape(APP_VERSION)}</span>` +
+        `<span class="arrow">→</span>` +
+        `<span class="to">v${escape(latestVersion)}</span>`;
+    }
+    // Contextual hint: tell sideload users they'll get the APK from
+    // GitHub Releases, Play Store users they'll get the Play listing.
+    const hintEl = document.getElementById('update-modal-hint');
+    if (hintEl) {
+      const platform = window.Capacitor?.getPlatform?.() || 'web';
+      if (Updater._installer === 'play' || platform === 'android' && Updater._installer !== 'sideload') {
+        hintEl.textContent = 'Opens the Google Play Store listing.';
+      } else if (Updater._installer === 'appstore' || platform === 'ios') {
+        hintEl.textContent = 'Opens the App Store listing.';
+      } else {
+        hintEl.textContent = 'Opens the GitHub Releases page — download the new APK and install it over the current one (your chains are preserved).';
+      }
+    }
+    modal.hidden = false;
+  },
+
+  hideUpdateModal() {
+    const modal = document.getElementById('update-modal');
+    if (modal) modal.hidden = true;
   },
 
   showCompletion(totalSeconds) {
@@ -3180,6 +3513,66 @@ function init() {
   });
   document.getElementById('dpick-confirm').addEventListener('click', () => UI.commitDurationPicker());
 
+  // Back arrow in run topbar + left-swipe gesture on the run view: return
+  // to the library, KEEPING every active chain running. The library now-
+  // playing strip re-mounts on show so the user can jump back into a run
+  // by tapping it. Symmetric with the way the browser's back button feels.
+  const goBackToLibraryKeepRunning = () => {
+    if (View.current === 'library') return;
+    UI.cancelPrestart();
+    UI.hideCompletion();
+    View.show('library');
+  };
+  document.getElementById('run-back').addEventListener('click', goBackToLibraryKeepRunning);
+
+  // Left-swipe-to-go-back gesture — same as the run-back button, using
+  // pointer events so it works for both touch and trackpad-drag on
+  // desktop. Trigger threshold: 60px horizontal AND horizontal must exceed
+  // vertical by 1.5x (prevents accidental fires when the user is trying
+  // to scroll or drag the chip strip vertically).
+  (() => {
+    const view = document.querySelector('.view-run');
+    if (!view) return;
+    let startX = 0, startY = 0, tracking = false, dragged = 0;
+    // Ignore drags that start on interactive controls — the chip strip
+    // uses its own long-press, sheets can drag themselves, etc.
+    const isInteractive = (el) => !!el.closest('button, input, textarea, select, .run-chip, .sheet, .run-overlay');
+    view.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (isInteractive(e.target)) return;
+      tracking = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      dragged = 0;
+    });
+    view.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
+        // vertical scroll intent — bail
+        tracking = false;
+        view.classList.remove('is-swiping');
+        view.style.transform = '';
+        return;
+      }
+      if (dx > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        dragged = dx;
+        view.classList.add('is-swiping');
+        view.style.transform = `translateX(${Math.min(dx, 120)}px)`;
+      }
+    });
+    const endSwipe = (commit) => {
+      tracking = false;
+      view.style.transform = '';
+      view.classList.remove('is-swiping');
+      if (commit) goBackToLibraryKeepRunning();
+      dragged = 0;
+    };
+    view.addEventListener('pointerup',      () => endSwipe(dragged > 60));
+    view.addEventListener('pointercancel',  () => endSwipe(false));
+  })();
+
   // run controls
   document.getElementById('run-stop').addEventListener('click', () => {
     if (Engine.isRunning) {
@@ -3229,7 +3622,10 @@ function init() {
   // v1.4 — chip strip wakes up whenever a run is added/removed/focused.
   // The chip clocks themselves redraw on every focused-run tick (see
   // updateRunClock) so background clocks stay live.
-  Engine.onRunsChange = () => UI.renderRunChips();
+  Engine.onRunsChange = () => {
+    UI.renderRunChips();
+    UI.renderNowPlaying();
+  };
 
   // v1.4 — selection-mode topbar buttons.
   document.getElementById('library-select-cancel')?.addEventListener('click', () => UI.exitSelectMode());
@@ -3265,6 +3661,21 @@ function init() {
     document.getElementById('install-hint').hidden = true;
     sessionStorage.setItem('chained-install-dismissed', '1');
   });
+
+  // Update-available modal wiring.
+  document.querySelectorAll('[data-update-dismiss]').forEach(el => {
+    el.addEventListener('click', () => {
+      UI.hideUpdateModal();
+      Updater.markDismissed();
+    });
+  });
+  document.getElementById('update-modal-open').addEventListener('click', () => {
+    UI.hideUpdateModal();
+    Updater.openStore();
+  });
+  // Fire the check on launch. Native only; deferred inside maybePromptOnLaunch
+  // so it doesn't compete with the initial render + native bridge init.
+  Updater.maybePromptOnLaunch();
 
   // service worker
   // Service worker is for the PWA path only. In native builds Capacitor serves

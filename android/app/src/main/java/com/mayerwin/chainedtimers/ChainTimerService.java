@@ -442,12 +442,27 @@ public class ChainTimerService extends Service {
         }
 
         boolean inForeground = isAppForegroundSafe();
+        // v1.4.4: FGS is authoritative for chime / final-3 / voice / finale
+        // in BOTH foreground and background. Previously we gated these on
+        // !inForeground so JS Web Audio owned foreground playback — but
+        // Web Audio routes through STREAM_MUSIC while the native voice
+        // player rides STREAM_ALARM, so voice ignored the media-volume
+        // slider while chimes tracked it (i.e. voice appeared "always max
+        // and detached from the beep volume"). Unifying to FGS+ALARM in
+        // both states also honours the same setPreferredDevice for cues
+        // and voice, so headset routing behaves identically regardless of
+        // whether the user is looking at the app. See Audio.* stubs in
+        // js/app.js which are no-ops on native to prevent double-firing.
         boolean boundaryAlert = run.curIndex != idxBefore
-            && run.curIndex != run.prevAlertIndex
-            && !inForeground;
+            && run.curIndex != run.prevAlertIndex;
+        // The notification's own channel-sound is still gated by
+        // !inForeground so the OS chime doesn't stack with our MediaPlayer
+        // cue when the user is watching the run view. The MediaPlayer
+        // cue itself fires unconditionally below.
+        boolean channelAlert = boundaryAlert && !inForeground;
         run.prevAlertIndex = run.curIndex;
 
-        Notification n = buildNotification(run, null, boundaryAlert);
+        Notification n = buildNotification(run, null, channelAlert);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {}
@@ -461,7 +476,7 @@ public class ChainTimerService extends Service {
 
         Segment cur = run.plan.get(run.curIndex);
         long remainingSec = computeRemainingSec(run, cur);
-        if (run.tickEnabled && !inForeground && remainingSec >= 1L && remainingSec <= 3L) {
+        if (run.tickEnabled && remainingSec >= 1L && remainingSec <= 3L) {
             if (run.finalThreeStartedAtIndex != run.curIndex) {
                 run.finalThreeStartedAtIndex = run.curIndex;
                 playFinalThree(run);
@@ -551,7 +566,11 @@ public class ChainTimerService extends Service {
         cancelTickFor(run);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) postCompletionNotification(nm, run, alert);
-        boolean playedFinale = alert && !isAppForegroundSafe();
+        // v1.4.4: finale plays via FGS MediaPlayer regardless of foreground
+        // state (see boundary-alert block for rationale). alert=false is
+        // still respected — it means the JS engine already handled a
+        // silent completion path.
+        boolean playedFinale = alert;
         if (playedFinale) playFinale(run);
 
         boolean wasFgsOwner = run.runId.equals(fgsOwnerRunId);
@@ -1108,13 +1127,31 @@ public class ChainTimerService extends Service {
     }
 
     private android.media.MediaPlayer createPreparedPlayer(int resId) throws Exception {
-        android.media.MediaPlayer mp = android.media.MediaPlayer.create(this, resId);
-        if (mp == null) throw new Exception("MediaPlayer.create returned null for resId=" + resId);
+        // NOTE: we deliberately avoid MediaPlayer.create(context, resId) here.
+        // That factory calls prepare() internally, and per the docs
+        // setAudioAttributes MUST be called before prepare/prepareAsync to
+        // take effect. Called after (as we used to), Android silently
+        // ignores the attributes and the player falls back to STREAM_MUSIC —
+        // meaning the chime/finale/final3 would follow the media-volume
+        // slider, while the voice player (built with the fresh-instance
+        // pattern below) correctly rides STREAM_ALARM. That mismatch is
+        // what the user perceived as "voice is always at max and doesn't
+        // follow the beep volume" (v1.4.4).
+        android.media.MediaPlayer mp = new android.media.MediaPlayer();
         AudioAttributes attrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
-        try { mp.setAudioAttributes(attrs); } catch (Throwable ignored) {}
+        mp.setAudioAttributes(attrs);
+        android.content.res.AssetFileDescriptor afd = null;
+        try {
+            afd = getResources().openRawResourceFd(resId);
+            if (afd == null) throw new Exception("openRawResourceFd returned null for resId=" + resId);
+            mp.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+        } finally {
+            if (afd != null) try { afd.close(); } catch (Throwable ignored) {}
+        }
+        mp.prepare();
         return mp;
     }
 

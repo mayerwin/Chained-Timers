@@ -54,9 +54,9 @@
 
       <!-- Selection mode top bar — visible only when the library is in
            multi-select mode (long-press a chain row to enter). Replaces
-           the default topbar above. The Start button is enabled once
-           1-2 chains are selected; tap to begin all selected runs at the
-           same t=0. Cap is 2 concurrent — see Engine.MAX_CONCURRENT_RUNS. -->
+           the default topbar above. The Start button is enabled once one
+           or more chains are selected; tap to begin all selected runs at
+           the same t=0. Cap is 5 concurrent — see Engine.MAX_CONCURRENT_RUNS. -->
       <header class="topbar topbar-select" id="library-topbar-select" hidden>
         <button class="icon-btn" id="library-select-cancel" aria-label="Exit selection">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -76,6 +76,12 @@
         <span class="ribbon-rule"></span>
         <span class="ribbon-meta" id="library-total">— total</span>
       </div>
+
+      <!-- v1.4.4: now-playing strip. One row per running chain. Same fields
+           as the persistent Android notification (chain name, current
+           segment name + position, MM:SS remaining, next segment). Tap a
+           row to reopen its run view. Hidden when no chain is running. -->
+      <div class="library-now-playing" id="library-now-playing" hidden aria-live="polite"></div>
 
       <main class="library-scroll">
         <ul class="chain-list" id="chain-list" role="list"></ul>
@@ -219,9 +225,17 @@
       <div class="run-bg" id="run-bg"></div>
 
       <header class="run-topbar">
-        <button class="icon-btn run-close" id="run-stop" aria-label="Stop">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
+        <div class="run-topbar-left">
+          <!-- Back: keep chain(s) running, return to library. Swiping left
+               from anywhere in the run view does the same thing. -->
+          <button class="icon-btn run-back" id="run-back" aria-label="Back to library (keep running)">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <!-- Stop: kill the focused run. If it was the last one, we land on library. -->
+          <button class="icon-btn run-close" id="run-stop" aria-label="Stop">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
         <div class="run-chain-meta">
           <span class="run-chain-name" id="run-chain-name">—</span>
           <span class="run-chain-pos" id="run-chain-pos">— / —</span>
@@ -411,6 +425,7 @@
             <button class="btn btn-ghost btn-small" id="import-data">Import…</button>
             <input type="file" id="import-file" accept="application/json" hidden />
           </div>
+          <p class="setting-version" id="setting-version">Version —</p>
           <p class="setting-credit">
             Built with care. Open source on <a href="https://github.com/mayerwin/Chained-Timers" target="_blank" rel="noopener">GitHub</a>.
           </p>
@@ -543,10 +558,31 @@
       <button class="install-close" id="install-dismiss" aria-label="Dismiss">×</button>
     </div>
 
+    <!-- ░░░░░░░░ UPDATE-AVAILABLE MODAL (native, one-time per version) ░░░░░░░░ -->
+    <div class="update-modal" id="update-modal" hidden role="dialog" aria-labelledby="update-modal-title" aria-modal="true">
+      <div class="update-modal-scrim" data-update-dismiss></div>
+      <div class="update-modal-card">
+        <div class="update-modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M12 4v11M6 9l6-5 6 5"/>
+            <path d="M4 18h16" />
+          </svg>
+        </div>
+        <h2 class="update-modal-title" id="update-modal-title">Update available</h2>
+        <p class="update-modal-body" id="update-modal-body">A newer version is available. Update to get the latest fixes and features.</p>
+        <p class="update-modal-versions" id="update-modal-versions">— → —</p>
+        <div class="update-modal-actions">
+          <button class="btn btn-ghost" id="update-modal-later" data-update-dismiss>Not now</button>
+          <button class="btn btn-primary" id="update-modal-open">Update</button>
+        </div>
+        <p class="update-modal-hint" id="update-modal-hint"></p>
+      </div>
+    </div>
+
   </div>
 
-  <script src="./js/app.js?v=1.4.3"></script>
+  <script src="./js/app.js?v=1.4.4"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.4.3"></script>
+  <script src="./js/native.js?v=1.4.4"></script>
 </body>
 </html>

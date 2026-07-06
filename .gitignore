@@ -66,3 +66,6 @@ ios/DerivedData/
 ios/.idea/
 *.xcuserstate
 xcuserdata/
+
+# Gradle bundle build log
+bundle-out.txt
