@@ -108,6 +108,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // v1.4.4 — Play In-App Updates. When the app was installed from the
+    // Play Store (getInstallerPackageName returns "com.android.vending"),
+    // ChainTimerPlugin.checkPlayUpdate() asks the Play Store directly
+    // whether a newer version is published for this specific install.
+    // When it was sideloaded, the SDK returns UPDATE_NOT_AVAILABLE and
+    // JS falls back to the GitHub Releases API check.
+    implementation "com.google.android.play:app-update:2.1.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

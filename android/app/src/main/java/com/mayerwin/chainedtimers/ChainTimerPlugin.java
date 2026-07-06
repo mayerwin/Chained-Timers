@@ -1,16 +1,33 @@
 package com.github.chainedtimers;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+
+// v1.4.4 — Play In-App Updates (com.google.android.play:app-update).
+// The SDK is safe to import unconditionally: it degrades to
+// UPDATE_NOT_AVAILABLE on installs the Play Store doesn't recognise
+// (sideload, other stores), which is exactly the signal the JS Updater
+// uses to fall back to the GitHub Releases check.
+import com.google.android.play.core.appupdate.AppUpdateInfo;
+import com.google.android.play.core.appupdate.AppUpdateManager;
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory;
+import com.google.android.play.core.appupdate.AppUpdateOptions;
+import com.google.android.play.core.install.InstallState;
+import com.google.android.play.core.install.InstallStateUpdatedListener;
+import com.google.android.play.core.install.model.AppUpdateType;
+import com.google.android.play.core.install.model.InstallStatus;
+import com.google.android.play.core.install.model.UpdateAvailability;
 
 import androidx.core.app.NotificationManagerCompat;
 
@@ -107,6 +124,29 @@ public class ChainTimerPlugin extends Plugin {
     public void handleOnResume() {
         super.handleOnResume();
         appForeground = true;
+        // v1.4.4 — re-check Play In-App Updates: if the user backgrounded
+        // us mid-IMMEDIATE flow the Play SDK contract says we must
+        // relaunch it; if a FLEXIBLE update finished downloading while we
+        // were away, notify JS so it can prompt for restart.
+        try {
+            AppUpdateManager mgr = getAppUpdateManager();
+            mgr.getAppUpdateInfo().addOnSuccessListener(info -> {
+                if (info.updateAvailability() == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
+                    Activity activity = getActivity();
+                    if (activity != null) {
+                        try {
+                            mgr.startUpdateFlow(info, activity,
+                                AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build());
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                if (info.installStatus() == InstallStatus.DOWNLOADED) {
+                    JSObject payload = new JSObject();
+                    payload.put("status", "downloaded");
+                    notifyListeners("playUpdateStatus", payload, true);
+                }
+            });
+        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -649,4 +689,229 @@ public class ChainTimerPlugin extends Plugin {
         if (runId != null) payload.put("runId", runId);
         notifyListeners("chainCommand", payload, true);
     }
+
+    // =========================================================
+    // v1.4.4 — install-source detection + Play In-App Updates
+    // =========================================================
+
+    private static volatile AppUpdateManager cachedAppUpdateManager;
+    private static volatile AppUpdateInfo    cachedAppUpdateInfo;
+
+    private AppUpdateManager getAppUpdateManager() {
+        if (cachedAppUpdateManager == null) {
+            synchronized (ChainTimerPlugin.class) {
+                if (cachedAppUpdateManager == null) {
+                    cachedAppUpdateManager = AppUpdateManagerFactory.create(getContext().getApplicationContext());
+                }
+            }
+        }
+        return cachedAppUpdateManager;
+    }
+
+    /**
+     * getInstallSource — the JS Updater calls this on native launch to
+     * decide whether to check Play In-App Updates or the GitHub API.
+     *
+     * Returns { source: "play" | "sideload" | "other" | "unknown",
+     *          installer: <raw installer package name or null> }.
+     *
+     * "com.android.vending" is the Play Store. "com.google.android.feedback"
+     * shows up on some devices (feedback / testing loop) so we treat it as
+     * play too. Anything else (adb, browser, F-Droid, third-party store) is
+     * "other"; null / exception is "unknown".
+     */
+    @PluginMethod
+    public void getInstallSource(PluginCall call) {
+        JSObject result = new JSObject();
+        String installer = null;
+        try {
+            Context ctx = getContext();
+            PackageManager pm = ctx.getPackageManager();
+            String pkg = ctx.getPackageName();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    installer = pm.getInstallSourceInfo(pkg).getInstallingPackageName();
+                } catch (PackageManager.NameNotFoundException nnfe) {
+                    installer = null;
+                }
+            } else {
+                installer = pm.getInstallerPackageName(pkg);
+            }
+        } catch (Throwable t) {
+            installer = null;
+        }
+        String source;
+        if (installer == null) {
+            source = "sideload";
+        } else if ("com.android.vending".equals(installer)
+                || "com.google.android.feedback".equals(installer)) {
+            source = "play";
+        } else {
+            source = "other";
+        }
+        result.put("source", source);
+        result.put("installer", installer == null ? JSONObject.NULL : installer);
+        call.resolve(result);
+    }
+
+    /**
+     * checkPlayUpdate — asks the Play Store SDK whether a newer version of
+     * this exact installation is published. Returns quickly (network call
+     * to Play Services, tens of ms typically); the JS side does its own
+     * cache to avoid hammering it on every launch.
+     *
+     * Returns:
+     *   { available: bool,
+     *     versionCode: int (0 if unknown),
+     *     priority: int (0-5, 5 = highest),
+     *     updateAvailability: int (Play SDK code, for logging),
+     *     immediateAllowed: bool,
+     *     flexibleAllowed: bool }
+     *
+     * On a sideload install (or anywhere the Play SDK can't reach the
+     * Play Store) this returns { available: false } — the JS Updater
+     * treats that as "fall back to GitHub".
+     */
+    @PluginMethod
+    public void checkPlayUpdate(PluginCall call) {
+        try {
+            AppUpdateManager mgr = getAppUpdateManager();
+            mgr.getAppUpdateInfo()
+                .addOnSuccessListener(info -> {
+                    cachedAppUpdateInfo = info; // reused by startPlayUpdate
+                    JSObject r = new JSObject();
+                    int avail = info.updateAvailability();
+                    boolean isAvailable = (avail == UpdateAvailability.UPDATE_AVAILABLE)
+                        || (avail == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS);
+                    r.put("available", isAvailable);
+                    r.put("versionCode", info.availableVersionCode());
+                    r.put("priority", info.updatePriority());
+                    r.put("updateAvailability", avail);
+                    r.put("immediateAllowed", info.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE));
+                    r.put("flexibleAllowed",  info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE));
+                    call.resolve(r);
+                })
+                .addOnFailureListener(err -> {
+                    JSObject r = new JSObject();
+                    r.put("available", false);
+                    r.put("error", err.getMessage() == null ? "unknown" : err.getMessage());
+                    call.resolve(r);
+                });
+        } catch (Throwable t) {
+            JSObject r = new JSObject();
+            r.put("available", false);
+            r.put("error", t.getMessage() == null ? "unknown" : t.getMessage());
+            call.resolve(r);
+        }
+    }
+
+    /**
+     * startPlayUpdate — launches the Play in-app update UI. The Play SDK
+     * takes over: shows a full-screen (IMMEDIATE) or bottom-sheet
+     * (FLEXIBLE) update flow, and if the user accepts, downloads and
+     * installs the new version. The app restarts automatically at the
+     * end of IMMEDIATE; FLEXIBLE completes silently and we notify JS via
+     * "playUpdateInstalled" so it can toast "Update downloaded — restart
+     * to apply."
+     *
+     * options:
+     *   { type: "immediate" | "flexible" }
+     *
+     * Precondition: checkPlayUpdate must have been called at least once
+     * in the current process so cachedAppUpdateInfo is populated. If it
+     * wasn't, we re-fetch it and then dispatch.
+     */
+    @PluginMethod
+    public void startPlayUpdate(PluginCall call) {
+        String type = call.getString("type", "immediate");
+        final int updateType = "flexible".equalsIgnoreCase(type)
+            ? AppUpdateType.FLEXIBLE : AppUpdateType.IMMEDIATE;
+
+        Runnable dispatch = () -> {
+            AppUpdateInfo info = cachedAppUpdateInfo;
+            if (info == null) {
+                call.reject("no cached AppUpdateInfo — call checkPlayUpdate first");
+                return;
+            }
+            if (!info.isUpdateTypeAllowed(updateType)) {
+                call.reject("update type not allowed for this install/version");
+                return;
+            }
+            Activity activity = getActivity();
+            if (activity == null) {
+                call.reject("no activity to attach flow to");
+                return;
+            }
+            try {
+                AppUpdateManager mgr = getAppUpdateManager();
+                if (updateType == AppUpdateType.FLEXIBLE) {
+                    // Listen for install status changes so we can fire the
+                    // "download complete, tap to restart" event to JS.
+                    mgr.registerListener(flexibleListener);
+                }
+                mgr.startUpdateFlow(
+                    info,
+                    activity,
+                    AppUpdateOptions.newBuilder(updateType).build()
+                );
+                JSObject r = new JSObject();
+                r.put("launched", true);
+                r.put("type", updateType == AppUpdateType.IMMEDIATE ? "immediate" : "flexible");
+                call.resolve(r);
+            } catch (Throwable t) {
+                call.reject("startUpdateFlow failed: " + t.getMessage());
+            }
+        };
+
+        if (cachedAppUpdateInfo != null) {
+            dispatch.run();
+        } else {
+            // Fresh fetch then dispatch. If it fails, reject.
+            try {
+                getAppUpdateManager().getAppUpdateInfo()
+                    .addOnSuccessListener(info -> { cachedAppUpdateInfo = info; dispatch.run(); })
+                    .addOnFailureListener(err -> call.reject("getAppUpdateInfo failed: " + err.getMessage()));
+            } catch (Throwable t) {
+                call.reject("plugin init failed: " + t.getMessage());
+            }
+        }
+    }
+
+    /** Complete a FLEXIBLE update after the user accepts the restart. */
+    @PluginMethod
+    public void completePlayUpdate(PluginCall call) {
+        try {
+            getAppUpdateManager().completeUpdate();
+            call.resolve();
+        } catch (Throwable t) {
+            call.reject("completeUpdate failed: " + t.getMessage());
+        }
+    }
+
+    // Fires when a FLEXIBLE update transitions state (downloading, then
+    // downloaded, then installed). We forward "downloaded" and "installed"
+    // to JS so it can prompt "restart to apply".
+    private final InstallStateUpdatedListener flexibleListener = new InstallStateUpdatedListener() {
+        @Override public void onStateUpdate(InstallState state) {
+            int status = state.installStatus();
+            if (status == InstallStatus.DOWNLOADED) {
+                JSObject payload = new JSObject();
+                payload.put("status", "downloaded");
+                notifyListeners("playUpdateStatus", payload, true);
+            } else if (status == InstallStatus.INSTALLED) {
+                JSObject payload = new JSObject();
+                payload.put("status", "installed");
+                notifyListeners("playUpdateStatus", payload, true);
+                try { getAppUpdateManager().unregisterListener(this); } catch (Throwable ignored) {}
+            } else if (status == InstallStatus.FAILED || status == InstallStatus.CANCELED) {
+                JSObject payload = new JSObject();
+                payload.put("status", status == InstallStatus.FAILED ? "failed" : "canceled");
+                notifyListeners("playUpdateStatus", payload, true);
+                try { getAppUpdateManager().unregisterListener(this); } catch (Throwable ignored) {}
+            }
+        }
+    };
+
+    // Play-update resume behavior lives in the existing handleOnResume
+    // near the top of the class — merged with the appForeground flag.
 }

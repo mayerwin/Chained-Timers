@@ -43,31 +43,46 @@ const UPDATE_CHECK_URL = 'https://api.github.com/repos/mayerwin/Chained-Timers/r
 // Updater — "is a newer version out?"
 // ============================================================
 //
-// On native launch we (a) ping the GitHub Releases API to see if there's
-// a tag newer than APP_VERSION, and (b) surface the result in Settings and
-// as a one-time modal per version.
+// Two channels, picked by install source on native launch:
 //
-// Why not the on-device Play In-App Updates API? — That's the proper path
-// for Play Store installs, but it only reports NEWER-ON-STORE if the
-// device knows this app came from the Play Store. Every user today
-// installed by downloading a signed APK from the GitHub Release, which
-// makes the install "sideload" from Android's point of view; the Play
-// Store has no record of it, so the API returns UPDATE_NOT_AVAILABLE
-// regardless of what's actually published. Once we're on the Play Store
-// AND some users install from there, extending this module to prefer the
-// Play API (com.google.android.play:app-update) is a small delta — see
-// ChainTimerPlugin for the intended hook shape. For now, GitHub Releases
-// is the mechanism that actually works today.
+//   PLAY (com.android.vending) — installed from Google Play Store.
+//     ChainTimer.getInstallSource() returns "play". We call the Play
+//     In-App Updates SDK (checkPlayUpdate); if it says available, we
+//     show our modal, and "Update" launches Play's in-app flow (IMMEDIATE
+//     by default — Play's UI takes over, downloads, installs, restarts).
+//
+//   OTHER (sideload / adb / third-party store) — the Play SDK returns
+//     UPDATE_NOT_AVAILABLE here regardless of what's tagged, because the
+//     Play Store has no record of this install. We fall back to the
+//     GitHub Releases API check and prompt the user to grab the new APK.
+//
+// PWA (browser) users don't need any of this — the service worker's
+// network-first HTML strategy auto-updates the app on the next load.
 const Updater = {
-  _latest:    null,   // {tag: 'v1.4.5', name: 'v1.4.5', html_url: '…'}
-  _installer: 'unknown',  // 'play' | 'appstore' | 'sideload' | 'unknown'
+  _channel:   'unknown',  // 'play' | 'sideload' | 'other' | 'unknown'
+  _installer: null,       // raw installer package name (or null on sideload)
+  _play:      null,       // {available, versionCode, priority, immediateAllowed, flexibleAllowed}
+  _latest:    null,       // GitHub Releases fallback: {tag, name, html_url}
 
+  // For the settings-panel "↑ vX.Y.Z available" hint. Play-channel updates
+  // report a version code, not a name — we fall back to that as a string.
   latestVersion() {
+    if (this._channel === 'play' && this._play?.available) {
+      const code = this._play.versionCode;
+      return code ? `code ${code}` : 'newer';
+    }
     return this._latest ? Updater._stripV(this._latest.tag) : null;
+  },
+
+  hasUpdate() {
+    if (this._channel === 'play') return !!this._play?.available;
+    return this._latest && this.isNewer(this.latestVersion(), APP_VERSION);
   },
 
   isNewer(latest, current) {
     if (!latest || !current) return false;
+    // Play-channel "code N" strings compare true whenever _play.available.
+    if (String(latest).startsWith('code ') || latest === 'newer') return true;
     const a = Updater._stripV(latest).split('.').map(n => parseInt(n, 10) || 0);
     const b = Updater._stripV(current).split('.').map(n => parseInt(n, 10) || 0);
     for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -82,34 +97,76 @@ const Updater = {
 
   storeUrl() {
     const platform = window.Capacitor?.getPlatform?.() || 'web';
-    if (this._installer === 'play' || platform === 'android') return UPDATE_URLS.play;
-    if (this._installer === 'appstore' || platform === 'ios')  return UPDATE_URLS.appstore;
+    if (this._channel === 'play')    return UPDATE_URLS.play;
+    if (platform     === 'ios')      return UPDATE_URLS.appstore;
     return UPDATE_URLS.sideload;
   },
 
-  openStore() {
-    const url = this.storeUrl();
+  // The user tapped "Update". Play-channel launches the in-app flow (Play
+  // SDK takes over with its own UI and restart-on-completion behavior);
+  // sideload / other opens the store URL in the system browser so they
+  // can grab the new APK.
+  async openStore() {
+    // Remember we've prompted this version regardless of outcome so the
+    // Settings hint doesn't nag on re-open.
     try {
-      // Capacitor routes external URLs through the system browser without
-      // stealing them into the WebView. On PWA/desktop, plain window.open
-      // opens a new tab.
-      window.open(url, '_blank', 'noopener');
-    } catch (e) { /* noop */ }
-    // Once the user tapped through, remember we've offered this version
-    // so we don't re-nag when they come back.
-    try {
-      if (this._latest?.tag) {
-        localStorage.setItem('chained-updater/lastPrompted', this._latest.tag);
+      const key = this._channel === 'play'
+        ? `play-${this._play?.versionCode || 'x'}`
+        : (this._latest?.tag || '');
+      if (key) localStorage.setItem('chained-updater/lastPrompted', key);
+    } catch {}
+
+    if (this._channel === 'play' && this._play?.available) {
+      const CT = window.Capacitor?.Plugins?.ChainTimer;
+      if (CT && typeof CT.startPlayUpdate === 'function') {
+        try {
+          // IMMEDIATE by default — Play's UI is opinionated but user-
+          // friendly, and download+install+restart happens without
+          // leaving the app. If the SDK reports IMMEDIATE not allowed
+          // (rare, e.g. on very old Play services), fall through to
+          // FLEXIBLE, and then to the store URL.
+          const type = this._play.immediateAllowed ? 'immediate'
+                     : this._play.flexibleAllowed  ? 'flexible'
+                     : null;
+          if (type) {
+            await CT.startPlayUpdate({ type });
+            return;
+          }
+        } catch (e) { /* fall through */ }
       }
+    }
+    try {
+      window.open(this.storeUrl(), '_blank', 'noopener');
     } catch {}
   },
 
-  // Fetch the latest release tag from GitHub. Cached in localStorage with
-  // a 6-hour TTL so we don't hammer the API on every launch. On PWA we
-  // still check — a fresh tab load will bypass the SW anyway, but the
-  // in-app "update available" hint is still useful there too. Fires the
-  // one-time modal via UI.showUpdateModal if we found something newer.
-  async checkAsync() {
+  async _resolveInstallSource() {
+    const CT = window.Capacitor?.Plugins?.ChainTimer;
+    if (!CT || typeof CT.getInstallSource !== 'function') return;
+    try {
+      const r = await CT.getInstallSource();
+      this._channel   = r?.source   || 'unknown';
+      this._installer = r?.installer || null;
+    } catch {
+      this._channel   = 'unknown';
+      this._installer = null;
+    }
+  },
+
+  async _checkPlay() {
+    const CT = window.Capacitor?.Plugins?.ChainTimer;
+    if (!CT || typeof CT.checkPlayUpdate !== 'function') return false;
+    try {
+      const r = await CT.checkPlayUpdate();
+      this._play = r || null;
+      return !!(r && r.available);
+    } catch {
+      this._play = null;
+      return false;
+    }
+  },
+
+  async _checkGithub() {
     if (!UPDATE_CHECK_URL) return null;
     try {
       const cached = JSON.parse(localStorage.getItem('chained-updater/cache') || 'null');
@@ -125,35 +182,55 @@ const Updater = {
     } catch {
       return null;
     }
-    const latest = this.latestVersion();
-    if (!latest) return null;
-    if (!this.isNewer(latest, APP_VERSION)) return null;
+    const latest = this._latest ? Updater._stripV(this._latest.tag) : null;
+    if (!latest || !this.isNewer(latest, APP_VERSION)) return null;
     return latest;
   },
 
-  // Show the modal at most once per version (per install). If the user
-  // dismisses with "Not now", we won't nag again for the same tag —
-  // unless they go into Settings and tap the "↑ vX.Y.Z available" link
-  // there, which always opens the store URL directly.
+  // Populates channel + result, returns a summary the modal can render.
+  // Returns null when there's no update to show.
+  async checkAsync() {
+    // In the PWA no channel applies; skip the check outright.
+    if (!window.ChainedNative?.isNative) return null;
+
+    if (this._channel === 'unknown') await this._resolveInstallSource();
+
+    // Play channel: try the SDK; if it says available, we're done. If it
+    // says NO (which is what happens for every sideload install), we
+    // also try GitHub as a belt-and-braces check for the user who might
+    // have both a Play install AND a manual GitHub-APK sideloaded over
+    // it — the Play SDK will report NOT_AVAILABLE in that scenario too.
+    if (this._channel === 'play') {
+      const hasPlay = await this._checkPlay();
+      if (hasPlay) return this.latestVersion();
+    }
+
+    return await this._checkGithub();
+  },
+
   async maybePromptOnLaunch() {
-    // Only prompt on native — PWA users get updates automatically via the
-    // service worker's network-first HTML strategy.
     if (!window.ChainedNative?.isNative) return;
-    const latest = await this.checkAsync();
-    if (!latest) return;
-    let dismissed = '';
-    try { dismissed = localStorage.getItem('chained-updater/lastDismissed') || ''; } catch {}
-    if (dismissed === this._latest.tag) return;
-    // Defer briefly so the modal doesn't compete with the initial paint
-    // + native bridge init messages.
-    setTimeout(() => UI.showUpdateModal(latest), 1500);
+    // Small deferral so we don't compete with the initial paint + native
+    // bridge init messages when the user opens the app.
+    setTimeout(async () => {
+      const latest = await this.checkAsync();
+      if (!latest) return;
+      const dismissKey = this._channel === 'play'
+        ? `play-${this._play?.versionCode || 'x'}`
+        : (this._latest?.tag || '');
+      let dismissed = '';
+      try { dismissed = localStorage.getItem('chained-updater/lastDismissed') || ''; } catch {}
+      if (dismissed && dismissed === dismissKey) return;
+      UI.showUpdateModal(latest);
+    }, 1500);
   },
 
   markDismissed() {
     try {
-      if (this._latest?.tag) {
-        localStorage.setItem('chained-updater/lastDismissed', this._latest.tag);
-      }
+      const key = this._channel === 'play'
+        ? `play-${this._play?.versionCode || 'x'}`
+        : (this._latest?.tag || '');
+      if (key) localStorage.setItem('chained-updater/lastDismissed', key);
     } catch {}
   },
 };
@@ -2737,14 +2814,18 @@ const UI = {
 
     // v1.4.4: version footer above the credit line. If a newer release
     // is known (Updater has run and cached a "newer" verdict), append a
-    // tappable "Update available" pill that opens the store URL.
+    // tappable "Update available" pill that opens the store URL / Play
+    // in-app flow.
     const verEl = document.getElementById('setting-version');
     if (verEl) {
-      const latest = Updater.latestVersion();
-      const isNewer = latest && Updater.isNewer(latest, APP_VERSION);
       let html = `Version ${escape(APP_VERSION)}`;
-      if (isNewer) {
-        html += ` <a class="setting-version-update" href="#" data-open-update="1">↑ ${escape(latest)} available</a>`;
+      if (Updater.hasUpdate()) {
+        // "Update available" instead of a version number when the Play
+        // channel doesn't give us a name — spelling out "code N" is more
+        // confusing than useful.
+        const label = Updater._channel === 'play' ? 'Update available' :
+                      `↑ ${escape(Updater.latestVersion() || 'newer')} available`;
+        html += ` <a class="setting-version-update" href="#" data-open-update="1">${label}</a>`;
       }
       verEl.innerHTML = html;
       const updateLink = verEl.querySelector('[data-open-update]');
@@ -3193,19 +3274,26 @@ const UI = {
     if (!modal) return;
     const versEl = document.getElementById('update-modal-versions');
     if (versEl) {
+      // Play channel doesn't hand us a semver — just an internal version
+      // code — so we show "v1.4.4 → newer version" instead of "v1.4.4 →
+      // code 25". Sideload/GitHub channel keeps the semver-both-sides shape.
+      const toLabel = Updater._channel === 'play' ? 'newer version' : `v${escape(latestVersion)}`;
       versEl.innerHTML =
         `<span class="from">v${escape(APP_VERSION)}</span>` +
         `<span class="arrow">→</span>` +
-        `<span class="to">v${escape(latestVersion)}</span>`;
+        `<span class="to">${toLabel}</span>`;
     }
-    // Contextual hint: tell sideload users they'll get the APK from
-    // GitHub Releases, Play Store users they'll get the Play listing.
+    // Contextual hint reflects the update channel we actually resolved:
+    //   play     → Play in-app flow launches (no page navigation)
+    //   ios      → App Store listing
+    //   other/   → GitHub Releases APK re-download
+    //   sideload
     const hintEl = document.getElementById('update-modal-hint');
     if (hintEl) {
       const platform = window.Capacitor?.getPlatform?.() || 'web';
-      if (Updater._installer === 'play' || platform === 'android' && Updater._installer !== 'sideload') {
-        hintEl.textContent = 'Opens the Google Play Store listing.';
-      } else if (Updater._installer === 'appstore' || platform === 'ios') {
+      if (Updater._channel === 'play') {
+        hintEl.textContent = 'Downloads and installs the update in-app via the Play Store.';
+      } else if (platform === 'ios') {
         hintEl.textContent = 'Opens the App Store listing.';
       } else {
         hintEl.textContent = 'Opens the GitHub Releases page — download the new APK and install it over the current one (your chains are preserved).';
