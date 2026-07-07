@@ -136,14 +136,17 @@ try {
     Write-Host ''
     Write-Host "Uploading AAB to track '$primaryTrack' (gradle publishBundle)..." -ForegroundColor Cyan
     Write-Host ''
-    & .\gradlew.bat publishBundle --console=plain
+    # 2>&1 pipes native stderr into stdout so PowerShell doesn't treat
+    # gradle's routine warnings as fatal NativeCommandError. Real failures
+    # still trip $LASTEXITCODE.
+    & .\gradlew.bat publishBundle --console=plain 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) { throw "gradle publishBundle failed (exit $LASTEXITCODE)" }
 
     foreach ($track in $additionalTracks) {
         Write-Host ''
         Write-Host "Promoting same artifact to track '$track' (gradle promoteArtifact)..." -ForegroundColor Cyan
         Write-Host ''
-        & .\gradlew.bat promoteArtifact "--from-track=$primaryTrack" "--promote-track=$track" --console=plain
+        & .\gradlew.bat promoteArtifact "--from-track=$primaryTrack" "--promote-track=$track" --console=plain 2>&1 | ForEach-Object { "$_" }
         if ($LASTEXITCODE -ne 0) { throw "gradle promoteArtifact -> '$track' failed (exit $LASTEXITCODE)" }
     }
 }

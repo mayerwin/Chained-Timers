@@ -92,7 +92,12 @@ try {
 
     Push-Location (Join-Path $repo 'android')
     try {
-        & .\gradlew.bat bundleRelease --console=plain
+        # Merge stderr into stdout (2>&1) so PowerShell doesn't treat
+        # javac's routine warnings ("Note: Some input files use unchecked
+        # or unsafe operations") as fatal NativeCommandError. The build
+        # still fails via $LASTEXITCODE below when gradle actually
+        # exit-non-zeros.
+        & .\gradlew.bat bundleRelease --console=plain 2>&1 | ForEach-Object { "$_" }
         if ($LASTEXITCODE -ne 0) { throw "gradle bundleRelease failed (exit $LASTEXITCODE)" }
     }
     finally { Pop-Location }
