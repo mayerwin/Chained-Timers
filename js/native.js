@@ -462,7 +462,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', runId = null } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', ringThroughDnd = false, runId = null } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -535,6 +535,12 @@
       // finalThree / finale still go through SoundPool USAGE_ALARM
       // (system policy = both speakers).
       audioRoute: typeof audioRoute === 'string' ? audioRoute : 'headset',
+      // v1.4.5 — media/alarm stream toggle. When true (Ring through Do
+      // Not Disturb), the FGS's cue MediaPlayers use USAGE_ALARM +
+      // CONTENT_TYPE_SONIFICATION and ride the alarm-volume slider.
+      // Default false uses USAGE_MEDIA which follows the everyday
+      // media-volume slider users actually adjust.
+      ringThroughDnd: !!ringThroughDnd,
       // v1.4.1 — runId routes this payload to the per-run state in the
       // Java service. Absent for legacy single-chain callers (fall back
       // to the synthetic "__default__" id on the Java side).

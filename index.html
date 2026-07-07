@@ -77,11 +77,10 @@
         <span class="ribbon-meta" id="library-total">— total</span>
       </div>
 
-      <!-- v1.4.4: now-playing strip. One row per running chain. Same fields
-           as the persistent Android notification (chain name, current
-           segment name + position, MM:SS remaining, next segment). Tap a
-           row to reopen its run view. Hidden when no chain is running. -->
-      <div class="library-now-playing" id="library-now-playing" hidden aria-live="polite"></div>
+      <!-- v1.4.5: the now-playing status is rendered INLINE beneath each
+           running chain card by renderLibrary (see js/app.js). Running
+           chains sort to the top so the user sees them first and the
+           status card sits visually attached to its own chain card. -->
 
       <main class="library-scroll">
         <ul class="chain-list" id="chain-list" role="list"></ul>
@@ -388,6 +387,13 @@
           </div>
           <label class="setting-row">
             <span>
+              <strong>Ring through Do Not Disturb</strong>
+              <small>Off (default) — cues follow your media / music volume slider and are silenced when your phone is in silent mode or DND. On — cues follow the alarm volume slider and ring through DND, like an alarm clock.</small>
+            </span>
+            <input type="checkbox" id="setting-ring-through-dnd" />
+          </label>
+          <label class="setting-row">
+            <span>
               <strong>Keep screen awake</strong>
               <small>Wake Lock — prevents your screen from sleeping during a run.</small>
             </span>
@@ -581,8 +587,8 @@
 
   </div>
 
-  <script src="./js/app.js?v=1.4.4"></script>
+  <script src="./js/app.js?v=1.4.5"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.4.4"></script>
+  <script src="./js/native.js?v=1.4.5"></script>
 </body>
 </html>

@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -267,6 +267,19 @@ const DEFAULT_SETTINGS = {
   // browsers route through the system default output, which is what the
   // OS chose when the user plugged in.
   audioRoute: 'headset',
+  // v1.4.5 — sound-stream routing:
+  //   false (default) → USAGE_MEDIA + CONTENT_TYPE_SONIFICATION
+  //     Follows the everyday "media / music" volume slider users know.
+  //     Silenced by Do Not Disturb. Predictable for most people.
+  //   true            → USAGE_ALARM + CONTENT_TYPE_SONIFICATION
+  //     Follows the (usually louder + hidden) alarm slider. Rings through
+  //     silent mode / DND — good for hard workouts where you never want
+  //     to miss a segment boundary.
+  // The default was USAGE_ALARM in v1.3.3..v1.4.4; users complained that
+  // muting the alarm slider unexpectedly killed all sound (the "if my
+  // alarm volume is at 0% why can't I hear anything?" bug). v1.4.5
+  // defaults to media which matches how competing workout timers behave.
+  ringThroughDnd: false,
 };
 
 const TEMPLATES = [
@@ -1128,7 +1141,11 @@ class EngineRun {
         ? Voice._chainPaths.get(this.id)
         : null;
       const voiceEnabled = this.segments.map(s => effectiveCue(s, this.chain, 'voice'));
-      const audioRoute = Store.getSettings().audioRoute || 'headset';
+      const audioRoute     = Store.getSettings().audioRoute || 'headset';
+      // v1.4.5: media vs alarm stream. See DEFAULT_SETTINGS block for the
+      // rationale. Forwarded to the FGS so its MediaPlayer cue pool
+      // (chime / final-3 / finale / voice) uses the right USAGE.
+      const ringThroughDnd = !!Store.getSettings().ringThroughDnd;
       window.dispatchEvent(new CustomEvent(name, {
         detail: {
           runId: this.id,
@@ -1146,6 +1163,7 @@ class EngineRun {
           voicePaths,
           voiceEnabled,
           audioRoute,
+          ringThroughDnd,
         },
       }));
     } catch {}
@@ -1919,6 +1937,11 @@ const View = {
     if (name === 'templates') UI.renderTemplates();
     if (name === 'editor')    UI.renderEditor();
     if (name === 'run')       UI.renderRun();
+    // v1.4.5: library ticker is only useful when the library view is
+    // visible AND at least one chain is running (background clocks
+    // freeze otherwise because the focused-run rAF loop is what usually
+    // drives clock updates).
+    if (typeof UI._maybeStartLibraryTicker === 'function') UI._maybeStartLibraryTicker();
   },
 
   back() {
@@ -1960,16 +1983,25 @@ const UI = {
   renderLibrary() {
     const list = document.getElementById('chain-list');
     const empty = document.getElementById('empty-state');
-    const chains = Store.getChains();
+    const chainsRaw = Store.getChains();
 
     list.innerHTML = '';
-    empty.hidden = chains.length > 0;
+    empty.hidden = chainsRaw.length > 0;
 
-    // v1.4.4: refresh the now-playing strip whenever we redraw the library
-    // (fired on view mount, store changes, chain start/stop, etc.). The
-    // clock text is kept live by _updateNowPlayingClocks piggybacking on
-    // the engine's tick, so this is only the structural rebuild path.
-    UI.renderNowPlaying();
+    // v1.4.5: sort chains so running ones bubble to the top of the list.
+    // The stable relative order within each group is preserved (running
+    // chains keep the order Engine.activeRuns() reports them in — which
+    // is insertion order for the run map — and non-running chains keep
+    // the Store's own createdAt-descending order). The inline status card
+    // (see below) renders directly under each running card, so the two
+    // representations of the same chain never appear split across the
+    // scroll (the pre-v1.4.5 top strip was confusing on purpose).
+    const runningSet = new Set(Engine.activeRuns().map(r => r.id));
+    const chains = chainsRaw.slice().sort((a, b) => {
+      const ar = runningSet.has(a.id) ? 1 : 0;
+      const br = runningSet.has(b.id) ? 1 : 0;
+      return br - ar; // running (1) before not-running (0)
+    });
 
     document.getElementById('library-count').textContent =
       `${chains.length} ${chains.length === 1 ? 'chain' : 'chains'}`;
@@ -2025,6 +2057,20 @@ const UI = {
       li.appendChild(play);
       li.appendChild(tick);
       list.appendChild(li);
+
+      // v1.4.5: if this chain is running, immediately append the inline
+      // status card so the two DOM nodes stay visually attached (same
+      // parent list, no siblings between them). The status card mirrors
+      // the FGS persistent-notification shape: current segment, position,
+      // MM:SS remaining, next segment, play/pause icon, colour stripe.
+      // We also arm the swipe-to-stop gesture on BOTH the chain-card
+      // itself and the status card, so a horizontal drag anywhere across
+      // the combined unit fires the stop-confirm flow.
+      const run = Engine.runById(chain.id);
+      if (run && run.isRunning) {
+        UI._wireSwipeToStop(li, run.id);
+        list.appendChild(UI._buildInlineStatusCard(run));
+      }
 
       // segment preview pills
       const preview = li.querySelector(`#seg-preview-${safeId}`);
@@ -2705,6 +2751,8 @@ const UI = {
     document.getElementById('setting-wake').checked      = !!s.wake;
     document.getElementById('setting-prestart').checked  = !!s.prestart;
     document.getElementById('setting-finaltick').checked = !!s.finalTick;
+    const ringDndEl = document.getElementById('setting-ring-through-dnd');
+    if (ringDndEl) ringDndEl.checked = !!s.ringThroughDnd;
     // Final-3 tick depends on the sound channel being on at all — hide
     // the sub-row when sound is off so the user isn't toggling a setting
     // that has no audible effect.
@@ -3157,109 +3205,224 @@ const UI = {
       if (clock) clock.textContent = fmt(Math.ceil(remaining));
       chip.classList.toggle('is-paused', !!run.isPaused);
     });
-    // v1.4.4: same piggyback for the library now-playing strip. Guarded
-    // internally against the library view being hidden.
-    UI._updateNowPlayingClocks();
+    // v1.4.5: same piggyback for the library's inline status cards.
+    // Guarded internally against the library view being hidden.
+    UI._refreshRunningCards();
   },
 
-  // Render the library "now-playing" strip. Called on every library render
-  // + on Engine.onRunsChange. Rebuilds the DOM only when the set of
-  // running chains changes; clock text is updated in-place by
-  // _updateNowPlayingClocks. Idempotent.
-  renderNowPlaying() {
-    const wrap = document.getElementById('library-now-playing');
-    if (!wrap) return;
-    const runs = Engine.activeRuns();
-    if (!runs.length) {
-      wrap.hidden = true;
-      wrap.innerHTML = '';
-      return;
-    }
-    wrap.hidden = false;
-    wrap.innerHTML = '';
-    runs.forEach(run => {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'now-playing-row' + (run.isPaused ? ' is-paused' : '');
-      row.dataset.chainId = run.id;
-      row.setAttribute('aria-label', `Resume ${run.chain?.name || 'chain'}`);
+  // v1.4.5: build one inline status card for a running chain. Appended
+  // as a sibling <li> immediately after the parent chain-card by
+  // renderLibrary. Structural rebuild only — the mutable text (clock,
+  // paused icon, segment counter, next label) is refreshed in place by
+  // _refreshRunningCards on both the focused-run tick AND a 500ms
+  // interval that runs while the library view is visible with any
+  // running chain (fixes the "frozen countdown" bug where background
+  // runs' clocks stopped updating).
+  _buildInlineStatusCard(run) {
+    const li = document.createElement('li');
+    li.className = 'chain-status-card' + (run.isPaused ? ' is-paused' : '');
+    li.dataset.chainId = run.id;
 
-      const stripe = document.createElement('div');
-      stripe.className = 'now-playing-stripe';
-      stripe.style.background = colorHex(run.chain?.color) || 'var(--accent)';
+    const stripe = document.createElement('div');
+    stripe.className = 'chain-status-stripe';
+    stripe.style.background = colorHex(run.chain?.color) || 'var(--accent)';
 
-      const body = document.createElement('div');
-      body.className = 'now-playing-body';
+    const body = document.createElement('div');
+    body.className = 'chain-status-body';
 
-      const cur     = run.segments[run.currentIndex];
-      const next    = run.segments[run.currentIndex + 1];
-      const total   = run.segments.length;
-      const curName = cur?.name || 'Segment';
-      const nextName = next?.name || null;
+    const cur     = run.segments[run.currentIndex];
+    const next    = run.segments[run.currentIndex + 1];
+    const curName = cur?.name || 'Segment';
+    const nextName = next?.name || null;
 
-      const title = document.createElement('div');
-      title.className = 'now-playing-title';
-      title.innerHTML =
-        `<span class="now-playing-icon">${run.isPaused ? '⏸' : '▶'}</span>` +
-        escape(run.chain?.name || 'Untitled');
-      body.appendChild(title);
+    const line1 = document.createElement('div');
+    line1.className = 'chain-status-line1';
+    line1.innerHTML =
+      `<span class="status-icon">${run.isPaused ? '⏸' : '▶'}</span>` +
+      `<span class="status-seg">${escape(curName)}</span>`;
+    body.appendChild(line1);
 
-      const sub = document.createElement('div');
-      sub.className = 'now-playing-sub';
-      sub.innerHTML =
-        `<span class="now-playing-seg">${escape(curName)}</span>` +
-        `<span class="now-playing-sep">·</span>` +
-        `<span>Segment ${run.currentIndex + 1} of ${total}</span>`;
-      body.appendChild(sub);
+    const line2 = document.createElement('div');
+    line2.className = 'chain-status-line2';
+    line2.innerHTML =
+      `<span class="status-pos">Segment ${run.currentIndex + 1} of ${run.segments.length}</span>` +
+      (nextName ? `<span class="status-sep">·</span><span class="status-next">next: ${escape(nextName)}</span>` : '');
+    body.appendChild(line2);
 
-      if (nextName) {
-        const nxt = document.createElement('div');
-        nxt.className = 'now-playing-next';
-        nxt.textContent = `next: ${nextName}`;
-        body.appendChild(nxt);
-      }
+    const clock = document.createElement('div');
+    clock.className = 'status-clock';
+    const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
+    clock.textContent = fmt(Math.ceil(remaining));
 
-      const clock = document.createElement('div');
-      clock.className = 'now-playing-clock';
-      const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
-      clock.textContent = fmt(Math.ceil(remaining));
+    li.appendChild(stripe);
+    li.appendChild(body);
+    li.appendChild(clock);
 
-      row.appendChild(stripe);
-      row.appendChild(body);
-      row.appendChild(clock);
-
-      // Tap → focus that run and open its run view. Symmetric with the
-      // run-back button — same navigation, opposite direction.
-      row.addEventListener('click', () => {
-        Engine.focus(run.id);
-        View.show('run');
-      });
-      wrap.appendChild(row);
+    // Tap → focus that run and open its run view.
+    li.addEventListener('click', () => {
+      Engine.focus(run.id);
+      View.show('run');
     });
+    // Swipe-to-stop wiring lives in _wireSwipeToStop; called for both
+    // the chain card and the status card below to catch either target.
+    UI._wireSwipeToStop(li, run.id);
+    return li;
   },
 
-  // Refresh only the mutable text of the now-playing strip (clock, pause
-  // pill, segment counter). Called from _updateRunChipClocks every tick.
-  // Cheap: reads run state, writes text; no DOM structure changes.
-  _updateNowPlayingClocks() {
-    const wrap = document.getElementById('library-now-playing');
-    if (!wrap || wrap.hidden) return;
-    // Only walk the DOM if the library view is currently visible; the
-    // rAF frame is spent regardless but this avoids layout thrash.
+  // Refresh mutable text on every inline status card. Cheap: text-only.
+  // Called from three paths:
+  //   - The focused run's per-tick _updateRunChipClocks (kept live like before)
+  //   - The 500ms interval started/stopped by _startLibraryTicker
+  //   - Engine.onRunsChange (structural change — but that triggers a full
+  //     renderLibrary anyway; this one is defensive).
+  _refreshRunningCards() {
+    const list = document.getElementById('chain-list');
+    if (!list) return;
+    // Only walk the DOM if the library view is currently visible (saves
+    // some layout when the user is deep in a run view).
     const libView = document.querySelector('.view-library');
     if (libView && libView.hidden) return;
-    [...wrap.children].forEach(row => {
-      const id  = row.dataset.chainId;
+    const cards = list.querySelectorAll('.chain-status-card');
+    cards.forEach(card => {
+      const id  = card.dataset.chainId;
       const run = Engine.runById(id);
       if (!run) return;
       const cur = run.segments[run.currentIndex];
       const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
-      const clock = row.querySelector('.now-playing-clock');
+      const clock = card.querySelector('.status-clock');
       if (clock) clock.textContent = fmt(Math.ceil(remaining));
-      row.classList.toggle('is-paused', !!run.isPaused);
-      const icon = row.querySelector('.now-playing-icon');
+      card.classList.toggle('is-paused', !!run.isPaused);
+      const icon = card.querySelector('.status-icon');
       if (icon) icon.textContent = run.isPaused ? '⏸' : '▶';
+      // Cover auto-advance while user is on library: segment name +
+      // position + next-label update in place. A structural change
+      // (run added / removed) re-renders the whole library via
+      // Engine.onRunsChange.
+      const seg = card.querySelector('.status-seg');
+      if (seg && cur) seg.textContent = cur.name || 'Segment';
+      const pos = card.querySelector('.status-pos');
+      if (pos) pos.textContent = `Segment ${run.currentIndex + 1} of ${run.segments.length}`;
+      const nxt = card.querySelector('.status-next');
+      const nextSeg = run.segments[run.currentIndex + 1];
+      if (nxt) nxt.textContent = nextSeg ? `next: ${nextSeg.name || 'segment'}` : '';
     });
+  },
+
+  // 500ms interval refresher — starts when the library view becomes
+  // visible AND at least one chain is running; stops as soon as either
+  // condition flips false. Cheap self-terminating polling avoids the
+  // rAF-only path (which only ticks for the focused run — background
+  // runs' clocks used to freeze on the library view).
+  _libraryTickIv: null,
+  _startLibraryTicker() {
+    if (UI._libraryTickIv) return;
+    UI._libraryTickIv = setInterval(() => {
+      const libHidden = document.querySelector('.view-library')?.hidden;
+      if (libHidden || Engine.activeRunningCount() === 0) {
+        UI._stopLibraryTicker();
+        return;
+      }
+      UI._refreshRunningCards();
+    }, 500);
+  },
+  _stopLibraryTicker() {
+    if (UI._libraryTickIv) { clearInterval(UI._libraryTickIv); UI._libraryTickIv = null; }
+  },
+  _maybeStartLibraryTicker() {
+    const libHidden = document.querySelector('.view-library')?.hidden;
+    if (!libHidden && Engine.activeRunningCount() > 0) UI._startLibraryTicker();
+    else UI._stopLibraryTicker();
+  },
+
+  // v1.4.5 — swipe-to-stop gesture on running-chain rows (Task 4).
+  //
+  // Horizontal drag > SWIPE_STOP_THRESHOLD_PX in either direction on a
+  // running chain card (or its inline status card) triggers a confirm
+  // dialog and stops that chain. Feels like the email-swipe-to-delete
+  // pattern users know. Only armed on RUNNING chains; on non-running
+  // ones the gesture is inert so the swipe doesn't fight the vertical
+  // scroll or the long-press for select mode.
+  SWIPE_STOP_THRESHOLD_PX: 100,
+
+  _wireSwipeToStop(el, runId) {
+    if (!el || !runId) return;
+    let startX = 0, startY = 0, tracking = false, armed = false, dragged = 0;
+    // Only respond to primary button (not right-click) and skip when the
+    // pointer starts on an interactive descendant (play button, etc.) so
+    // the swipe doesn't steal the tap target.
+    const isInteractive = (n) => !!n.closest('button:not(.chain-status-card):not(.chain-card), input, .chain-card-select-tick');
+    // Card we visually drag (parent chain-card + its status card slide
+    // together, so we grab both and translate them as one unit).
+    const parentCard = el.classList.contains('chain-card')
+      ? el
+      : el.previousElementSibling;
+    const statusCard = el.classList.contains('chain-status-card')
+      ? el
+      : el.nextElementSibling?.classList?.contains('chain-status-card') ? el.nextElementSibling : null;
+    const dragTargets = [parentCard, statusCard].filter(Boolean);
+
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (isInteractive(e.target)) return;
+      // Only chains that are currently running are swipe-stoppable.
+      if (!Engine.isChainRunning(runId)) return;
+      tracking = true;
+      armed = false;
+      dragged = 0;
+      startX = e.clientX;
+      startY = e.clientY;
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      // Vertical scroll intent — abandon swipe.
+      if (Math.abs(dy) > 20 && Math.abs(dy) > Math.abs(dx)) {
+        tracking = false; armed = false; dragged = 0;
+        dragTargets.forEach(t => { t.style.transform = ''; t.classList.remove('is-swiping', 'is-swipe-stop-armed'); });
+        return;
+      }
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        dragged = dx;
+        // Clamp visual translation so it's obviously a gesture, not a full slide-out.
+        const shown = Math.max(-160, Math.min(160, dx));
+        dragTargets.forEach(t => {
+          t.classList.add('is-swiping');
+          t.style.transform = `translateX(${shown}px)`;
+        });
+        const nowArmed = Math.abs(dx) > UI.SWIPE_STOP_THRESHOLD_PX;
+        if (nowArmed !== armed) {
+          armed = nowArmed;
+          dragTargets.forEach(t => t.classList.toggle('is-swipe-stop-armed', armed));
+        }
+      }
+    });
+    const endSwipe = () => {
+      const commit = tracking && armed;
+      tracking = false;
+      armed = false;
+      dragTargets.forEach(t => {
+        t.style.transform = '';
+        t.classList.remove('is-swiping', 'is-swipe-stop-armed');
+      });
+      const dxAbs = Math.abs(dragged);
+      dragged = 0;
+      if (!commit) return;
+      const run = Engine.runById(runId);
+      if (!run) return;
+      const name = run.chain?.name || 'this chain';
+      if (confirm(`Stop "${name}"?`)) {
+        Engine.stopRun(runId);
+      }
+      // Suppress the click event Chrome fires after a long pointerdown/up
+      // when we've decided the gesture was a swipe. Not strictly needed
+      // (isInteractive gate on the click handler would kick in) but
+      // defensive so the tap-to-focus doesn't fire concurrently.
+      void dxAbs;
+    };
+    el.addEventListener('pointerup',     endSwipe);
+    el.addEventListener('pointercancel', endSwipe);
+    el.addEventListener('pointerleave',  endSwipe);
   },
 
   // ------- Update modal -------
@@ -3407,6 +3570,18 @@ function init() {
   wireToggle('setting-wake', 'wake');
   wireToggle('setting-prestart', 'prestart');
   wireToggle('setting-finaltick', 'finalTick');
+  // v1.4.5 — Ring through DND toggle. Changing this while a chain is
+  // running triggers a rebuild of the FGS MediaPlayer cue pool via the
+  // next chain:fgsupdate emit (see EXTRA_RING_THROUGH_DND in the Java
+  // service). If no chain is running, the setting just persists.
+  const ringDndEl = document.getElementById('setting-ring-through-dnd');
+  if (ringDndEl) {
+    ringDndEl.addEventListener('change', () => {
+      Store.setSetting('ringThroughDnd', !!ringDndEl.checked);
+      // Refresh every active run so the change propagates immediately.
+      Engine.activeRuns().forEach(r => { try { r._emit('chain:fgsupdate'); } catch {} });
+    });
+  }
 
   // Audio routing pill (Headset only / Both / Speaker only)
   document.querySelectorAll('#setting-route button[data-route]').forEach(btn => {
@@ -3605,10 +3780,23 @@ function init() {
   // to the library, KEEPING every active chain running. The library now-
   // playing strip re-mounts on show so the user can jump back into a run
   // by tapping it. Symmetric with the way the browser's back button feels.
+  //
+  // v1.4.5: intentionally does NOT cancel a running prestart. If the user
+  // tapped Start (which triggered the 3-2-1 overlay) and then decides to
+  // go back to launch a second chain, the prestart interval keeps
+  // counting down invisibly and Engine.startChain fires at the end just
+  // like it would have. The user lands on the library and can start
+  // additional chains immediately; when the prestart interval completes,
+  // the running chain shows up in the now-playing list. run-stop (X)
+  // still cancels the prestart because there the user's intent is
+  // "abort this chain" not "navigate elsewhere".
   const goBackToLibraryKeepRunning = () => {
     if (View.current === 'library') return;
-    UI.cancelPrestart();
     UI.hideCompletion();
+    // Hide the prestart overlay visually (the timer keeps running); we
+    // don't want to see the '3-2-1' when we're navigating away.
+    const preOv = document.getElementById('run-prestart');
+    if (preOv && !preOv.hidden) preOv.hidden = true;
     View.show('library');
   };
   document.getElementById('run-back').addEventListener('click', goBackToLibraryKeepRunning);
@@ -3712,7 +3900,14 @@ function init() {
   // updateRunClock) so background clocks stay live.
   Engine.onRunsChange = () => {
     UI.renderRunChips();
-    UI.renderNowPlaying();
+    // v1.4.5: re-render the whole library so running chains re-sort to
+    // the top (or drop back down when they end) and inline status cards
+    // are added / removed. Also (re)start the 500ms library ticker so
+    // background runs' clocks stay live while the user is on library.
+    if (View.current === 'library') {
+      UI.renderLibrary();
+      UI._maybeStartLibraryTicker();
+    }
   };
 
   // v1.4 — selection-mode topbar buttons.

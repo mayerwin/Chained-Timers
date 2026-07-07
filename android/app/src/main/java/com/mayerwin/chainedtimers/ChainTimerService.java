@@ -108,6 +108,9 @@ public class ChainTimerService extends Service {
     public static final String EXTRA_VOICE_PATHS_JSON      = "voicePathsJson";
     public static final String EXTRA_VOICE_ENABLED_JSON    = "voiceEnabledJson";
     public static final String EXTRA_AUDIO_ROUTE           = "audioRoute";
+    // v1.4.5 — false → MediaPlayer cue pool uses USAGE_MEDIA (media slider,
+    // silenced by DND). true → USAGE_ALARM (alarm slider, rings through DND).
+    public static final String EXTRA_RING_THROUGH_DND      = "ringThroughDnd";
 
     /**
      * v1.4.1 — identifies which run this intent applies to. Falls back
@@ -192,6 +195,12 @@ public class ChainTimerService extends Service {
         final List<String> voicePaths = new ArrayList<>();
         final List<Boolean> voiceEnabled = new ArrayList<>();
         String audioRoute = "headset";
+        // v1.4.5 — false → USAGE_MEDIA (media-volume slider, silenced by DND).
+        // true  → USAGE_ALARM (alarm slider, rings through DND). Read from
+        // the "ringThroughDnd" extra on every start/update; a change while
+        // a run is live rebuilds the MediaPlayer cue pool (createPreparedPlayer
+        // must be called with the desired USAGE BEFORE prepare()).
+        boolean ringThroughDnd = false;
         int lastVoicedAtIndex = -1;
 
         android.media.MediaPlayer chimePlayer;
@@ -293,6 +302,17 @@ public class ChainTimerService extends Service {
             String previousRoute = run.audioRoute;
             run.audioRoute = routeExtra;
             if (!previousRoute.equals(run.audioRoute)) applyAudioRouteToCuePool(run);
+        }
+        // v1.4.5 — media vs alarm stream. AudioAttributes MUST be set
+        // before MediaPlayer.prepare(), so a change forces a full rebuild
+        // of the cue MediaPlayer pool for this run.
+        if (intent.hasExtra(EXTRA_RING_THROUGH_DND)) {
+            boolean previousDnd = run.ringThroughDnd;
+            run.ringThroughDnd = intent.getBooleanExtra(EXTRA_RING_THROUGH_DND, false);
+            if (previousDnd != run.ringThroughDnd) {
+                releaseCueMediaPlayers(run);
+                ensureMediaPlayers(run);
+            }
         }
 
         if (ACTION_COMPLETE.equals(action)) {
@@ -1099,9 +1119,15 @@ public class ChainTimerService extends Service {
     private void ensureMediaPlayers(ChainRun run) {
         if (run.chimePlayer != null) return;
         try {
-            run.chimePlayer      = createPreparedPlayer(R.raw.chime);
-            run.finalThreePlayer = createPreparedPlayer(R.raw.final3);
-            run.finalePlayer     = createPreparedPlayer(R.raw.finale);
+            // v1.4.5 — USAGE picked per-run from ringThroughDnd:
+            //   false → USAGE_MEDIA (default, media slider, silenced by DND)
+            //   true  → USAGE_ALARM (alarm slider, rings through DND)
+            int usage = run.ringThroughDnd
+                ? AudioAttributes.USAGE_ALARM
+                : AudioAttributes.USAGE_MEDIA;
+            run.chimePlayer      = createPreparedPlayer(R.raw.chime,   usage);
+            run.finalThreePlayer = createPreparedPlayer(R.raw.final3,  usage);
+            run.finalePlayer     = createPreparedPlayer(R.raw.finale,  usage);
             applyAudioRouteToCuePool(run);
             warmCueMediaPlayers(run);
         } catch (Throwable t) {
@@ -1126,7 +1152,7 @@ public class ChainTimerService extends Service {
         } catch (Throwable ignored) {}
     }
 
-    private android.media.MediaPlayer createPreparedPlayer(int resId) throws Exception {
+    private android.media.MediaPlayer createPreparedPlayer(int resId, int usage) throws Exception {
         // NOTE: we deliberately avoid MediaPlayer.create(context, resId) here.
         // That factory calls prepare() internally, and per the docs
         // setAudioAttributes MUST be called before prepare/prepareAsync to
@@ -1137,9 +1163,12 @@ public class ChainTimerService extends Service {
         // pattern below) correctly rides STREAM_ALARM. That mismatch is
         // what the user perceived as "voice is always at max and doesn't
         // follow the beep volume" (v1.4.4).
+        //
+        // v1.4.5 — usage is passed in per-run: USAGE_MEDIA (default) or
+        // USAGE_ALARM (when the user has "Ring through DND" enabled).
         android.media.MediaPlayer mp = new android.media.MediaPlayer();
         AudioAttributes attrs = new AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setUsage(usage)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
         mp.setAudioAttributes(attrs);
@@ -1193,8 +1222,12 @@ public class ChainTimerService extends Service {
         releaseVoicePlayer(run);
         try {
             android.media.MediaPlayer mp = new android.media.MediaPlayer();
+            // v1.4.5 — same usage policy as the cue MediaPlayer pool.
+            int usage = run.ringThroughDnd
+                ? android.media.AudioAttributes.USAGE_ALARM
+                : android.media.AudioAttributes.USAGE_MEDIA;
             android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
-                .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                .setUsage(usage)
                 .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build();
             mp.setAudioAttributes(attrs);

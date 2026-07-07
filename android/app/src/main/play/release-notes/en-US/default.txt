@@ -1,7 +1,7 @@
-v1.4.4 — Reliability + navigation
+v1.4.5 — Library reorg + audible where you'd expect
 
-• Voice cues now honestly share the alarm-volume slider with the beeps (they used to sit on media volume, so voice sounded "always max"). Same output device foreground and background.
-• Back arrow + swipe-left in the run view — return to the library without stopping the chain.
-• Library now shows a live "now playing" strip for each running chain.
-• Up to 5 concurrent chains (was 2).
-• In-app update prompt via Play In-App Updates.
+• Sound now follows the media volume slider by default (was alarm). New setting "Ring through Do Not Disturb" flips back to alarm.
+• Running chains sort to the top; live status card sits directly under each.
+• Countdown for background chains no longer freezes on the library.
+• Slide any running chain left or right to stop it.
+• 3-2-1 overlay no longer hides the back arrow.
