@@ -74,14 +74,27 @@ if (-not $npm) {
 # --- Step 1+2: build web assets + cap sync ---
 Push-Location $repo
 try {
+    # Native commands (npm, gradlew) sometimes write routine info /
+    # warnings to stderr. With $ErrorActionPreference='Stop' at file
+    # scope, PowerShell converts *any* stderr from a native command into
+    # a terminating NativeCommandError -- BEFORE we ever get a chance
+    # to inspect $LASTEXITCODE. The idiomatic Windows workaround is to
+    # temporarily switch to 'Continue' around each native invocation
+    # and rely on our own $LASTEXITCODE check for pass/fail.
+    $prevEAP = $ErrorActionPreference
+
     if (-not (Test-Path 'node_modules')) {
         Write-Host 'Installing npm dependencies (one-time)...' -ForegroundColor Cyan
+        $ErrorActionPreference = 'Continue'
         & $npm ci --no-fund --no-audit
+        $ErrorActionPreference = $prevEAP
         if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
     }
 
     Write-Host 'Building web assets and syncing Capacitor...' -ForegroundColor Cyan
+    $ErrorActionPreference = 'Continue'
     & $npm run cap:sync
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) { throw 'cap sync failed' }
 
     # --- Step 3: gradle bundleRelease ---
@@ -92,15 +105,12 @@ try {
 
     Push-Location (Join-Path $repo 'android')
     try {
-        # Merge stderr into stdout (2>&1) so PowerShell doesn't treat
-        # javac's routine warnings ("Note: Some input files use unchecked
-        # or unsafe operations") as fatal NativeCommandError. The build
-        # still fails via $LASTEXITCODE below when gradle actually
-        # exit-non-zeros.
-        & .\gradlew.bat bundleRelease --console=plain 2>&1 | ForEach-Object { "$_" }
+        $ErrorActionPreference = 'Continue'
+        & .\gradlew.bat bundleRelease --console=plain
+        $ErrorActionPreference = $prevEAP
         if ($LASTEXITCODE -ne 0) { throw "gradle bundleRelease failed (exit $LASTEXITCODE)" }
     }
-    finally { Pop-Location }
+    finally { Pop-Location; $ErrorActionPreference = $prevEAP }
 }
 finally { Pop-Location }
 

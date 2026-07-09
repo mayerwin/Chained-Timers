@@ -132,25 +132,31 @@ $env:PLAY_TRACK          = $primaryTrack
 $env:PLAY_RELEASE_STATUS = $status.ToUpper()
 
 Push-Location (Join-Path $repo 'android')
+$prevEAP = $ErrorActionPreference
 try {
     Write-Host ''
     Write-Host "Uploading AAB to track '$primaryTrack' (gradle publishBundle)..." -ForegroundColor Cyan
     Write-Host ''
-    # 2>&1 pipes native stderr into stdout so PowerShell doesn't treat
-    # gradle's routine warnings as fatal NativeCommandError. Real failures
-    # still trip $LASTEXITCODE.
-    & .\gradlew.bat publishBundle --console=plain 2>&1 | ForEach-Object { "$_" }
+    # Temporarily switch to 'Continue' so native stderr (gradle warnings,
+    # deprecation notices, javac unchecked-ops noise) doesn't become a
+    # terminating NativeCommandError before we can check $LASTEXITCODE.
+    # See the same pattern in 3-build-play-aab.ps1 for the full rationale.
+    $ErrorActionPreference = 'Continue'
+    & .\gradlew.bat publishBundle --console=plain
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) { throw "gradle publishBundle failed (exit $LASTEXITCODE)" }
 
     foreach ($track in $additionalTracks) {
         Write-Host ''
         Write-Host "Promoting same artifact to track '$track' (gradle promoteArtifact)..." -ForegroundColor Cyan
         Write-Host ''
-        & .\gradlew.bat promoteArtifact "--from-track=$primaryTrack" "--promote-track=$track" --console=plain 2>&1 | ForEach-Object { "$_" }
+        $ErrorActionPreference = 'Continue'
+        & .\gradlew.bat promoteArtifact "--from-track=$primaryTrack" "--promote-track=$track" --console=plain
+        $ErrorActionPreference = $prevEAP
         if ($LASTEXITCODE -ne 0) { throw "gradle promoteArtifact -> '$track' failed (exit $LASTEXITCODE)" }
     }
 }
-finally { Pop-Location }
+finally { Pop-Location; $ErrorActionPreference = $prevEAP }
 
 Write-Host ''
 Write-Host 'Done.' -ForegroundColor Green
