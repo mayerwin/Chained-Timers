@@ -1,7 +1,6 @@
-v1.4.5 — Library reorg + audible where you'd expect
+v1.4.6 — Duration UX polish
 
-• Sound now follows the media volume slider by default (was alarm). New setting "Ring through Do Not Disturb" flips back to alarm.
-• Running chains sort to the top; live status card sits directly under each.
-• Countdown for background chains no longer freezes on the library.
-• Slide any running chain left or right to stop it.
-• 3-2-1 overlay no longer hides the back arrow.
+• Duration picker: Pixel-style "00h 00m 00s" layout — no colons, unit letters attached to each field. Minutes now focused by default (was seconds).
+• Segment durations render as "01h 05m 30s" / "05m 03s" / "10s" — zero parts dropped, right-aligned so unit letters line up across every row.
+• Editor TOTAL always shows HH:MM:SS for at-a-glance comparison.
+• Running-timer clocks + chain-card totals unchanged.

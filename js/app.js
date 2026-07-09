@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.4.6';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -376,6 +376,38 @@ const fmtLong = (totalSeconds) => {
   if (m) parts.push(`${m}m`);
   if (s || parts.length === 0) parts.push(`${s}s`);
   return parts.join(' ');
+};
+
+// Always-HH:MM:SS for the editor TOTAL — full three-part zero-padded
+// format, e.g. 00:01:30. Used only at the top of the editor stats grid.
+const fmtHHMMSS = (totalSeconds) => {
+  totalSeconds = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+};
+
+// Right-aligned "01h 05m 30s" / "05m 03s" / "10s" for the segment
+// list. Leading zero parts are dropped, remaining parts are
+// zero-padded to two digits, and columns line up because every
+// non-suppressed part is a fixed width. Returned as an HTML fragment
+// so we can style each part with a stable inline-block width — no
+// dependency on tabular-nums font support in the display font.
+const fmtSegDurationHTML = (totalSeconds) => {
+  totalSeconds = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  // Show a slot even when suppressed so all rows align to the right.
+  const hSlot = h > 0             ? `${pad(h)}h` : '';
+  const mSlot = (h > 0 || m > 0)  ? `${pad(m)}m` : '';
+  const sSlot = `${pad(s)}s`;
+  return `<span class="sd-h">${hSlot}</span>` +
+         `<span class="sd-m">${mSlot}</span>` +
+         `<span class="sd-s">${sSlot}</span>`;
 };
 
 // ============================================================
@@ -2470,7 +2502,11 @@ const UI = {
 
     // stats
     const total = chainTotalSeconds(draft);
-    document.getElementById('editor-total').textContent = fmt(total);
+    // Editor TOTAL is always three-part HH:MM:SS so an at-a-glance
+    // comparison across chains has a fixed shape. Segment durations,
+    // the chain-card total, and the run-view clock keep their own
+    // (compact / no-zero-parts) formats.
+    document.getElementById('editor-total').textContent = fmtHHMMSS(total);
     document.getElementById('editor-count').textContent = expandChain(draft).length;
     document.getElementById('editor-loops').textContent = draft.loops || 1;
 
@@ -2554,7 +2590,11 @@ const UI = {
 
       const dur = document.createElement('button');
       dur.className = 'segment-duration';
-      dur.textContent = fmt(seg.duration);
+      // Right-aligned "01h 05m 30s" / "05m 03s" / "10s" via fmtSegDurationHTML.
+      // Each unit is wrapped so CSS can width-lock each part, giving the
+      // "same units at the same distance from the right" alignment the
+      // user asked for.
+      dur.innerHTML = fmtSegDurationHTML(seg.duration);
       dur.addEventListener('click', () => UI.openDurationPicker(seg));
       li.appendChild(dur);
     }
@@ -2608,7 +2648,7 @@ const UI = {
   renderLibraryStatsOnly() {
     if (!Editor.draft) return;
     const total = chainTotalSeconds(Editor.draft);
-    document.getElementById('editor-total').textContent = fmt(total);
+    document.getElementById('editor-total').textContent = fmtHHMMSS(total);
     document.getElementById('editor-count').textContent = expandChain(Editor.draft).length;
   },
 
@@ -2683,7 +2723,15 @@ const UI = {
     document.getElementById('dpick-m').value = String(m).padStart(2, '0');
     document.getElementById('dpick-s').value = String(s).padStart(2, '0');
     sheet.hidden = false;
-    setTimeout(() => document.getElementById('dpick-s').focus(), 100);
+    // v1.4.6: focus the MINUTES field by default. Interval-timer users
+    // reach for minutes far more often than seconds (typical durations
+    // are 30s, 1m, 1m30, 3m — either the second field or the minute
+    // field, but minutes is the more common landing).
+    setTimeout(() => {
+      const mEl = document.getElementById('dpick-m');
+      mEl.focus();
+      mEl.select();
+    }, 100);
   },
 
   closeDurationPicker() {

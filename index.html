@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="./css/styles.css?v=1.4.3" />
+  <link rel="stylesheet" href="./css/styles.css?v=1.4.6" />
 </head>
 <body data-view="library">
 
@@ -517,26 +517,33 @@
           </button>
         </header>
         <div class="sheet-body">
+          <!-- v1.4.6: Pixel-style inline unit suffix ("00h 00m 00s"),
+               no colon separators, no under-labels. Each column shows
+               the input with its unit letter tucked to the right of it. -->
           <div class="dpick">
             <div class="dpick-col">
               <button class="dpick-step" data-dpick="h+">▲</button>
-              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-h" value="00" />
+              <div class="dpick-input-wrap">
+                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-h" value="00" aria-label="Hours" />
+                <span class="dpick-unit" aria-hidden="true">h</span>
+              </div>
               <button class="dpick-step" data-dpick="h-">▼</button>
-              <span class="dpick-lbl">hrs</span>
             </div>
-            <span class="dpick-sep">:</span>
             <div class="dpick-col">
               <button class="dpick-step" data-dpick="m+">▲</button>
-              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-m" value="00" />
+              <div class="dpick-input-wrap">
+                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-m" value="00" aria-label="Minutes" />
+                <span class="dpick-unit" aria-hidden="true">m</span>
+              </div>
               <button class="dpick-step" data-dpick="m-">▼</button>
-              <span class="dpick-lbl">min</span>
             </div>
-            <span class="dpick-sep">:</span>
             <div class="dpick-col">
               <button class="dpick-step" data-dpick="s+">▲</button>
-              <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-s" value="30" />
+              <div class="dpick-input-wrap">
+                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-s" value="30" aria-label="Seconds" />
+                <span class="dpick-unit" aria-hidden="true">s</span>
+              </div>
               <button class="dpick-step" data-dpick="s-">▼</button>
-              <span class="dpick-lbl">sec</span>
             </div>
           </div>
           <div class="dpick-quick">
@@ -587,8 +594,8 @@
 
   </div>
 
-  <script src="./js/app.js?v=1.4.5"></script>
+  <script src="./js/app.js?v=1.4.6"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.4.5"></script>
+  <script src="./js/native.js?v=1.4.6"></script>
 </body>
 </html>

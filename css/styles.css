@@ -1069,7 +1069,7 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   font-family: var(--f-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
-  font-size: 22px;
+  font-size: 20px;
   color: var(--ink);
   letter-spacing: 0.02em;
   padding: 6px 10px;
@@ -1077,8 +1077,27 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   border: 1px solid var(--rule);
   cursor: pointer;
   transition: border-color 140ms, color 140ms, background 140ms;
+  text-align: right;
+  /* Enough width to hold "01h 05m 30s" in the display font. Segments
+     without hours/minutes still take up the full width, so every row's
+     unit letters line up at the right. */
+  min-width: 130px;
+  white-space: nowrap;
 }
 .segment-duration:hover { border-color: var(--accent); color: var(--accent); }
+/* Three column slots inside .segment-duration. Each slot is a fixed
+   width so the "s" / "m" / "h" letters land at the same x-coordinate
+   across every row, regardless of which parts are populated. */
+.segment-duration .sd-h,
+.segment-duration .sd-m,
+.segment-duration .sd-s {
+  display: inline-block;
+  text-align: right;
+  min-width: 34px;   /* "00h" fits, "00m" fits, "00s" fits, empty fits */
+}
+/* Small gap between slots so the "10s" case doesn't hug the border. */
+.segment-duration .sd-m,
+.segment-duration .sd-s { margin-left: 4px; }
 
 .segment-remove {
   width: 32px; height: 32px;
@@ -2169,12 +2188,15 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 
 /* ===== Duration picker ===== */
+/* v1.4.6 — Pixel-style: no colon separators, no under-labels; each
+   input has its unit letter (h/m/s) tucked directly to its right.
+   Reads left-to-right as "00h 00m 00s" like the Pixel Clock timer. */
 
 .dpick {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 8px;
   padding: 18px 0 10px;
 }
 .dpick-col {
@@ -2182,15 +2204,19 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  min-width: 64px;
+  min-width: 84px;
+}
+.dpick-input-wrap {
+  position: relative;
+  display: inline-block;
 }
 .dpick-input {
   background: var(--surface-2);
   border: 1px solid var(--rule);
   border-radius: var(--r-sm);
-  padding: 12px 8px;
-  width: 72px;
-  text-align: center;
+  padding: 12px 24px 12px 12px;   /* right-pad leaves room for the unit letter */
+  width: 88px;
+  text-align: right;
   font-family: var(--f-mono);
   font-variant-numeric: tabular-nums;
   font-size: 32px;
@@ -2200,6 +2226,17 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   transition: border-color 140ms;
 }
 .dpick-input:focus { border-color: var(--accent); }
+.dpick-unit {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--f-mono);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  pointer-events: none;
+}
 .dpick-step {
   width: 28px; height: 22px;
   display: grid; place-items: center;
@@ -2210,20 +2247,6 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   transition: background 140ms, color 140ms;
 }
 .dpick-step:hover { background: var(--accent); color: var(--bg); }
-.dpick-lbl {
-  font-family: var(--f-mono);
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
-.dpick-sep {
-  font-family: var(--f-mono);
-  font-size: 32px;
-  color: var(--ink-faint);
-  padding: 0 2px;
-  margin-top: -10px;
-}
 
 .dpick-quick {
   display: flex;
