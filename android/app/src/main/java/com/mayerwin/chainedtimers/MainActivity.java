@@ -72,4 +72,32 @@ public class MainActivity extends BridgeActivity {
             android.util.Log.w("ChainedTimers", "keepWebViewRunning failed", t);
         }
     }
+
+    /**
+     * Android hardware / gesture back button.
+     *
+     * The default Capacitor behaviour is to exit the activity outright,
+     * which for a single-Activity SPA feels like the app "closes" from
+     * anywhere — including the editor and the run view. Instead we fire
+     * a "chainBack" event into JS; the JS handler decides whether to
+     * close a sheet, navigate to the library, or ask us to actually
+     * exit via ChainTimerPlugin.exitApp().
+     *
+     * Deprecated in Android 14+ in favour of OnBackInvokedCallback /
+     * predictive back, but still functional and simpler to wire.
+     * When we adopt predictive back we'll switch to the new API and
+     * keep the same JS event contract.
+     */
+    @Override
+    public void onBackPressed() {
+        if (bridge != null) {
+            try {
+                bridge.triggerJSEvent("chainBack", "window");
+                return; // JS owns the decision
+            } catch (Throwable t) {
+                android.util.Log.w("ChainedTimers", "chainBack dispatch failed", t);
+            }
+        }
+        super.onBackPressed();
+    }
 }

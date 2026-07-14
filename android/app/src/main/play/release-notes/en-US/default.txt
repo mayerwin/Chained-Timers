@@ -1,6 +1,8 @@
-v1.4.6 — Duration UX polish
+v1.4.7 — Numpad picker & polish
 
-• Duration picker: Pixel-style "00h 00m 00s" layout — no colons, unit letters attached to each field. Minutes now focused by default (was seconds).
-• Segment durations render as "01h 05m 30s" / "05m 03s" / "10s" — zero parts dropped, right-aligned so unit letters line up across every row.
-• Editor TOTAL always shows HH:MM:SS for at-a-glance comparison.
-• Running-timer clocks + chain-card totals unchanged.
+• Pixel Clock–style numpad picker: digits shift left as you type — 11515 → 1h 15m 15s.
+• Preset chips now ADD to the current value (+10s, +30s, +1m, +2m, +5m, +10m).
+• Android back button navigates in-app instead of exiting.
+• Segments with no name stay silent (no more "Segment" TTS).
+• Chain name is editable while running.
+• Card totals now read as "1h 5m 30s".

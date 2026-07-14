@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.6';
+const APP_VERSION = '1.4.7';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -536,8 +536,15 @@ function expandChain(rootChain, opts = {}) {
           });
         }
       } else {
+        // hasName: did the user actually type a name, or are we defaulting?
+        // Voice cues gate on this so unnamed segments don't speak the
+        // literal word "Segment" — see v1.4.7. Display sites still show
+        // the "Segment" fallback so the run view / notification aren't
+        // blank.
+        const rawName = (seg.name || '').trim();
         const expanded = {
-          name: seg.name || 'Segment',
+          name: rawName || 'Segment',
+          hasName: !!rawName,
           duration: Math.max(1, seg.duration | 0),
           color: seg.color || rootChain.color || 'amber',
           path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
@@ -762,7 +769,12 @@ const Voice = {
     if (!window.ChainedNative?.isNative) return [];
     const ct = this._chainTimer();
     if (!ct) return [];
-    const texts = segments.map(s => s?.name || 'Segment');
+    // v1.4.7: unnamed segments render as empty strings — the plugin
+    // treats them as "no voice for this segment" (returns a null path)
+    // and the FGS stays silent at that boundary. The old fallback to
+    // the literal word "Segment" was gratingly meaningless when the
+    // user had left a segment name blank on purpose.
+    const texts = segments.map(s => (s && s.name) ? s.name : '');
     const key   = texts.join('');
     const id    = chainId || '__default__';
     if (this._chainKeys.get(id) === key && this._chainPaths.get(id)?.length === texts.length) {
@@ -1133,7 +1145,9 @@ class EngineRun {
     const willAnyVoiceFire = this.segments.some(s => effectiveCue(s, this.chain, 'voice'));
     if (willAnyVoiceFire && !opts.suppressInAppStart) Voice.warmupForChain(this.segments);
     if (Store.getSettings().wake) Wake.acquire();
-    if (!opts.suppressInAppStart && this.segments[0] && effectiveCue(this.segments[0], this.chain, 'voice')) {
+    if (!opts.suppressInAppStart && this.segments[0]
+        && this.segments[0].hasName
+        && effectiveCue(this.segments[0], this.chain, 'voice')) {
       Voice.speak(this.segments[0].name);
     }
 
@@ -1323,7 +1337,7 @@ class EngineRun {
       const nextSeg = this.segments[this.currentIndex];
       if (!isUserSkip && effectiveCue(seg,     this.chain, 'sound'))   Audio.chime();
       if (!isUserSkip && effectiveCue(seg,     this.chain, 'vibrate')) Vibe.segmentEnd();
-      if (nextSeg && effectiveCue(nextSeg, this.chain, 'voice')) Voice.speak(nextSeg.name);
+      if (nextSeg && nextSeg.hasName && effectiveCue(nextSeg, this.chain, 'voice')) Voice.speak(nextSeg.name);
       if (!isUserSkip && nextSeg) {
         Notif.show(`Next: ${nextSeg.name}`, `${fmtLong(nextSeg.duration)} · ${this.currentIndex + 1} of ${this.segments.length}`);
       }
@@ -2059,7 +2073,7 @@ const UI = {
       body.innerHTML = `
         <div class="chain-card-row1">
           <div class="chain-card-name">${escape(chain.name || 'Untitled')}</div>
-          <div class="chain-card-total">${escape(fmt(total))}</div>
+          <div class="chain-card-total">${escape(fmtLong(total))}</div>
         </div>
         <div class="chain-card-segments" id="seg-preview-${safeId}"></div>
         <div class="chain-card-meta">
@@ -2428,7 +2442,7 @@ const UI = {
       li.innerHTML = `
         <div class="template-card-head">
           <div class="template-card-title" style="color: ${colorHex(tpl.color)}">${escape(tpl.name)}</div>
-          <div class="template-card-time">${escape(fmt(expandedDur))}</div>
+          <div class="template-card-time">${escape(fmtLong(expandedDur))}</div>
         </div>
         <div class="template-card-desc">${escape(tpl.desc)}</div>
         <div class="template-card-segments"></div>
@@ -2437,7 +2451,7 @@ const UI = {
       tpl.segments.forEach(s => {
         const pill = document.createElement('span');
         pill.className = 'template-pill';
-        pill.textContent = `${s.name} · ${fmt(s.duration)}`;
+        pill.textContent = `${s.name} · ${fmtLong(s.duration)}`;
         pill.style.color = colorHex(s.color);
         pill.style.borderColor = colorHex(s.color) + '44';
         segWrap.appendChild(pill);
@@ -2478,7 +2492,12 @@ const UI = {
     document.getElementById('editor-mode-label').textContent = Editor.draftId ? (locked ? 'Running' : 'Editing') : 'New';
     const nameInput = document.getElementById('editor-name');
     nameInput.value = draft.name;
-    nameInput.disabled = locked;
+    // v1.4.7 — chain NAME stays editable even while running. It's a
+    // pure display label; changing it doesn't touch the segment array,
+    // the voice cache, or the elapsed-time bookkeeping. The rest of
+    // the editor still locks (see [data-locked=true] rules in CSS) so
+    // segments / loops / colors can't be swapped mid-run.
+    nameInput.disabled = false;
 
     // Chain-level cue bell — dot indicator lights up when any chain-level
     // cue is explicitly overridden. Click opens the chain-scoped cue sheet.
@@ -2570,7 +2589,7 @@ const UI = {
     } else {
       body.innerHTML = `
         <span class="segment-num">№ ${idx + 1}</span>
-        <input type="text" class="segment-name-input" value="${escape(seg.name || '')}" placeholder="Segment name" maxlength="48" />
+        <input type="text" class="segment-name-input" value="${escape(seg.name || '')}" placeholder="Name" maxlength="48" />
         <div class="segment-meta">
           <button class="seg-color-btn" aria-label="Cycle color" style="background: ${colorHex(seg.color)}"></button>
         </div>`;
@@ -2709,29 +2728,30 @@ const UI = {
     });
   },
 
-  // ------- Duration picker -------
+  // ------- Duration picker (v1.4.7 Pixel-Clock numpad) -------
+  //
+  // State: dpickDigits is a 6-character string of decimal digits in
+  // HHMMSS order — "000030" = 30 seconds, "013000" = 1h 30m 00s. Digit
+  // keypresses shift the string left and append the new digit in the
+  // ones slot. Backspace shifts right and prepends a 0. Presets and
+  // "seed from existing segment" write directly to a total-seconds
+  // value which we then re-encode into the 6-digit string.
+  //
+  // Why HHMMSS and not just a total-seconds int? Because Pixel Clock's
+  // model *is* digit-based — typing 999 gives you 0h 09m 99s, not
+  // 10m 39s. Users know that model. If we normalised on every keypress
+  // the display would jump around unhelpfully as digits push through.
+  // We normalise ONLY at commit time (99s → 1m 39s).
 
   durationTarget: null,
+  dpickDigits: '000000',
+  dpickPristine: true,  // first keypress replaces the seed value entirely
 
   openDurationPicker(seg) {
-    UI.durationTarget = seg;
-    const sheet = document.getElementById('duration-sheet');
-    const h = Math.floor(seg.duration / 3600);
-    const m = Math.floor((seg.duration % 3600) / 60);
-    const s = seg.duration % 60;
-    document.getElementById('dpick-h').value = String(h).padStart(2, '0');
-    document.getElementById('dpick-m').value = String(m).padStart(2, '0');
-    document.getElementById('dpick-s').value = String(s).padStart(2, '0');
-    sheet.hidden = false;
-    // v1.4.6: focus the MINUTES field by default. Interval-timer users
-    // reach for minutes far more often than seconds (typical durations
-    // are 30s, 1m, 1m30, 3m — either the second field or the minute
-    // field, but minutes is the more common landing).
-    setTimeout(() => {
-      const mEl = document.getElementById('dpick-m');
-      mEl.focus();
-      mEl.select();
-    }, 100);
+    UI.durationTarget  = seg;
+    UI.dpickPristine   = true;
+    UI._setDpickFromSeconds(Math.max(0, seg.duration | 0));
+    document.getElementById('duration-sheet').hidden = false;
   },
 
   closeDurationPicker() {
@@ -2739,13 +2759,116 @@ const UI = {
     UI.durationTarget = null;
   },
 
+  // Encode a seconds count back into the 6-digit HHMMSS string.
+  // Overflow of the hour tens digit (100h+) clamps to 9 — the numpad
+  // can't type more than 9h anyway (single-digit hours in the display).
+  // For editing existing segments we want to show the true value, so
+  // we do allow the h-tens position to hold >0 briefly here — the
+  // display formatter handles multi-digit hours.
+  _setDpickFromSeconds(total) {
+    total = Math.max(0, Math.min(99 * 3600 + 59 * 60 + 59, total));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad2 = (n) => String(Math.min(99, n)).padStart(2, '0');
+    UI.dpickDigits = pad2(h) + pad2(m) + pad2(s);
+    UI._renderDpick();
+  },
+
+  // Read the 6-digit string as HH*3600 + MM*60 + SS. Doesn't clamp
+  // MM/SS to 59 — Pixel Clock accepts "0h 90m 90s" as literal
+  // 90m + 90s = 91.5m; we mirror that on commit.
+  _getDpickSeconds() {
+    const d = UI.dpickDigits.padStart(6, '0');
+    const h = parseInt(d.slice(0, 2), 10) || 0;
+    const m = parseInt(d.slice(2, 4), 10) || 0;
+    const s = parseInt(d.slice(4, 6), 10) || 0;
+    return h * 3600 + m * 60 + s;
+  },
+
+  _renderDpick() {
+    const d = UI.dpickDigits.padStart(6, '0');
+    const h  = parseInt(d.slice(0, 2), 10) || 0;
+    const mm = d.slice(2, 4);
+    const ss = d.slice(4, 6);
+    // Display: hours as 1-2 digits (drop leading zero), minutes/seconds
+    // always 2 digits. Matches Pixel Clock's shape.
+    const hStr = String(h);
+    document.getElementById('dpick-disp-h').textContent = hStr;
+    document.getElementById('dpick-disp-m').textContent = mm;
+    document.getElementById('dpick-disp-s').textContent = ss;
+
+    // Dim zero-parts; brighten the "cursor" part (rightmost non-zero,
+    // or seconds if all zero). Purely visual.
+    const parts = document.querySelectorAll('#dpick-display .dpick-part');
+    parts.forEach(p => p.classList.remove('is-zero', 'is-cursor'));
+    const [pH, pM, pS] = parts;
+    const secsV = parseInt(ss, 10) || 0;
+    const minsV = parseInt(mm, 10) || 0;
+    if (h === 0)                        pH.classList.add('is-zero');
+    if (h === 0 && minsV === 0)         pM.classList.add('is-zero');
+    // cursor lights up on the highest-order populated slot
+    if (h > 0)                          pH.classList.add('is-cursor');
+    else if (minsV > 0)                 pM.classList.add('is-cursor');
+    else                                pS.classList.add('is-cursor');
+  },
+
+  // Digit keypress — Pixel-Clock shift-left model. If this is the FIRST
+  // press after opening the picker (dpickPristine), clear the seed
+  // value first so the user retypes from scratch. Presets bypass this
+  // and add on top.
+  dpickPressDigit(digit) {
+    if (UI.dpickPristine) {
+      UI.dpickDigits = '000000';
+      UI.dpickPristine = false;
+    }
+    const d = UI.dpickDigits.padStart(6, '0');
+    // Shift left by 1; append the new digit. If we're already at
+    // 6 non-zero digits, the leading digit falls off — that's the
+    // Pixel behaviour and matches the "you can't overflow the display"
+    // mental model. Cap at 99h 59m 59s at commit.
+    UI.dpickDigits = (d.slice(1) + digit);
+    UI._renderDpick();
+  },
+
+  // "00" key — two shifts, appending two zeros. Same overflow rule.
+  dpickPressDoubleZero() {
+    if (UI.dpickPristine) {
+      UI.dpickDigits = '000000';
+      UI.dpickPristine = false;
+    }
+    const d = UI.dpickDigits.padStart(6, '0');
+    UI.dpickDigits = (d.slice(2) + '00');
+    UI._renderDpick();
+  },
+
+  // Backspace — shift right, prepend a zero. Also marks non-pristine
+  // so a subsequent digit doesn't clobber the (deliberately-shortened)
+  // value.
+  dpickPressBack() {
+    UI.dpickPristine = false;
+    const d = UI.dpickDigits.padStart(6, '0');
+    UI.dpickDigits = ('0' + d.slice(0, 5));
+    UI._renderDpick();
+  },
+
+  // Preset chip — ADD `secs` to whatever's currently entered. Presets
+  // don't respect the "pristine" flag: we want tapping "+1m" after
+  // opening a 30s segment to actually give 1m 30s, not clobber the
+  // seed. But mark non-pristine so a subsequent digit-key press
+  // extends the value instead of replacing it.
+  dpickAddPreset(secs) {
+    UI.dpickPristine = false;
+    const total = Math.min(99 * 3600 + 59 * 60 + 59, UI._getDpickSeconds() + secs);
+    UI._setDpickFromSeconds(total);
+  },
+
   commitDurationPicker() {
     if (!UI.durationTarget) return;
-    const h = Math.max(0, Math.min(23, parseInt(document.getElementById('dpick-h').value || 0, 10) || 0));
-    const m = Math.max(0, Math.min(59, parseInt(document.getElementById('dpick-m').value || 0, 10) || 0));
-    const s = Math.max(0, Math.min(59, parseInt(document.getElementById('dpick-s').value || 0, 10) || 0));
-    let total = h * 3600 + m * 60 + s;
+    let total = UI._getDpickSeconds();
     if (total < 1) total = 1;
+    // Cap at 24h - 1 for safety even though numpad can't type that
+    // via digit-shift alone (max 99h 59m 59s).
     if (total > 24 * 3600) total = 24 * 3600;
     UI.durationTarget.duration = total;
     UI.closeDurationPicker();
@@ -3520,7 +3643,7 @@ const UI = {
 
   showCompletion(totalSeconds) {
     document.getElementById('run-complete').hidden = false;
-    document.getElementById('run-complete-time').textContent = fmt(totalSeconds);
+    document.getElementById('run-complete-time').textContent = fmtLong(totalSeconds);
     document.getElementById('run-complete-count').textContent = Engine.segments.length;
     document.getElementById('run-complete-title').textContent = 'Well done.';
   },
@@ -3710,7 +3833,25 @@ function init() {
 
   // editor name / loops
   document.getElementById('editor-name').addEventListener('input', e => {
-    if (Editor.draft) Editor.draft.name = e.target.value;
+    if (!Editor.draft) return;
+    const v = e.target.value;
+    Editor.draft.name = v;
+    // v1.4.7 — when the chain is running, propagate the name change
+    // immediately to the Store's chain object AND to the live run's
+    // chain reference. We mutate in place (not upsertChain — that
+    // would REPLACE the object and sever the run's reference), then
+    // Store.save() persists. Refresh the topbar + chip strip so the
+    // new name shows without waiting for the next tick.
+    const draftId = Editor.draftId;
+    if (draftId && Engine.isChainRunning(draftId)) {
+      const storeChain = Store.getChain(draftId);
+      if (storeChain) { storeChain.name = v; Store.save(); }
+      const run = Engine._runs.get(draftId);
+      if (run && run.chain) run.chain.name = v;
+      const label = document.getElementById('run-chain-name');
+      if (label) label.textContent = v || '—';
+      UI.renderRunChips();
+    }
   });
   document.querySelectorAll('[data-loops]').forEach(b => {
     b.addEventListener('click', () => {
@@ -3786,40 +3927,25 @@ function init() {
     View.show('library');
   });
 
-  // duration picker
-  document.querySelectorAll('[data-dpick]').forEach(btn => {
+  // Duration picker (v1.4.7 Pixel-Clock numpad)
+  // Digit / 00 / backspace keypad — all three route through the
+  // UI.dpick* state helpers. See UI.openDurationPicker for the state
+  // model rationale (why we hold HHMMSS as a 6-digit string rather
+  // than a normalised total-seconds int).
+  document.querySelectorAll('[data-dpick-key]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const code = btn.dataset.dpick;
-      const dir = code.endsWith('+') ? 1 : -1;
-      const part = code[0];
-      const id = `dpick-${part}`;
-      const input = document.getElementById(id);
-      let v = parseInt(input.value || 0, 10) || 0;
-      const max = part === 'h' ? 23 : 59;
-      v = Math.max(0, Math.min(max, v + dir));
-      input.value = String(v).padStart(2, '0');
+      const k = btn.dataset.dpickKey;
+      if (k === 'back')       UI.dpickPressBack();
+      else if (k === '00')    UI.dpickPressDoubleZero();
+      else                    UI.dpickPressDigit(k);
     });
   });
-  document.querySelectorAll('.dpick-input').forEach(inp => {
-    inp.addEventListener('focus', () => inp.select());
-    inp.addEventListener('blur', () => {
-      let v = parseInt(inp.value || 0, 10) || 0;
-      const max = inp.id === 'dpick-h' ? 23 : 59;
-      v = Math.max(0, Math.min(max, v));
-      inp.value = String(v).padStart(2, '0');
-    });
-    inp.addEventListener('input', () => {
-      inp.value = inp.value.replace(/[^0-9]/g, '').slice(0, 2);
-    });
-  });
-  document.querySelectorAll('.chip[data-quick]').forEach(c => {
+  // Preset chips — ADD to current value (not replace). Prefix "+" on
+  // the labels makes the behaviour explicit for the user.
+  document.querySelectorAll('.chip[data-quick-add]').forEach(c => {
     c.addEventListener('click', () => {
-      const total = parseInt(c.dataset.quick, 10);
-      const m = Math.floor(total / 60);
-      const s = total % 60;
-      document.getElementById('dpick-h').value = '00';
-      document.getElementById('dpick-m').value = String(m).padStart(2, '0');
-      document.getElementById('dpick-s').value = String(s).padStart(2, '0');
+      const n = parseInt(c.dataset.quickAdd, 10) || 0;
+      if (n > 0) UI.dpickAddPreset(n);
     });
   });
   document.getElementById('dpick-confirm').addEventListener('click', () => UI.commitDurationPicker());
@@ -3848,6 +3974,50 @@ function init() {
     View.show('library');
   };
   document.getElementById('run-back').addEventListener('click', goBackToLibraryKeepRunning);
+
+  // Android hardware / gesture back button.
+  //
+  // MainActivity.onBackPressed dispatches a "chainBack" event on window.
+  // We handle it here, deciding what "back" means depending on what the
+  // user is currently looking at:
+  //
+  //   1. Any sheet open (settings, cue overrides, duration picker,
+  //      chain-picker, actions, update modal) → close the topmost sheet.
+  //   2. Selection mode active in the library → exit selection mode.
+  //   3. Any view other than library (run / editor / templates) →
+  //      navigate to library. Run view keeps its chain(s) running.
+  //   4. Library view with nothing else to do → actually exit the app
+  //      via ChainTimerPlugin.exitApp.
+  //
+  // Any earlier stop short of exitApp is treated as "handled" — Android
+  // never sees the press.
+  window.addEventListener('chainBack', () => {
+    // 1. Topmost sheet or modal.
+    const sheetIds = [
+      'update-modal',
+      'actions-sheet',
+      'duration-sheet',
+      'picker-sheet',
+      'cue-sheet',
+      'settings-sheet',
+    ];
+    for (const id of sheetIds) {
+      const el = document.getElementById(id);
+      if (el && !el.hidden) { el.hidden = true; return; }
+    }
+    // 2. Library selection mode.
+    if (UI.selectMode) { UI.exitSelectMode(); return; }
+    // 3. Non-library view → go home, keep any chain running.
+    if (View.current && View.current !== 'library') {
+      goBackToLibraryKeepRunning();
+      return;
+    }
+    // 4. On library with nothing to close → exit the app.
+    const CT = window.Capacitor?.Plugins?.ChainTimer;
+    if (CT && typeof CT.exitApp === 'function') {
+      try { CT.exitApp(); } catch {}
+    }
+  });
 
   // Left-swipe-to-go-back gesture — same as the run-back button, using
   // pointer events so it works for both touch and trackpad-drag on

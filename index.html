@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Anton&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@300;400;500;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="./css/styles.css?v=1.4.6" />
+  <link rel="stylesheet" href="./css/styles.css?v=1.4.7" />
 </head>
 <body data-view="library">
 
@@ -176,11 +176,11 @@
         </div>
 
         <div class="editor-stats">
-          <div class="stat">
+          <div class="stat stat-readonly" aria-readonly="true">
             <span class="stat-label">Total</span>
             <span class="stat-value" id="editor-total">00:00</span>
           </div>
-          <div class="stat">
+          <div class="stat stat-readonly" aria-readonly="true">
             <span class="stat-label">Segments</span>
             <span class="stat-value" id="editor-count">0</span>
           </div>
@@ -207,7 +207,7 @@
           </button>
         </div>
 
-        <div class="hint">Tip: drag the handle to reorder. Long-press a segment for more options.</div>
+        <div class="hint">Tip: drag the handle to reorder segments. Tap the color dot to change hue, or the bell to override cues.</div>
       </main>
 
       <footer class="editor-footer">
@@ -517,45 +517,51 @@
           </button>
         </header>
         <div class="sheet-body">
-          <!-- v1.4.6: Pixel-style inline unit suffix ("00h 00m 00s"),
-               no colon separators, no under-labels. Each column shows
-               the input with its unit letter tucked to the right of it. -->
-          <div class="dpick">
-            <div class="dpick-col">
-              <button class="dpick-step" data-dpick="h+">▲</button>
-              <div class="dpick-input-wrap">
-                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-h" value="00" aria-label="Hours" />
-                <span class="dpick-unit" aria-hidden="true">h</span>
-              </div>
-              <button class="dpick-step" data-dpick="h-">▼</button>
-            </div>
-            <div class="dpick-col">
-              <button class="dpick-step" data-dpick="m+">▲</button>
-              <div class="dpick-input-wrap">
-                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-m" value="00" aria-label="Minutes" />
-                <span class="dpick-unit" aria-hidden="true">m</span>
-              </div>
-              <button class="dpick-step" data-dpick="m-">▼</button>
-            </div>
-            <div class="dpick-col">
-              <button class="dpick-step" data-dpick="s+">▲</button>
-              <div class="dpick-input-wrap">
-                <input type="text" inputmode="numeric" maxlength="2" class="dpick-input" id="dpick-s" value="30" aria-label="Seconds" />
-                <span class="dpick-unit" aria-hidden="true">s</span>
-              </div>
-              <button class="dpick-step" data-dpick="s-">▼</button>
-            </div>
+          <!-- v1.4.7 — Pixel-Clock-style numpad picker.
+               Display area shows the currently-entered value formatted
+               as "Xh XXm XXs" (Pixel Clock convention). Digits shift
+               left from the seconds-ones slot on each keypress; the
+               backspace shifts everything right. Presets ADD to the
+               current value (with a "+" prefix so it's clear). No
+               input fields, no system keyboard — everything happens
+               via the on-screen numpad below. -->
+          <div class="dpick-display" id="dpick-display" role="text" aria-live="polite" aria-atomic="true">
+            <span class="dpick-part is-h"><span class="dpick-num" id="dpick-disp-h">0</span><span class="dpick-suf">h</span></span>
+            <span class="dpick-part is-m"><span class="dpick-num" id="dpick-disp-m">00</span><span class="dpick-suf">m</span></span>
+            <span class="dpick-part is-s"><span class="dpick-num" id="dpick-disp-s">00</span><span class="dpick-suf">s</span></span>
           </div>
-          <div class="dpick-quick">
-            <button class="chip" data-quick="15">15s</button>
-            <button class="chip" data-quick="30">30s</button>
-            <button class="chip" data-quick="45">45s</button>
-            <button class="chip" data-quick="60">1m</button>
-            <button class="chip" data-quick="90">1m30</button>
-            <button class="chip" data-quick="120">2m</button>
-            <button class="chip" data-quick="180">3m</button>
-            <button class="chip" data-quick="300">5m</button>
+
+          <!-- Preset ADDERS. Tapping a chip adds that many seconds on
+               top of the current entry, so you can chain "+1m" + "+30s"
+               to build 1m 30s without retyping. -->
+          <div class="dpick-quick" aria-label="Add to current duration">
+            <button class="chip" data-quick-add="10">+ 10s</button>
+            <button class="chip" data-quick-add="30">+ 30s</button>
+            <button class="chip" data-quick-add="60">+ 1m</button>
+            <button class="chip" data-quick-add="120">+ 2m</button>
+            <button class="chip" data-quick-add="300">+ 5m</button>
+            <button class="chip" data-quick-add="600">+ 10m</button>
           </div>
+
+          <!-- Numpad. 3x4 grid: 1..9, then 00 · 0 · backspace. Matches
+               the Pixel Clock timer keypad shape. -->
+          <div class="dpick-pad" role="group" aria-label="Digit keypad">
+            <button class="dpick-key" data-dpick-key="1">1</button>
+            <button class="dpick-key" data-dpick-key="2">2</button>
+            <button class="dpick-key" data-dpick-key="3">3</button>
+            <button class="dpick-key" data-dpick-key="4">4</button>
+            <button class="dpick-key" data-dpick-key="5">5</button>
+            <button class="dpick-key" data-dpick-key="6">6</button>
+            <button class="dpick-key" data-dpick-key="7">7</button>
+            <button class="dpick-key" data-dpick-key="8">8</button>
+            <button class="dpick-key" data-dpick-key="9">9</button>
+            <button class="dpick-key dpick-key-double" data-dpick-key="00">00</button>
+            <button class="dpick-key" data-dpick-key="0">0</button>
+            <button class="dpick-key dpick-key-back" data-dpick-key="back" aria-label="Backspace">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 5H8l-6 7 6 7h13a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M18 9l-6 6M12 9l6 6"/></svg>
+            </button>
+          </div>
+
           <button class="btn btn-primary btn-block" id="dpick-confirm">Set duration</button>
         </div>
       </div>
@@ -594,8 +600,8 @@
 
   </div>
 
-  <script src="./js/app.js?v=1.4.6"></script>
+  <script src="./js/app.js?v=1.4.7"></script>
   <!-- Capacitor injects window.Capacitor in native builds; this file is a no-op in browsers -->
-  <script src="./js/native.js?v=1.4.6"></script>
+  <script src="./js/native.js?v=1.4.7"></script>
 </body>
 </html>

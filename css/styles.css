@@ -516,6 +516,13 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   pointer-events: none;
   opacity: 0.55;
 }
+/* v1.4.7 — carve out the chain name input from the "locked" veneer so
+   users can still rename a running chain. The rest of the editor stays
+   inert (segments/loops/colors would be unsafe to mutate mid-run). */
+.view-editor[data-locked="true"] .editor-name-fields {
+  pointer-events: auto;
+  opacity: 1;
+}
 .view-editor[data-locked="true"] .editor-footer { display: none; }
 
 /* ==========================================================================
@@ -934,6 +941,15 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   padding: 12px 8px;
   background: var(--surface);
 }
+/* v1.4.7 — TOTAL and SEGMENTS are computed from the segment list,
+   not editable. Give them a darker background + softer text so users
+   don't tap them expecting an input. Loops (with its stepper) keeps
+   the regular surface treatment. */
+.stat-readonly {
+  background: var(--surface-2);
+}
+.stat-readonly .stat-label { color: var(--ink-faint); }
+.stat-readonly .stat-value { color: var(--ink-dim); }
 .stat-label {
   font-family: var(--f-mono);
   font-size: 9px;
@@ -2188,65 +2204,92 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 
 /* ===== Duration picker ===== */
-/* v1.4.6 — Pixel-style: no colon separators, no under-labels; each
-   input has its unit letter (h/m/s) tucked directly to its right.
-   Reads left-to-right as "00h 00m 00s" like the Pixel Clock timer. */
+/* v1.4.7 — Pixel-Clock-style numpad. Big display + on-screen 3×4
+   digit pad. No system keyboard, no letters. Digits shift left from
+   the seconds-ones slot on each keypress. */
 
-.dpick {
+.dpick-display {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: center;
-  gap: 8px;
-  padding: 18px 0 10px;
-}
-.dpick-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  min-width: 84px;
-}
-.dpick-input-wrap {
-  position: relative;
-  display: inline-block;
-}
-.dpick-input {
-  background: var(--surface-2);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 12px 24px 12px 12px;   /* right-pad leaves room for the unit letter */
-  width: 88px;
-  text-align: right;
+  gap: 2px;
+  padding: 16px 0 6px;
   font-family: var(--f-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 32px;
-  font-weight: 500;
   color: var(--ink);
-  outline: none;
-  transition: border-color 140ms;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.dpick-input:focus { border-color: var(--accent); }
-.dpick-unit {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-family: var(--f-mono);
-  font-size: 18px;
+.dpick-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 0 6px;
+}
+.dpick-num {
+  font-size: 44px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+  transition: color 140ms;
+}
+.dpick-suf {
+  font-size: 20px;
   font-weight: 500;
   color: var(--ink-dim);
-  pointer-events: none;
 }
-.dpick-step {
-  width: 28px; height: 22px;
-  display: grid; place-items: center;
-  background: var(--surface-3);
-  border-radius: 6px;
-  font-size: 9px;
-  color: var(--ink-soft);
-  transition: background 140ms, color 140ms;
+/* Zero parts dim slightly so the non-zero portion pops. Populated
+   parts stay full-brightness. */
+.dpick-part.is-zero .dpick-num,
+.dpick-part.is-zero .dpick-suf {
+  color: var(--ink-faint);
 }
-.dpick-step:hover { background: var(--accent); color: var(--bg); }
+/* Highlight the active-cursor slot (rightmost non-zero slot). Purely
+   cosmetic — helps the user see where the next digit will land. */
+.dpick-part.is-cursor .dpick-num { color: var(--accent); }
+
+.dpick-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 0 14px;
+  justify-content: center;
+}
+
+.dpick-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 4px 0 14px;
+}
+.dpick-key {
+  display: grid;
+  place-items: center;
+  height: 54px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dpick-key:hover  { background: var(--surface-3); border-color: var(--rule-strong); }
+.dpick-key:active { background: var(--surface-3); transform: scale(0.96); }
+.dpick-key-back svg { color: var(--ink-dim); }
+.dpick-key-back:hover svg { color: var(--warn); }
+.dpick-key.is-disabled,
+.dpick-key:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 .dpick-quick {
   display: flex;

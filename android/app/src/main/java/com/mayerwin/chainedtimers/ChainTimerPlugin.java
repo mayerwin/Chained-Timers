@@ -914,4 +914,19 @@ public class ChainTimerPlugin extends Plugin {
 
     // Play-update resume behavior lives in the existing handleOnResume
     // near the top of the class — merged with the appForeground flag.
+
+    /**
+     * exitApp — JS-triggered exit for the case where the user hits back
+     * from the library view (i.e., nowhere to navigate back to). Called
+     * from js/app.js's chainBack handler when there's no sheet to close,
+     * no view to pop, and the user genuinely wants to leave.
+     */
+    @PluginMethod
+    public void exitApp(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity != null) {
+            try { activity.finish(); } catch (Throwable ignored) {}
+        }
+        call.resolve();
+    }
 }
