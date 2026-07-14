@@ -7,7 +7,7 @@ const ROOT = path.resolve('.');
 const DIST = path.join(ROOT, 'dist');
 
 const FILES = ['index.html', 'manifest.webmanifest', 'sw.js'];
-const DIRS  = ['css', 'js', 'icons'];
+const DIRS  = ['css', 'js', 'icons', 'fonts'];
 
 fs.rmSync(DIST, { recursive: true, force: true });
 fs.mkdirSync(DIST, { recursive: true });

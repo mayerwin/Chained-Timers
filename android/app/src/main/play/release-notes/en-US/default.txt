@@ -1,8 +1,7 @@
-v1.4.7 — Numpad picker & polish
+v1.4.8 — Offline load & fixes
 
-• Pixel Clock–style numpad picker: digits shift left as you type — 11515 → 1h 15m 15s.
-• Preset chips now ADD to the current value (+10s, +30s, +1m, +2m, +5m, +10m).
-• Android back button navigates in-app instead of exiting.
-• Segments with no name stay silent (no more "Segment" TTS).
-• Chain name is editable while running.
-• Card totals now read as "1h 5m 30s".
+• Fonts bundled locally — app opens instantly even offline (previously white screen until Google Fonts timed out).
+• Empty-name segments truly silent (native TTS was still saying "Segment").
+• Swipe LEFT on run view now returns to library (was right only). Fixes the "swipe minimises the app" issue.
+• Returning to a paused chain now shows the correct remaining time.
+• Segment duration button reads "1m" (was "01m 00s").

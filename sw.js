@@ -1,9 +1,10 @@
 /* Chained Timers — Service Worker */
-const CACHE = 'chained-timers-v1.4.7';
+const CACHE = 'chained-timers-v1.4.8';
 const ASSETS = [
   './',
   './index.html',
   './css/styles.css',
+  './css/fonts.css',
   './js/app.js',
   './manifest.webmanifest',
   './icons/icon.svg',

@@ -61,6 +61,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; overflow: hidden; }
+/* v1.4.8 — kill Android WebView's overscroll navigation. Without
+   this, a horizontal drag inside the app pulls in the previous page
+   from history; since the SPA has no history, the WebView surfaces
+   the swipe to the OS which minimises the app. */
+html, body { overscroll-behavior: none; }
 html { font-size: 16px; }
 
 body {

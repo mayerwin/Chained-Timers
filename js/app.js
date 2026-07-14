@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.7';
+const APP_VERSION = '1.4.8';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -774,8 +774,13 @@ const Voice = {
     // and the FGS stays silent at that boundary. The old fallback to
     // the literal word "Segment" was gratingly meaningless when the
     // user had left a segment name blank on purpose.
-    const texts = segments.map(s => (s && s.name) ? s.name : '');
-    const key   = texts.join('');
+    // Check `hasName` (boolean sourced from raw user input), not
+    // `.name` — expandChain sets `.name` to 'Segment' as a display
+    // fallback for blank segments (used by the run-view title, notif
+    // body, etc). Keying off `.name` here re-introduces the "Segment"
+    // TTS bug this fix is trying to kill.
+    const texts = segments.map(s => (s && s.hasName) ? s.name : '');
+    const key   = texts.join('|');
     const id    = chainId || '__default__';
     if (this._chainKeys.get(id) === key && this._chainPaths.get(id)?.length === texts.length) {
       return this._chainPaths.get(id);
@@ -2609,11 +2614,11 @@ const UI = {
 
       const dur = document.createElement('button');
       dur.className = 'segment-duration';
-      // Right-aligned "01h 05m 30s" / "05m 03s" / "10s" via fmtSegDurationHTML.
-      // Each unit is wrapped so CSS can width-lock each part, giving the
-      // "same units at the same distance from the right" alignment the
-      // user asked for.
-      dur.innerHTML = fmtSegDurationHTML(seg.duration);
+      // v1.4.8 — same "1h 5m 30s" no-zero-padding format used across
+      // the rest of the app. The previous fmtSegDurationHTML style
+      // ("01m 00s") wasted characters on unused units and read as
+      // strangely formal for a plain button label.
+      dur.textContent = fmtLong(seg.duration);
       dur.addEventListener('click', () => UI.openDurationPicker(seg));
       li.appendChild(dur);
     }
@@ -3202,7 +3207,23 @@ const UI = {
     if (!Engine.chain) return;
     document.getElementById('run-chain-name').textContent = Engine.chain.name;
     UI.updateRunSegmentInfo();
-    UI.updateRunClock(Engine.segments[Engine.currentIndex], Engine.segments[Engine.currentIndex]?.duration || 0, 0);
+    // v1.4.8 — seed the clock with the REAL current-segment remaining
+    // time, not the full segment duration. Previously we always passed
+    // `duration, 0` here, which meant that leaving the run view (chain
+    // paused, or ticking in the background) and coming back would
+    // paint the clock at its initial value for a frame; on a paused
+    // chain that stale frame was permanent because the tick loop
+    // doesn't run while paused. Compute it the same way the chip strip
+    // and the library inline status do.
+    const run = Engine._focused;
+    const cur = Engine.segments[Engine.currentIndex];
+    if (run && cur) {
+      const remaining = Math.max(0, cur.duration - run._elapsedMs() / 1000);
+      const elapsed   = Math.max(0, cur.duration - remaining);
+      UI.updateRunClock(cur, remaining, elapsed);
+    } else if (cur) {
+      UI.updateRunClock(cur, cur.duration, 0);
+    }
     UI.renderRunChips();
   },
 
@@ -4019,11 +4040,12 @@ function init() {
     }
   });
 
-  // Left-swipe-to-go-back gesture — same as the run-back button, using
-  // pointer events so it works for both touch and trackpad-drag on
-  // desktop. Trigger threshold: 60px horizontal AND horizontal must exceed
-  // vertical by 1.5x (prevents accidental fires when the user is trying
-  // to scroll or drag the chip strip vertically).
+  // Swipe-to-go-back gesture on the run view. Works in BOTH directions
+  // (left OR right) — users have different mental models: iOS-style
+  // "swipe right from left edge = back", vs "swipe left to push the
+  // current page away". Either way, they end up in the library with
+  // the chain still running. Threshold: 60px horizontal AND horizontal
+  // must exceed vertical by 1.2x so vertical scroll intents don't fire.
   (() => {
     const view = document.querySelector('.view-run');
     if (!view) return;
@@ -4050,10 +4072,13 @@ function init() {
         view.style.transform = '';
         return;
       }
-      if (dx > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
         dragged = dx;
         view.classList.add('is-swiping');
-        view.style.transform = `translateX(${Math.min(dx, 120)}px)`;
+        // Clamp visual translation to +/-120px and follow finger in
+        // both directions so the drag feels symmetric.
+        const clamped = Math.max(-120, Math.min(120, dx));
+        view.style.transform = `translateX(${clamped}px)`;
       }
     });
     const endSwipe = (commit) => {
@@ -4063,7 +4088,8 @@ function init() {
       if (commit) goBackToLibraryKeepRunning();
       dragged = 0;
     };
-    view.addEventListener('pointerup',      () => endSwipe(dragged > 60));
+    // Commit if the drag exceeded the 60px threshold in EITHER direction.
+    view.addEventListener('pointerup',      () => endSwipe(Math.abs(dragged) > 60));
     view.addEventListener('pointercancel',  () => endSwipe(false));
   })();
 
