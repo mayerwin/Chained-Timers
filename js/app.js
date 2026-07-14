@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.8';
+const APP_VERSION = '1.4.9';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -2284,6 +2284,9 @@ const UI = {
       if (countEl) countEl.textContent = `${n} selected`;
       const startBtn = document.getElementById('library-select-start');
       if (startBtn) startBtn.disabled = (n === 0);
+      // v1.4.9 — bulk-delete follows the same enable rule as bulk-start.
+      const deleteBtn = document.getElementById('library-select-delete');
+      if (deleteBtn) deleteBtn.disabled = (n === 0);
       const eyebrowEl = document.getElementById('library-select-eyebrow');
       if (eyebrowEl) {
         eyebrowEl.textContent = (n === MAX_CONCURRENT_RUNS)
@@ -2305,6 +2308,27 @@ const UI = {
     const ok = Engine.startMany(chains);
     UI.exitSelectMode();
     if (ok) View.show('run');
+  },
+
+  // v1.4.9 — bulk delete every selected chain. Irreversible, so we
+  // always confirm; the confirm names how many will go and (for a
+  // single selection) which one, so the user isn't guessing what they
+  // hit. Store.deleteChain internally stops any running run for that
+  // chain id and scrubs subchain references from other chains, so a
+  // chain currently mid-run is safe to include in the bulk delete.
+  deleteSelected() {
+    const ids = [...UI.selectedIds];
+    if (!ids.length) return;
+    const chains = ids.map(id => Store.getChain(id)).filter(Boolean);
+    if (!chains.length) { UI.exitSelectMode(); return; }
+    const prompt = chains.length === 1
+      ? `Delete "${chains[0].name || 'Untitled'}"? This cannot be undone.`
+      : `Delete ${chains.length} chains? This cannot be undone.`;
+    if (!confirm(prompt)) return;
+    for (const c of chains) Store.deleteChain(c.id);
+    UI.exitSelectMode();
+    UI.renderLibrary();
+    Toast.show(chains.length === 1 ? 'Chain deleted' : `${chains.length} chains deleted`, 'warn');
   },
 
   startRunForChain(chain) {
@@ -2361,7 +2385,7 @@ const UI = {
     const segments = segmentsArg || expandChain(chain);
     if (!segments.length) return;
     const seg0 = segments[0];
-    document.getElementById('run-chain-name').textContent  = chain.name || '—';
+    UI._setRunChainName(chain.name);
     document.getElementById('run-segment-name').textContent = seg0.name;
     document.getElementById('run-segment-tag').textContent  = 'Segment 1';
     document.getElementById('run-segment-of').textContent   = `of ${segments.length}`;
@@ -3203,9 +3227,20 @@ const UI = {
 
   // ------- Run view -------
 
+  // Safe setter for the run-view topbar chain-name label. The label is
+  // a <button> by default (v1.4.9 inline rename), but is briefly
+  // replaced by an <input> while the user is renaming. Any refresh
+  // that lands during editing must NOT clobber their in-flight value.
+  _setRunChainName(text) {
+    const el = document.getElementById('run-chain-name');
+    if (!el) return;             // input has no ID during rename
+    if (el.tagName === 'INPUT') return; // don't stomp user typing
+    el.textContent = text || '—';
+  },
+
   renderRun() {
     if (!Engine.chain) return;
-    document.getElementById('run-chain-name').textContent = Engine.chain.name;
+    UI._setRunChainName(Engine.chain.name);
     UI.updateRunSegmentInfo();
     // v1.4.8 — seed the clock with the REAL current-segment remaining
     // time, not the full segment duration. Previously we always passed
@@ -3295,7 +3330,7 @@ const UI = {
   updateRunSegmentInfo() {
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
-    document.getElementById('run-chain-name').textContent = Engine.chain?.name || '—';
+    UI._setRunChainName(Engine.chain?.name);
     document.getElementById('run-segment-name').textContent = seg.name;
     document.getElementById('run-segment-tag').textContent = `Segment ${Engine.currentIndex + 1}`;
     document.getElementById('run-segment-of').textContent  = `of ${Engine.segments.length}`;
@@ -3869,8 +3904,7 @@ function init() {
       if (storeChain) { storeChain.name = v; Store.save(); }
       const run = Engine._runs.get(draftId);
       if (run && run.chain) run.chain.name = v;
-      const label = document.getElementById('run-chain-name');
-      if (label) label.textContent = v || '—';
+      UI._setRunChainName(v);
       UI.renderRunChips();
     }
   });
@@ -3996,6 +4030,80 @@ function init() {
   };
   document.getElementById('run-back').addEventListener('click', goBackToLibraryKeepRunning);
 
+  // v1.4.9 — inline rename of the FOCUSED chain from the run view.
+  // Click the chain-name title (or the wrapping meta area) to swap it
+  // for a text input; on Enter (or blur) we commit, on Escape we cancel.
+  // Rename is safe mid-run: the segment plan / voice cache are keyed
+  // by segment identity, not by chain name, so only the display label
+  // changes. Update path:
+  //
+  //   1. Store's chain object — MUTATED IN PLACE (not upsertChain,
+  //      which would replace the reference and orphan the running run's
+  //      chain pointer). Then Store.save() persists.
+  //   2. The running EngineRun's chain reference — same object usually,
+  //      but set explicitly in case it isn't.
+  //   3. Re-render the topbar text + chip strip so the change is
+  //      visible immediately.
+  //
+  // We DELEGATE the click on .run-chain-meta rather than binding to the
+  // button directly, because the click handler needs to survive the
+  // button being replaceWith()-ed to the input and back.
+  (() => {
+    const meta = document.querySelector('.run-chain-meta');
+    if (!meta) return;
+    let editing = false;
+    meta.addEventListener('click', (e) => {
+      if (editing) return;
+      const btn = e.target.closest('.run-chain-name');
+      if (!btn || btn.tagName !== 'BUTTON') return;
+      const chainId = Engine._focusedId;
+      if (!chainId) return;
+      const chain = Store.getChain(chainId);
+      if (!chain) return;
+      editing = true;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'run-chain-name-input';
+      input.maxLength = 48;
+      input.value = chain.name || '';
+      input.setAttribute('aria-label', 'Chain name');
+      btn.replaceWith(input);
+      // requestAnimationFrame so focus + select land after the DOM swap.
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+
+      const restore = (nextName) => {
+        if (!editing) return; // already restored (e.g. double Enter)
+        editing = false;
+        const trimmed = (nextName || '').trim();
+        // Only commit if the name actually changed AND isn't empty.
+        // Empty names would leave the chain nameless in the library
+        // ribbon; refuse them silently and keep the previous name.
+        if (trimmed && trimmed !== chain.name) {
+          chain.name = trimmed;
+          Store.save();
+          const run = Engine._runs.get(chainId);
+          if (run && run.chain) run.chain.name = trimmed;
+        }
+        // Rebuild the button, exactly as index.html declares it.
+        const nb = document.createElement('button');
+        nb.className = 'run-chain-name';
+        nb.id = 'run-chain-name';
+        nb.type = 'button';
+        nb.setAttribute('aria-label', 'Rename chain');
+        nb.textContent = chain.name || '—';
+        input.replaceWith(nb);
+        UI.renderRunChips();
+        if (View.current === 'library') UI.renderLibrary();
+      };
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { e.preventDefault(); input.value = chain.name || ''; input.blur(); }
+      });
+      input.addEventListener('blur', () => restore(input.value));
+    });
+  })();
+
   // Android hardware / gesture back button.
   //
   // MainActivity.onBackPressed dispatches a "chainBack" event on window.
@@ -4044,53 +4152,106 @@ function init() {
   // (left OR right) — users have different mental models: iOS-style
   // "swipe right from left edge = back", vs "swipe left to push the
   // current page away". Either way, they end up in the library with
-  // the chain still running. Threshold: 60px horizontal AND horizontal
-  // must exceed vertical by 1.2x so vertical scroll intents don't fire.
+  // the chain still running.
+  //
+  // v1.4.9 — rewritten to use TOUCH events (touchstart/move/end) rather
+  // than pointer events. On the Android WebView, pointer events reliably
+  // failed to fire for horizontal drags: `touch-action: auto` (the
+  // default) lets the browser start a scroll/navigation gesture before
+  // the first pointermove reaches JS. The result was that v1.4.8's
+  // add-left-direction fix was NEVER actually invoked on device — the
+  // handler was correct, the event just never arrived. `touch-action:
+  // pan-y` on .view-run (see styles.css) frees horizontal touches, and
+  // touch events fire pre-navigation. Threshold: 60px horizontal AND
+  // horizontal must exceed vertical by 1.2x. Pointer events kept as a
+  // fallback for desktop mouse-drag testing.
   (() => {
     const view = document.querySelector('.view-run');
     if (!view) return;
-    let startX = 0, startY = 0, tracking = false, dragged = 0;
-    // Ignore drags that start on interactive controls — the chip strip
-    // uses its own long-press, sheets can drag themselves, etc.
+    let startX = 0, startY = 0, tracking = false, dragged = 0, decided = false;
+    // Ignore drags that start on interactive controls — control buttons,
+    // sheets, the chip strip (which has its own long-press), overlays.
+    // NOTE: the chain name span is intentionally NOT in this list; a
+    // tap on it opens an inline rename (see below), a horizontal swipe
+    // across it still counts as a page swipe.
     const isInteractive = (el) => !!el.closest('button, input, textarea, select, .run-chip, .sheet, .run-overlay');
-    view.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      if (isInteractive(e.target)) return;
+    const begin = (x, y, target) => {
+      if (isInteractive(target)) { tracking = false; return; }
       tracking = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      dragged = 0;
-    });
-    view.addEventListener('pointermove', (e) => {
+      decided = false;
+      startX = x; startY = y; dragged = 0;
+    };
+    const move = (x, y, ev) => {
       if (!tracking) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
-        // vertical scroll intent — bail
-        tracking = false;
-        view.classList.remove('is-swiping');
-        view.style.transform = '';
-        return;
+      const dx = x - startX;
+      const dy = y - startY;
+      // Lock the axis on the first move that clears the noise floor —
+      // once we decide "this is a vertical scroll" we stop tracking for
+      // this gesture, so we don't briefly hijack a diagonal drag.
+      if (!decided) {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return; // still noise
+        decided = true;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          // vertical intent — abandon, let the browser have the scroll
+          tracking = false;
+          view.classList.remove('is-swiping');
+          view.style.transform = '';
+          return;
+        }
       }
-      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-        dragged = dx;
-        view.classList.add('is-swiping');
-        // Clamp visual translation to +/-120px and follow finger in
-        // both directions so the drag feels symmetric.
-        const clamped = Math.max(-120, Math.min(120, dx));
-        view.style.transform = `translateX(${clamped}px)`;
-      }
-    });
+      dragged = dx;
+      view.classList.add('is-swiping');
+      // Follow the finger in either direction, clamped to +/-120px so
+      // the drag can't fly off the screen visually.
+      const clamped = Math.max(-120, Math.min(120, dx));
+      view.style.transform = `translateX(${clamped}px)`;
+      // Once axis-locked to horizontal, stop the browser from also
+      // scrolling / initiating its own back gesture on this touch.
+      if (ev && ev.cancelable) ev.preventDefault();
+    };
     const endSwipe = (commit) => {
       tracking = false;
+      decided = false;
       view.style.transform = '';
       view.classList.remove('is-swiping');
       if (commit) goBackToLibraryKeepRunning();
       dragged = 0;
     };
-    // Commit if the drag exceeded the 60px threshold in EITHER direction.
-    view.addEventListener('pointerup',      () => endSwipe(Math.abs(dragged) > 60));
-    view.addEventListener('pointercancel',  () => endSwipe(false));
+
+    // Touch path (primary on device).
+    view.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      begin(t.clientX, t.clientY, e.target);
+    }, { passive: true });
+    // MUST be passive:false so preventDefault() can actually work once
+    // we've decided this is a horizontal swipe.
+    view.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      move(t.clientX, t.clientY, e);
+    }, { passive: false });
+    view.addEventListener('touchend',    () => endSwipe(Math.abs(dragged) > 60));
+    view.addEventListener('touchcancel', () => endSwipe(false));
+
+    // Pointer path — desktop mouse-drag fallback for browser testing.
+    view.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      if (e.button !== 0) return;
+      begin(e.clientX, e.clientY, e.target);
+    });
+    view.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      move(e.clientX, e.clientY, null);
+    });
+    view.addEventListener('pointerup',     (e) => {
+      if (e.pointerType !== 'mouse') return;
+      endSwipe(Math.abs(dragged) > 60);
+    });
+    view.addEventListener('pointercancel', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      endSwipe(false);
+    });
   })();
 
   // run controls
@@ -4157,6 +4318,7 @@ function init() {
   // v1.4 — selection-mode topbar buttons.
   document.getElementById('library-select-cancel')?.addEventListener('click', () => UI.exitSelectMode());
   document.getElementById('library-select-start')?.addEventListener('click', () => UI.startSelected());
+  document.getElementById('library-select-delete')?.addEventListener('click', () => UI.deleteSelected());
   // Editor lock — Stop button in the locked banner stops the running
   // chain. Confirm to prevent accidental stops mid-workout.
   document.getElementById('editor-locked-stop')?.addEventListener('click', () => {

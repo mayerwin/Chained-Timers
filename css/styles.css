@@ -145,6 +145,14 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 
 .topbar-left { display: flex; flex-direction: column; gap: 2px; }
 
+/* v1.4.9 — the select-mode topbar now packs trash + play as two icons
+   on the right. This wrapper keeps them tight together. */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .wordmark {
   font-family: var(--f-display);
   font-size: 30px;
@@ -1417,6 +1425,13 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 .view-run {
   background: var(--bg);
   position: absolute; inset: 0;
+  /* v1.4.9 — tell the Android WebView we own horizontal touches.
+     Without this, `touch-action: auto` lets the browser interpret a
+     horizontal drag as a chrome-style history navigation gesture and
+     never dispatch pointer/touch events to our swipe-back handler
+     — which is why v1.4.8's "swipe left = back" fix didn't fire on
+     device even though the code path was correct. */
+  touch-action: pan-y;
 }
 
 .run-bg {
@@ -1473,6 +1488,34 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* v1.4.9 — the element is a <button> now (see index.html). Strip the
+     default button chrome so it still LOOKS like a title, but stays
+     keyboard-focusable and screen-reader announces "rename chain". */
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 140ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.run-chain-name:hover,
+.run-chain-name:focus-visible { background: var(--surface-2); outline: none; }
+/* Inline rename input — swaps in on tap. Same footprint as the button
+   so nothing shifts around it. */
+.run-chain-name-input {
+  font-family: var(--f-display);
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  max-width: 70vw;
+  text-align: center;
+  outline: none;
 }
 .run-chain-pos {
   font-family: var(--f-mono);

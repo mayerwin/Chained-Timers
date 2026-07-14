@@ -1,7 +1,5 @@
-v1.4.8 — Offline load & fixes
+v1.4.9 — Swipe-back, inline rename, bulk delete
 
-• Fonts bundled locally — app opens instantly even offline (previously white screen until Google Fonts timed out).
-• Empty-name segments truly silent (native TTS was still saying "Segment").
-• Swipe LEFT on run view now returns to library (was right only). Fixes the "swipe minimises the app" issue.
-• Returning to a paused chain now shows the correct remaining time.
-• Segment duration button reads "1m" (was "01m 00s").
+• Swipe-back on the run view now actually fires in either direction. Previous fix was correct in code but the WebView never dispatched the touch — fixed with touch-action: pan-y + explicit touch handlers.
+• Tap the chain name on the live countdown to rename it inline (works even while running).
+• Multi-select toolbar now has a trash icon left of Play for bulk delete, with a confirm dialog.
