@@ -22,6 +22,52 @@ public class MainActivity extends BridgeActivity {
         // forwards them to CSS via env(safe-area-inset-*)) instead of
         // reserving space for them at the decor level.
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+
+        // v1.4.10 — register a predictive-back callback on API 33+.
+        //
+        // Before this, we relied solely on onBackPressed() (below) to
+        // catch back gestures. That worked for the on-screen back
+        // button and older Android versions, but on Android 13+ with
+        // gesture navigation, an EDGE swipe (from either side, going
+        // toward the middle) is dispatched via OnBackInvokedCallback
+        // and does NOT fall through to onBackPressed. Result: the JS
+        // "chainBack" handler never fired, and the system finished the
+        // activity — which minimised the app from anywhere in the SPA.
+        //
+        // Registering PRIORITY_DEFAULT here tells the platform we want
+        // to handle the back gesture; we forward it to JS the same way
+        // onBackPressed does, so the SPA-level routing logic (close a
+        // sheet → exit select mode → go to library → exitApp) stays in
+        // one place.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            try {
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    this::dispatchBackToJs
+                );
+            } catch (Throwable t) {
+                android.util.Log.w("ChainedTimers", "OnBackInvokedCallback register failed", t);
+            }
+        }
+    }
+
+    /**
+     * Shared back-dispatch path used by BOTH onBackPressed (legacy)
+     * and OnBackInvokedCallback (Android 13+ predictive back). Fires
+     * the "chainBack" event into JS; the JS handler decides what
+     * "back" means depending on what the user is looking at. Returns
+     * true if JS took ownership (so the caller shouldn't fall through
+     * to system back).
+     */
+    private boolean dispatchBackToJs() {
+        if (bridge == null) return false;
+        try {
+            bridge.triggerJSEvent("chainBack", "window");
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("ChainedTimers", "chainBack dispatch failed", t);
+            return false;
+        }
     }
 
     /**
@@ -74,30 +120,19 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Android hardware / gesture back button.
+     * Legacy back-button path — the on-screen 3-button-nav back button,
+     * the hardware back button on devices that still have one, and
+     * anything else that Android delivers through the old
+     * Activity.onBackPressed API instead of OnBackInvokedCallback.
      *
-     * The default Capacitor behaviour is to exit the activity outright,
-     * which for a single-Activity SPA feels like the app "closes" from
-     * anywhere — including the editor and the run view. Instead we fire
-     * a "chainBack" event into JS; the JS handler decides whether to
-     * close a sheet, navigate to the library, or ask us to actually
-     * exit via ChainTimerPlugin.exitApp().
-     *
-     * Deprecated in Android 14+ in favour of OnBackInvokedCallback /
-     * predictive back, but still functional and simpler to wire.
-     * When we adopt predictive back we'll switch to the new API and
-     * keep the same JS event contract.
+     * As of v1.4.10 the modern predictive-back path is also wired in
+     * onCreate() so gesture-nav edge swipes on API 33+ route through
+     * dispatchBackToJs() too. Both paths share the same JS "chainBack"
+     * event contract.
      */
     @Override
     public void onBackPressed() {
-        if (bridge != null) {
-            try {
-                bridge.triggerJSEvent("chainBack", "window");
-                return; // JS owns the decision
-            } catch (Throwable t) {
-                android.util.Log.w("ChainedTimers", "chainBack dispatch failed", t);
-            }
-        }
+        if (dispatchBackToJs()) return; // JS owns the decision
         super.onBackPressed();
     }
 }

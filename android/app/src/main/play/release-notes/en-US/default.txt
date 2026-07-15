@@ -1,5 +1,3 @@
-v1.4.9 — Swipe-back, inline rename, bulk delete
+v1.4.10 — Edge swipe fix
 
-• Swipe-back on the run view now actually fires in either direction. Previous fix was correct in code but the WebView never dispatched the touch — fixed with touch-action: pan-y + explicit touch handlers.
-• Tap the chain name on the live countdown to rename it inline (works even while running).
-• Multi-select toolbar now has a trash icon left of Play for bulk delete, with a confirm dialog.
+• Swiping from either screen edge now returns you to the library instead of minimising the app. The system's gesture-nav back swipe bypasses the old Android back callback on Android 13+, so we now register the modern predictive-back callback too. Works from the run view and the editor.
