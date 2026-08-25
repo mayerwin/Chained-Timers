@@ -1,4 +1,6 @@
-v1.4.11 — 3-2-1 countdown for every start
+v1.4.12 — Swipe to delete, rename mid-run
 
-• Starting a chain while another is already running now shows the 3-2-1 countdown too — inline in the new chain's clock, with the running chain's chip still visible and tappable. Previously the countdown was silently skipped in this case.
-• Tap the running chain's chip mid-countdown to keep watching it; the new chain starts in the background. X aborts the launch without touching the running chain.
+• Swipe a chain left in the library to delete it — with Undo. Chains used inside other chains are protected and tell you where they're used.
+• Rename the current segment right from the timer, even while it runs — the notification and voice cues follow.
+• First countdown ever? A snackbar now offers Skip or Always skip.
+• The big clock and the "remaining" readout no longer disagree by a second.
