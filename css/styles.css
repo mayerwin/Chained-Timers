@@ -592,6 +592,47 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   flex-direction: column;
   gap: 10px;
   padding-top: 8px;
+  /* v1.4.12 — anchor for the absolutely-positioned swipe underlay. */
+  position: relative;
+}
+
+/* ====================================================================
+   SWIPE-TO-DELETE (v1.4.12)
+   ==================================================================== */
+
+/* Red band revealed behind a card as it's dragged left — inserted by JS
+   only for the duration of the gesture, sized to the card it backs. */
+.swipe-underlay {
+  position: absolute;
+  left: 0; right: 0;
+  border-radius: var(--r-md);
+  background: var(--warn);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 24px;
+  pointer-events: none;
+}
+.swipe-underlay-icon {
+  width: 24px; height: 24px;
+  color: #fff;
+  opacity: 0.9;
+  transition: transform 140ms cubic-bezier(.2,.7,.25,1.4);
+}
+/* Past the commit threshold the icon pops, mirroring the stock gesture's
+   point-of-no-return cue (paired with a haptic tick in JS). */
+.swipe-underlay.is-armed .swipe-underlay-icon {
+  transform: scale(1.25);
+  opacity: 1;
+}
+/* Referenced-elsewhere rows: neutral band + link icon — nothing red,
+   nothing that promises a delete. */
+.swipe-underlay.is-blocked {
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+}
+.swipe-underlay.is-blocked .swipe-underlay-icon {
+  color: var(--ink-dim);
 }
 
 .chain-card {
@@ -606,6 +647,10 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   cursor: pointer;
   transition: transform 160ms cubic-bezier(.2,.7,.25,1), border-color 160ms, background 160ms;
   box-shadow: var(--sh-soft);
+  /* v1.4.12 — vertical panning stays native; horizontal drags belong to
+     the swipe gestures (delete on idle rows, stop on running ones), so
+     the browser must not turn them into scrolls + pointercancel. */
+  touch-action: pan-y;
 }
 .chain-card:active { transform: scale(0.985); }
 .chain-card:hover { border-color: var(--rule-strong); background: var(--surface-2); }
@@ -2418,6 +2463,40 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 .toast.is-warn .t-mark { background: var(--warn); }
 .toast.is-good .t-mark { background: var(--good); }
+/* v1.4.12 — snackbar variant with an action button (Undo, etc.). */
+.toast .t-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.toast.has-action { max-width: 92vw; }
+/* Wrapping variant for longer notices (e.g. "used by A, B, C +2 more"):
+   the message breaks across lines instead of ellipsis-clipping, and the
+   pill radius relaxes so multi-line doesn't look swollen. */
+.toast.has-action.is-wrap { border-radius: 18px; }
+.toast.has-action.is-wrap .t-msg {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  text-align: left;
+}
+.toast-action-btn {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.toast-action-btn:active { background: rgba(245,176,66,0.15); }
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(8px) scale(0.96); }
   to   { opacity: 1; transform: translateY(0)    scale(1); }

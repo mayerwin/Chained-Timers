@@ -950,6 +950,40 @@ const Toast = {
       setTimeout(() => t.remove(), 280);
     }, 2400);
   },
+
+  // v1.4.12 — snackbar variant with an action button (e.g. "Undo" after
+  // a swipe-delete). duration defaults to 5s, the Material/HIG standard
+  // for undoable actions (long enough to react, short enough to not
+  // linger). Only one action toast lives at a time: a new one replaces
+  // the previous (whose action is then forfeit — the underlying change
+  // was already applied, so this matches Gmail-style stacking).
+  action(message, { label, onAction, kind = '', duration = 5000, wrap = false } = {}) {
+    const stack = document.getElementById('toast-stack');
+    stack.querySelectorAll('.toast.has-action').forEach(t => t.remove());
+    const t = document.createElement('div');
+    // wrap: multi-line message (e.g. the "used by …" notice, whose chain
+    // list won't fit one line). Single-line stays the default so short
+    // snackbars keep the tight pill shape.
+    t.className = 'toast has-action' + (kind ? ' is-' + kind : '') + (wrap ? ' is-wrap' : '');
+    t.innerHTML = `<span class="t-mark"></span><span class="t-msg">${escape(message)}</span>`;
+    let timer = null;
+    const dismiss = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      t.classList.add('is-out');
+      setTimeout(() => t.remove(), 280);
+    };
+    if (label && typeof onAction === 'function') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', () => { dismiss(); onAction(); });
+      t.appendChild(btn);
+    }
+    stack.appendChild(t);
+    timer = setTimeout(dismiss, duration);
+    return { dismiss };
+  },
 };
 
 const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
@@ -2172,6 +2206,10 @@ const UI = {
         UI.startRunForChain(chain);
       });
       UI._wireLongPress(li, chain.id);
+      // v1.4.12 — swipe-left-to-delete (non-running rows only; its
+      // pointerdown gate re-checks running state per gesture, so a card
+      // whose run ends without a re-render becomes deletable in place).
+      UI._wireSwipeToDelete(li, chain);
     });
 
     // Reflect the current select-mode + selection set into the topbars.
@@ -2213,6 +2251,242 @@ const UI = {
     // card's own onTap doesn't immediately undo what enter-select did.
     li.addEventListener('click', (e) => {
       if (triggered) { e.stopPropagation(); e.preventDefault(); triggered = false; }
+    }, true);
+  },
+
+  // v1.4.12 — chains that directly embed the given chain as a subchain.
+  // Direct references only: a deeper ancestor references the middle
+  // chain, not this one, so direct refs are exactly the set that would
+  // break if this chain vanished.
+  _chainsReferencing(chainId) {
+    return Store.getChains().filter(c =>
+      c.id !== chainId &&
+      Array.isArray(c.segments) &&
+      c.segments.some(s => s && s.kind === 'subchain' && s.refId === chainId)
+    );
+  },
+
+  // Bottom notice for a blocked delete: list up to 3 referencing chains
+  // (each name capped at 16 chars with an ellipsis so a 100-chain user
+  // with long names still gets one tidy line) and roll the rest up into
+  // "+N more".
+  _showDeleteBlockedNotice(chain, refs) {
+    const cap = (s) => {
+      const n = String(s || 'Untitled');
+      return n.length > 16 ? n.slice(0, 15) + '…' : n;
+    };
+    const names = refs.slice(0, 3).map(c => cap(c.name)).join(', ');
+    const extra = refs.length > 3 ? ` +${refs.length - 3} more` : '';
+    Toast.action(`Can't delete "${cap(chain.name)}" — used by ${names}${extra}`,
+      { kind: 'warn', duration: 4000, wrap: true });
+  },
+
+  // Delete with a 5s undo window. The delete is applied immediately
+  // (optimistic, snackbar-style); Undo splices the snapshot back at its
+  // original index so the list order is preserved. Swipe-delete is only
+  // offered on non-running, non-referenced chains, so Store.deleteChain
+  // won't scrub refs or stop runs here — the snapshot alone restores
+  // the full state.
+  _deleteChainWithUndo(chain) {
+    const idx = Store.getChains().findIndex(c => c.id === chain.id);
+    if (idx < 0) return;
+    const snapshot = Store.getChains()[idx];
+    Store.deleteChain(chain.id);
+    UI.renderLibrary();
+    Toast.action(`"${chain.name || 'Untitled'}" deleted`, {
+      label: 'Undo',
+      kind: 'warn',
+      onAction: () => {
+        if (Store.getChain(snapshot.id)) return; // already back somehow
+        const at = Math.min(idx, Store.getChains().length);
+        Store.state.chains.splice(at, 0, snapshot);
+        Store.save();
+        UI.renderLibrary();
+      },
+    });
+  },
+
+  // v1.4.12 — swipe-left-to-delete on NON-running library cards (running
+  // cards keep the v1.4.5 swipe-to-stop gesture; the two are mutually
+  // exclusive via the isChainRunning check at pointerdown, re-read per
+  // gesture). Mirrors the stock mail-app pattern: the card slides with
+  // the finger over a red underlay with a trash icon pinned to the right
+  // edge; past the threshold the icon pops (plus a haptic tick) and
+  // release commits — the card slides out, the row collapses, and an
+  // Undo snackbar appears. Below the threshold it springs back. Mouse
+  // drags ride the same pointer pipeline: unusual on desktop but
+  // harmless, and it's the only inline delete affordance there.
+  //
+  // Chains embedded in other chains can't be deleted: the drag meets
+  // heavy resistance over a neutral underlay with a link icon (no red,
+  // no trash — nothing promises a delete), and letting go past a small
+  // distance surfaces the "used by …" notice at the bottom.
+  SWIPE_DELETE_THRESHOLD_PX: 96,
+
+  _wireSwipeToDelete(li, chain) {
+    let startX = 0, startY = 0;
+    let tracking = false;   // pointer is down, watching for intent
+    let horizontal = false; // horizontal intent confirmed, card is moving
+    let armed = false;      // past the delete threshold
+    let blocked = false;    // chain is referenced — resist instead of reveal
+    let blockedRefs = [];
+    let swiped = false;     // suppress the click that follows a drag
+    let underlay = null;
+    let pid = null;
+
+    const isInteractive = (n) => !!n.closest('.chain-card-play, button, input, .chain-card-select-tick');
+
+    const makeUnderlay = () => {
+      const list = document.getElementById('chain-list');
+      const u = document.createElement('div');
+      u.className = 'swipe-underlay' + (blocked ? ' is-blocked' : '');
+      u.style.top    = li.offsetTop + 'px';
+      u.style.height = li.offsetHeight + 'px';
+      u.innerHTML = blocked
+        ? `<svg class="swipe-underlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`
+        : `<svg class="swipe-underlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>`;
+      list.insertBefore(u, li);
+      return u;
+    };
+
+    const cleanupVisual = () => {
+      li.classList.remove('is-swiping');
+      li.style.transform = '';
+      li.style.transition = '';
+      if (underlay) { underlay.remove(); underlay = null; }
+    };
+
+    const reset = () => {
+      tracking = false; horizontal = false; armed = false;
+      blocked = false; blockedRefs = []; pid = null;
+    };
+
+    // Spring the card back to rest, then drop the underlay once the
+    // card covers it again (waiting avoids a red flash at rest).
+    const springBack = () => {
+      li.classList.remove('is-swiping');
+      li.style.transition = 'transform 260ms cubic-bezier(.2,.9,.3,1.15)';
+      li.style.transform = 'translateX(0px)';
+      const u = underlay; underlay = null;
+      setTimeout(() => {
+        li.style.transition = '';
+        li.style.transform = '';
+        if (u) u.remove();
+      }, 280);
+    };
+
+    // Commit: slide fully out, collapse the row (height→0 plus
+    // margin-top→-10px to swallow the flex gap so neighbors close up
+    // with no snap), then apply the delete + show the Undo snackbar.
+    const commitDelete = () => {
+      const w = li.offsetWidth;
+      li.classList.remove('is-swiping');
+      li.style.transition = 'transform 200ms cubic-bezier(.4,0,.7,1)';
+      li.style.transform = `translateX(${-(w + 24)}px)`;
+      const u = underlay; underlay = null;
+      setTimeout(() => {
+        const h = li.offsetHeight;
+        li.style.height = h + 'px';
+        li.style.overflow = 'hidden';
+        void li.offsetHeight; // reflow so the height transition animates
+        li.style.transition = 'height 200ms ease-in, margin-top 200ms ease-in, opacity 200ms ease-in';
+        li.style.height = '0px';
+        li.style.marginTop = '-10px';
+        li.style.opacity = '0';
+        if (u) {
+          u.style.transition = 'opacity 180ms ease-in';
+          u.style.opacity = '0';
+        }
+        setTimeout(() => {
+          if (u) u.remove();
+          UI._deleteChainWithUndo(chain); // re-renders the library
+        }, 210);
+      }, 200);
+    };
+
+    li.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (UI.selectMode) return;
+      if (isInteractive(e.target)) return;
+      if (Engine.isChainRunning(chain.id)) return; // swipe-to-stop owns running rows
+      tracking = true;
+      horizontal = false;
+      armed = false;
+      swiped = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      pid = e.pointerId;
+    });
+
+    li.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!horizontal) {
+        // Vertical scroll intent — abandon (same rule as swipe-to-stop).
+        if (Math.abs(dy) > 20 && Math.abs(dy) > Math.abs(dx)) { reset(); return; }
+        if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+          horizontal = true;
+          swiped = true;
+          blockedRefs = UI._chainsReferencing(chain.id);
+          blocked = blockedRefs.length > 0;
+          underlay = makeUnderlay();
+          li.classList.add('is-swiping');
+          // Keep receiving moves even when the finger drifts off the row.
+          try { li.setPointerCapture(pid); } catch {}
+        } else {
+          return;
+        }
+      }
+      let shown;
+      if (blocked) {
+        // Heavy resistance both ways — the row wiggles but clearly
+        // refuses. Left is the "tried to delete" direction.
+        shown = dx < 0 ? Math.max(-56, dx * 0.3) : Math.min(24, dx * 0.2);
+      } else if (dx < 0) {
+        shown = dx; // 1:1 with the finger, like the stock gesture
+      } else {
+        shown = Math.min(28, dx * 0.22); // right swipe has no action — rubber-band
+      }
+      li.style.transform = `translateX(${shown}px)`;
+      if (!blocked) {
+        const nowArmed = dx < -UI.SWIPE_DELETE_THRESHOLD_PX;
+        if (nowArmed !== armed) {
+          armed = nowArmed;
+          if (underlay) underlay.classList.toggle('is-armed', armed);
+          if (armed) Vibe.do(10); // haptic tick at the point of no return
+        }
+      }
+    });
+
+    const endSwipe = () => {
+      if (!tracking) return;
+      const wasHorizontal = horizontal, wasArmed = armed, wasBlocked = blocked;
+      const refs = blockedRefs;
+      const moved = wasHorizontal ? Math.abs(parseFloat(li.style.transform.replace(/[^-\d.]/g, '')) || 0) : 0;
+      tracking = false; horizontal = false; armed = false; blocked = false; blockedRefs = []; pid = null;
+      if (!wasHorizontal) return;
+      if (wasBlocked) {
+        springBack();
+        // Only surface the notice when the drag was a real attempt, not
+        // a stray wiggle.
+        if (moved > 24) UI._showDeleteBlockedNotice(chain, refs);
+      } else if (wasArmed) {
+        commitDelete();
+      } else {
+        springBack();
+      }
+    };
+    li.addEventListener('pointerup',     endSwipe);
+    li.addEventListener('pointercancel', () => { if (horizontal) { cleanupVisual(); } reset(); });
+    // Without pointer capture (old WebViews) the pointer can leave the
+    // row mid-drag; treat it like a release so nothing sticks.
+    li.addEventListener('pointerleave', endSwipe);
+
+    // Swallow the click that Chrome synthesizes after a drag so the
+    // card doesn't open in the editor as a side effect of a swipe.
+    li.addEventListener('click', (e) => {
+      if (swiped) { e.stopPropagation(); e.preventDefault(); swiped = false; }
     }, true);
   },
 
