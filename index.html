@@ -112,7 +112,10 @@
       <nav class="tabbar" role="tablist">
         <button class="tab is-active" data-tab="library" role="tab" aria-selected="true">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-          <span>Library</span>
+          <!-- v1.4.13 — "Chains", not "Library": the tab sits next to
+               "Templates" and users read both as collections, so the
+               distinction has to be what's IN them, not a metaphor. -->
+          <span>Chains</span>
         </button>
         <button class="tab tab-fab" id="new-chain-fab" aria-label="New chain">
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -137,7 +140,7 @@
         <span class="icon-btn icon-btn-ghost" aria-hidden="true"></span>
       </header>
       <main class="templates-scroll">
-        <p class="templates-blurb">Hand-tuned starter chains. Tap to fork into your library.</p>
+        <p class="templates-blurb">Hand-tuned starter chains. Tap to fork into your chains.</p>
         <ul class="template-list" id="template-list" role="list"></ul>
       </main>
     </section>
@@ -171,7 +174,7 @@
           <div class="editor-name-row">
             <div class="editor-name-fields">
               <label class="field-label">Chain name</label>
-              <input type="text" class="editor-name-input" id="editor-name" maxlength="48" placeholder="Untitled chain" />
+              <input type="text" class="editor-name-input" id="editor-name" maxlength="48" placeholder="Chain" />
             </div>
             <!-- Bell = chain-level cue overrides. Tap to open the cue
                  sheet (Sound / Final 3 / Voice / Vibrate / Pre-start). A
@@ -448,7 +451,7 @@
 
           <hr class="setting-rule" />
           <div class="setting-actions">
-            <button class="btn btn-ghost btn-small" id="export-data">Export library</button>
+            <button class="btn btn-ghost btn-small" id="export-data">Export all</button>
             <button class="btn btn-ghost btn-small" id="import-data">Import…</button>
             <input type="file" id="import-file" accept="application/json" hidden />
           </div>

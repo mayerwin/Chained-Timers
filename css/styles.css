@@ -279,6 +279,44 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   line-height: 1;
 }
 
+/* v1.4.13 — reorder grip. Hidden until select mode, then it claims a
+   column left of the colour stripe (see the grid override below). */
+.chain-card-grip {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  color: var(--ink-faint);
+  background: transparent;
+  border-right: 1px solid var(--rule);
+  cursor: grab;
+  touch-action: none;          /* the grip owns vertical drags */
+  -webkit-tap-highlight-color: transparent;
+  transition: color 140ms, background 140ms;
+}
+.view-library[data-select-mode="true"] .chain-card-grip { display: flex; }
+/* Grid gains a leading column for the grip only in select mode, so the
+   default (non-select) layout is byte-identical to before. */
+.view-library[data-select-mode="true"] .chain-card {
+  grid-template-columns: 40px 6px 1fr auto;
+}
+.chain-card-grip:active { cursor: grabbing; color: var(--accent); background: rgba(245,176,66,0.10); }
+
+/* The row being dragged floats above its neighbours and stops
+   transitioning its own transform (the pointer drives it directly). */
+.chain-card.is-reordering,
+.chain-status-card.is-reordering {
+  position: relative;
+  z-index: 3;
+  transition: none !important;
+  box-shadow: 0 22px 40px -18px rgba(0,0,0,0.75);
+  cursor: grabbing;
+}
+.chain-card.is-reordering { border-color: var(--accent); }
+/* Suppress text selection + hover flicker while a reorder is in flight. */
+body.is-reordering-chains { user-select: none; -webkit-user-select: none; }
+body.is-reordering-chains .chain-card:hover { border-color: var(--rule); background: var(--surface); }
+
 .chain-card.is-selected {
   /* 2px-effective amber outline via combined border + outer shadow.
      box-shadow doesn't reflow, so there's no layout shift on toggle. */

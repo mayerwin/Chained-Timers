@@ -474,12 +474,29 @@ const Store = {
     this.save();
   },
 
+  // v1.4.13 — persist a user-defined chain order. Takes the full list of
+  // chain ids in their new order; any id the caller didn't mention keeps
+  // its relative position at the end, so a partial/stale list can never
+  // drop a chain from the library.
+  reorderChains(orderedIds) {
+    if (!Array.isArray(orderedIds) || !orderedIds.length) return;
+    const byId = new Map(this.state.chains.map(c => [c.id, c]));
+    const next = [];
+    for (const id of orderedIds) {
+      const c = byId.get(id);
+      if (c) { next.push(c); byId.delete(id); }
+    }
+    for (const c of this.state.chains) if (byId.has(c.id)) next.push(c);
+    this.state.chains = next;
+    this.save();
+  },
+
   duplicateChain(id) {
     const c = this.getChain(id);
     if (!c) return null;
     const copy = JSON.parse(JSON.stringify(c));
     copy.id = uid('c');
-    copy.name = (c.name || 'Untitled') + ' (copy)';
+    copy.name = (c.name || 'Chain') + ' (copy)';
     copy.segments = Array.isArray(copy.segments)
       ? copy.segments.map(s => ({ ...s, id: uid('s') }))
       : [];
@@ -2012,7 +2029,17 @@ const Editor = {
 
   saveDraft() {
     if (!this.draft) return null;
-    if (!this.draft.name.trim()) this.draft.name = 'Untitled chain';
+    // v1.4.13 — nameless chains fall back to the FIRST SEGMENT's name
+    // when the user typed one ("Hanging" beats a generic label, and
+    // it's the word they already committed to), otherwise a plain
+    // "Chain". Subchain refs are skipped: their name belongs to the
+    // referenced chain, so borrowing it would produce two chains with
+    // the same name for no reason.
+    if (!this.draft.name.trim()) {
+      const firstNamed = (this.draft.segments || [])
+        .find(s => s && s.kind !== 'subchain' && (s.name || '').trim());
+      this.draft.name = firstNamed ? firstNamed.name.trim() : 'Chain';
+    }
     Store.upsertChain(this.draft);
     this.draftId = this.draft.id;
     return this.draft;
@@ -2102,8 +2129,12 @@ const UI = {
     // (see below) renders directly under each running card, so the two
     // representations of the same chain never appear split across the
     // scroll (the pre-v1.4.5 top strip was confusing on purpose).
+    // v1.4.13 — while the user is reordering (select mode), show the
+    // stored order verbatim: floating running chains to the top would
+    // fight the drag and make the drop land somewhere the user didn't
+    // aim for. Outside select mode the running-first sort is restored.
     const runningSet = new Set(Engine.activeRuns().map(r => r.id));
-    const chains = chainsRaw.slice().sort((a, b) => {
+    const chains = UI.selectMode ? chainsRaw.slice() : chainsRaw.slice().sort((a, b) => {
       const ar = runningSet.has(a.id) ? 1 : 0;
       const br = runningSet.has(b.id) ? 1 : 0;
       return br - ar; // running (1) before not-running (0)
@@ -2122,6 +2153,15 @@ const UI = {
       li.className = 'chain-card';
       li.dataset.chainId = chain.id;
 
+      // v1.4.13 — reorder grip. Only rendered/visible in select mode
+      // (CSS), where it sits left of the colour stripe like the editor's
+      // segment handle. Press and drag it to move the chain; a plain
+      // press-and-hold elsewhere on the row still toggles selection.
+      const grip = document.createElement('div');
+      grip.className = 'chain-card-grip';
+      grip.setAttribute('aria-label', 'Reorder chain');
+      grip.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>`;
+
       const stripe = document.createElement('div');
       stripe.className = 'chain-card-stripe';
       stripe.style.background = colorHex(chain.color);
@@ -2132,7 +2172,7 @@ const UI = {
       const loops  = Math.max(1, Number(chain.loops) || 1);
       body.innerHTML = `
         <div class="chain-card-row1">
-          <div class="chain-card-name">${escape(chain.name || 'Untitled')}</div>
+          <div class="chain-card-name">${escape(chain.name || 'Chain')}</div>
           <div class="chain-card-total">${escape(fmtLong(total))}</div>
         </div>
         <div class="chain-card-segments" id="seg-preview-${safeId}"></div>
@@ -2158,11 +2198,13 @@ const UI = {
       // Reflect selection state.
       if (UI.selectedIds.has(chain.id))    li.classList.add('is-selected');
 
+      li.appendChild(grip);
       li.appendChild(stripe);
       li.appendChild(body);
       li.appendChild(play);
       li.appendChild(tick);
       list.appendChild(li);
+      UI._wireChainReorder(li, grip);
 
       // v1.4.5: if this chain is running, immediately append the inline
       // status card so the two DOM nodes stay visually attached (same
@@ -2226,6 +2268,10 @@ const UI = {
         Audio.unlock();
         UI.startRunForChain(chain);
       });
+      // Selection glyph for the tick column (no-op outside select mode,
+      // where CSS hides it) — a fresh render must paint it too, not just
+      // the toggle path.
+      UI._setTickContent(li, chain.id);
       UI._wireLongPress(li, chain.id);
       // v1.4.12 — swipe-left-to-delete (non-running rows only; its
       // pointerdown gate re-checks running state per gesture, so a card
@@ -2235,6 +2281,117 @@ const UI = {
 
     // Reflect the current select-mode + selection set into the topbars.
     UI._syncLibrarySelectionUI();
+  },
+
+  // v1.4.13 — drag-to-reorder chains by their grip (select mode only).
+  //
+  // FLIP rather than the editor's fixed-rowH arithmetic: library rows
+  // aren't uniform (a running chain carries an inline status card right
+  // beneath it), so offsets are measured, not assumed. On each crossing
+  // we reorder the DOM for real, then invert-and-play the siblings from
+  // their previous rects — which also means the DOM order at drop IS
+  // the new order, so committing is just reading it back.
+  _wireChainReorder(li, grip) {
+    if (!li || !grip) return;
+    grip.addEventListener('pointerdown', (e) => {
+      if (!UI.selectMode) return;               // grip is hidden anyway
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();                       // don't arm long-press/swipe
+      const list = li.parentElement;
+      if (!list) return;
+      try { grip.setPointerCapture(e.pointerId); } catch {}
+      const startY = e.clientY;
+      // A running chain's status card travels with its card as one unit.
+      const status = li.nextElementSibling?.classList?.contains('chain-status-card')
+        ? li.nextElementSibling : null;
+      const unit = [li, status].filter(Boolean);
+      unit.forEach(el => el.classList.add('is-reordering'));
+      document.body.classList.add('is-reordering-chains');
+      // Every DOM reorder moves the dragged row's own layout slot. We
+      // accumulate those jumps and subtract them, so the row stays glued
+      // to the finger instead of hopping by a row height each swap.
+      let shift = 0;
+
+      const cards = () => [...list.querySelectorAll('li.chain-card')];
+      // The chain-card immediately before / after the dragged unit,
+      // skipping any inline status cards between them.
+      const neighbour = (dir) => {
+        let el = dir < 0 ? li.previousElementSibling : unit[unit.length - 1].nextElementSibling;
+        while (el && !el.classList.contains('chain-card')) {
+          el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+        }
+        return el;
+      };
+
+      const onMove = (ev) => {
+        const dy = ev.clientY - startY - shift;
+        unit.forEach(el => { el.style.transform = `translateY(${dy}px)`; });
+        // Swap with a DOM neighbour once the dragged row's centre passes
+        // that neighbour's midpoint. Direction comes from the neighbour
+        // we're testing, not from the raw delta, so a drag that reverses
+        // mid-flight settles correctly.
+        const dir = dy < 0 ? -1 : 1;
+        const target = neighbour(dir);
+        if (!target) return;
+        const r  = li.getBoundingClientRect();
+        const tr = target.getBoundingClientRect();
+        const centre = r.top + r.height / 2;
+        const mid    = tr.top + tr.height / 2;
+        if (dir < 0 ? centre > mid : centre < mid) return;
+        // FLIP: First — where is everyone before the reorder?
+        const movers = [...list.children];
+        const first = new Map(movers.map(el => [el, el.getBoundingClientRect().top]));
+        const before = li.getBoundingClientRect().top;
+        // Reorder for real; the unit travels together, status card last.
+        const anchor = dir < 0
+          ? target
+          : (target.nextElementSibling?.classList?.contains('chain-status-card')
+              ? target.nextElementSibling.nextSibling
+              : target.nextSibling);
+        unit.forEach(el => list.insertBefore(el, anchor));
+        // Absorb the dragged row's own layout jump.
+        shift += li.getBoundingClientRect().top - before;
+        unit.forEach(el => { el.style.transform = `translateY(${ev.clientY - startY - shift}px)`; });
+        // Last + Invert + Play for the displaced rows.
+        for (const el of movers) {
+          if (unit.includes(el)) continue;
+          const prev = first.get(el);
+          if (prev == null) continue;
+          const delta = prev - el.getBoundingClientRect().top;
+          if (!delta) continue;
+          el.style.transition = 'none';
+          el.style.transform = `translateY(${delta}px)`;
+          requestAnimationFrame(() => {
+            el.style.transition = 'transform 180ms cubic-bezier(.2,.7,.25,1)';
+            el.style.transform = '';
+          });
+        }
+      };
+
+      const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('is-reordering-chains');
+        unit.forEach(el => {
+          el.classList.remove('is-reordering');
+          el.style.transition = '';
+          el.style.transform = '';
+        });
+        [...list.children].forEach(el => { el.style.transition = ''; el.style.transform = ''; });
+        // DOM order is the new order — read it straight back.
+        Store.reorderChains(cards().map(c => c.dataset.chainId).filter(Boolean));
+        Vibe.do(10);
+        UI.renderLibrary();
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+    // The grip owns its own gestures; keep taps on it from toggling
+    // selection or opening the editor.
+    grip.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
   },
 
   // Long-press enters selection mode and pre-selects this row.
@@ -2293,7 +2450,7 @@ const UI = {
   // "+N more".
   _showDeleteBlockedNotice(chain, refs) {
     const cap = (s) => {
-      const n = String(s || 'Untitled');
+      const n = String(s || 'Chain');
       return n.length > 16 ? n.slice(0, 15) + '…' : n;
     };
     const names = refs.slice(0, 3).map(c => cap(c.name)).join(', ');
@@ -2314,7 +2471,7 @@ const UI = {
     const snapshot = Store.getChains()[idx];
     Store.deleteChain(chain.id);
     UI.renderLibrary();
-    Toast.action(`"${chain.name || 'Untitled'}" deleted`, {
+    Toast.action(`"${chain.name || 'Chain'}" deleted`, {
       label: 'Undo',
       kind: 'warn',
       onAction: () => {
@@ -2355,7 +2512,7 @@ const UI = {
     let underlay = null;
     let pid = null;
 
-    const isInteractive = (n) => !!n.closest('.chain-card-play, button, input, .chain-card-select-tick');
+    const isInteractive = (n) => !!n.closest('.chain-card-play, button, input, .chain-card-select-tick, .chain-card-grip');
 
     const makeUnderlay = () => {
       const list = document.getElementById('chain-list');
@@ -2560,7 +2717,30 @@ const UI = {
     [...list.children].forEach(li => {
       const id = li.dataset.chainId;
       li.classList.toggle('is-selected', UI.selectedIds.has(id));
+      UI._setTickContent(li, id);
     });
+  },
+
+  // v1.4.13 — fill the select-mode tick column. The CSS has always
+  // described this glyph but the function it named never existed, so
+  // the column rendered as an empty 64px gutter. Unselected rows get a
+  // dim plus ("tap to add"); selected rows get a check plus their
+  // position in the selection, because that order decides which chain
+  // is focused when the batch starts (first = focused, rest run in the
+  // background).
+  _setTickContent(li, chainId) {
+    const tick = li.querySelector?.('.chain-card-select-tick');
+    if (!tick) return;
+    const order = [...UI.selectedIds];
+    const idx = order.indexOf(chainId);
+    if (idx < 0) {
+      tick.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+      return;
+    }
+    const label = idx === 0 ? 'Focus' : String(idx + 1);
+    tick.innerHTML =
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.5 5.5L20 7"/></svg>` +
+      `<span class="chain-card-select-tick-lbl">${escape(label)}</span>`;
   },
 
   // Mirror selectMode + count into the topbar and view attribute.
@@ -2617,7 +2797,7 @@ const UI = {
     const chains = ids.map(id => Store.getChain(id)).filter(Boolean);
     if (!chains.length) { UI.exitSelectMode(); return; }
     const prompt = chains.length === 1
-      ? `Delete "${chains[0].name || 'Untitled'}"? This cannot be undone.`
+      ? `Delete "${chains[0].name || 'Chain'}"? This cannot be undone.`
       : `Delete ${chains.length} chains? This cannot be undone.`;
     if (!confirm(prompt)) return;
     for (const c of chains) Store.deleteChain(c.id);
@@ -3495,12 +3675,25 @@ const UI = {
     const inheritLevel = isChain ? 'chain' : 'segment';
     const keys = isChain ? CUE_KEYS : SEGMENT_CUE_KEYS;
 
-    const CUE_META = {
+    // Copy is scope-aware. A chain-level override governs every segment
+    // AND the chain's own start/end cues, so its wording talks about
+    // boundaries in the plural. A SEGMENT-level override can only ever
+    // affect that one segment — mentioning "chain start/end" there was
+    // describing behaviour the row couldn't control. Same for the
+    // vibrate row, whose chain-level title ("When a segment ends")
+    // reads as a scope selector; at segment scope the scope is already
+    // fixed, so it's simply the buzz channel for this segment.
+    const CUE_META = isChain ? {
       sound:     { title: 'Sound cues',           hint: 'Chime when a segment ends and at chain start/end.' },
       finalTick: { title: 'Final 3 seconds tick', hint: 'Three quick tones counting down the last 3s.', requires: 'sound' },
       voice:     { title: 'Voice cues',           hint: 'Speak each segment name aloud as it begins.' },
       vibrate:   { title: 'When a segment ends',  hint: 'Buzz at every segment boundary and at chain end.' },
       prestart:  { title: 'Pre-start countdown',  hint: '3-2-1 before the chain starts.' },
+    } : {
+      sound:     { title: 'Sound cue',            hint: 'Chime when this segment ends.' },
+      finalTick: { title: 'Final 3 seconds tick', hint: "Three quick tones counting down this segment's last 3s.", requires: 'sound' },
+      voice:     { title: 'Voice cue',            hint: "Speak this segment's name aloud as it begins." },
+      vibrate:   { title: 'Buzz cue',             hint: 'Vibrate when this segment ends.' },
     };
 
     titleEl.textContent = isChain ? 'Chain cues' : 'Segment cues';
@@ -4364,7 +4557,7 @@ function init() {
     a.download = `chained-timers-${new Date().toISOString().slice(0,10)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    Toast.show('Library exported', 'good');
+    Toast.show('Chains exported', 'good');
   });
   document.getElementById('import-data').addEventListener('click', () => {
     document.getElementById('import-file').click();
@@ -4376,7 +4569,7 @@ function init() {
       const text = await file.text();
       Store.importAll(text);
       UI.renderLibrary();
-      Toast.show('Library imported', 'good');
+      Toast.show('Chains imported', 'good');
       UI.closeSettings();
     } catch (err) {
       Toast.show('Import failed', 'warn');
@@ -4696,7 +4889,10 @@ function init() {
       'actions-sheet',
       'duration-sheet',
       'picker-sheet',
-      'cue-sheet',
+      // v1.4.13 — was 'cue-sheet', which matches no element: the cue
+      // sheet is #cues-sheet, so Android back fell through it to the
+      // view-level handler and left the sheet open on screen.
+      'cues-sheet',
       'settings-sheet',
     ];
     for (const id of sheetIds) {
@@ -5109,7 +5305,7 @@ document.addEventListener('DOMContentLoaded', init);
 // (rather than separate window globals) avoids colliding with the built-in
 // browser `window.Audio` (HTMLAudioElement) constructor.
 if (typeof window !== 'undefined') {
-  window.ChainedApp = { Audio, Voice, Engine, Store, UI, View };
+  window.ChainedApp = { Audio, Voice, Engine, Store, UI, View, Editor };
 }
 
 })();
