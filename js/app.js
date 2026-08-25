@@ -3888,8 +3888,14 @@ const UI = {
     const totalRem = Engine.totalRemaining();
     const totalElapsed = Math.max(0, totalChain - totalRem);
     document.getElementById('run-progress-fill').style.width = `${(totalElapsed / totalChain * 100).toFixed(1)}%`;
-    document.getElementById('run-elapsed').textContent  = `${fmt(totalElapsed)} elapsed`;
-    document.getElementById('run-remaining').textContent = `${fmt(totalRem)} remaining`;
+    // Same CEILING convention as the main clock above — fmt() rounds, so
+    // passing the raw fractional remaining here made the two labels
+    // disagree by one second half the time (clock 04:36 vs "04:35
+    // remaining" on a single-segment chain). Elapsed is derived as the
+    // complement so elapsed + remaining always sums to the chain total.
+    const totalRemDisplay = Math.ceil(totalRem);
+    document.getElementById('run-elapsed').textContent  = `${fmt(Math.max(0, totalChain - totalRemDisplay))} elapsed`;
+    document.getElementById('run-remaining').textContent = `${fmt(totalRemDisplay)} remaining`;
 
     // play/pause icon
     const ico = document.getElementById('run-toggle-icon');
