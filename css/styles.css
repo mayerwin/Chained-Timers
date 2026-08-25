@@ -374,6 +374,17 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 }
 .run-chip.is-paused .run-chip-clock { color: var(--good); }
 
+/* v1.4.11 — chip for a chain counting down inline (prestart while
+   another chain is running). Blinking dot = "about to start". */
+.run-chip.is-pending .run-chip-dot {
+  background: var(--accent);
+  animation: pendingBlink 1s ease-in-out infinite;
+}
+@keyframes pendingBlink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
+
 /* ====================================================================
    LIBRARY INLINE STATUS CARD (v1.4.5)
    One card per active run, rendered as a sibling <li> directly below
@@ -1629,6 +1640,9 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   z-index: 1;
 }
 .is-warning .run-clock { color: var(--warn); animation: clockPulse 0.95s ease-in-out infinite; }
+/* v1.4.11 — inline prestart: the 3-2-1 renders in the clock itself
+   (full-screen overlay reserved for single-chain starts). */
+.run-clock.is-prestart { color: var(--accent); animation: clockPulse 0.95s ease-in-out infinite; }
 @keyframes clockPulse {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(1.04); }

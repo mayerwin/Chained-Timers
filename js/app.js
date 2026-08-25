@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.10';
+const APP_VERSION = '1.4.11';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -2361,17 +2361,28 @@ const UI = {
     // a prestart override on purpose: it makes no sense to "skip the
     // countdown only for segment 3."
     //
-    // SKIP the prestart entirely when another chain is already running:
-    // the 3-2-1 overlay would clobber the focused chain's clock display
-    // for 3s and hide the chip strip, leaving the user no way back to
-    // the running chain. Match the bulk-start (Engine.startMany) policy
-    // — "begin now" is the right answer when joining an already-active
-    // session. Single-chain users get the countdown as before.
+    // v1.4.11 — the prestart cue is honored even when another chain is
+    // already running, but INLINE: the 3-2-1 counts down in the new
+    // chain's own clock area and the chip strip stays visible, so the
+    // user keeps a path back to the running chain. (Previously the
+    // countdown was skipped entirely here because the full-screen
+    // overlay would have clobbered the running chain's UI — which users
+    // reported as "the 3-2-1 didn't happen".) Single-chain starts keep
+    // the full-screen overlay. Explicit bulk multi-start (startSelected)
+    // still means "begin now" and skips the countdown.
     const hasOtherRunning = Engine.activeRunningCount() > 0;
-    if (!hasOtherRunning && effectiveCue(null, chain, 'prestart')) {
+    if (effectiveCue(null, chain, 'prestart')) {
       UI._renderRunForChain(chain, segments);
-      View.show('run');
-      UI.runPrestart(chain);
+      if (hasOtherRunning) {
+        // runPrestart(inline) sets the pending state BEFORE View.show so
+        // renderRun's gate keeps the focused run from repainting over
+        // this preview.
+        UI.runPrestart(chain, { inline: true });
+        View.show('run');
+      } else {
+        View.show('run');
+        UI.runPrestart(chain);
+      }
     } else {
       if (Engine.startChain(chain)) View.show('run');
     }
@@ -2393,6 +2404,11 @@ const UI = {
     document.getElementById('run-clock').textContent        = fmt(seg0.duration);
     const ring = document.getElementById('run-ring-fill');
     ring.style.stroke = colorHex(seg0.color);
+    // Reset the ring to empty — when another chain is running its last
+    // painted dashoffset would otherwise bleed into this preview.
+    const circ = (2 * Math.PI * 92).toFixed(2);
+    ring.style.strokeDasharray  = circ;
+    ring.style.strokeDashoffset = circ;
     document.getElementById('run-bg').style.background =
       `radial-gradient(ellipse 70% 50% at 50% 25%, ${colorHex(seg0.color)}28, transparent 65%)`;
     const strip = document.getElementById('run-chain-strip');
@@ -2418,26 +2434,69 @@ const UI = {
     const totalChain = segments.reduce((s, x) => s + x.duration, 0);
     document.getElementById('run-elapsed').textContent   = `00:00 elapsed`;
     document.getElementById('run-remaining').textContent = `${fmt(totalChain)} remaining`;
-    // Hide chip strip during prestart (Engine has no runs yet to chip).
-    const chips = document.getElementById('run-chips');
-    if (chips) chips.hidden = true;
+    // Chip strip: delegate to renderRunChips — it hides the strip when
+    // nothing else is running (classic single-chain prestart) and keeps
+    // it visible during an inline prestart over an active session.
+    UI.renderRunChips();
   },
 
   prestartIv: null,
+  // v1.4.11 — inline prestart state. prestartPendingChain is the chain
+  // counting down inline (another chain already running); while set and
+  // not "yielded", the run view shows the pending chain's preview and
+  // the focused run's repaints are gated off. prestartYielded flips true
+  // when the user taps a running chain's chip mid-countdown — the view
+  // returns to that run and the pending chain will start in the
+  // background when the countdown fires.
+  prestartPendingChain: null,
+  prestartYielded: false,
+  prestartN: 3,
 
   cancelPrestart() {
     if (this.prestartIv) { clearInterval(this.prestartIv); this.prestartIv = null; }
     const overlay = document.getElementById('run-prestart');
     if (overlay) overlay.hidden = true;
+    if (this.prestartPendingChain) {
+      this.prestartPendingChain = null;
+      this.prestartYielded = false;
+      const clock = document.getElementById('run-clock');
+      if (clock) clock.classList.remove('is-prestart');
+      // Drop the pending chip. If the chain is about to actually start,
+      // onRunsChange re-renders right after with its real chip.
+      this.renderRunChips();
+    }
   },
 
-  runPrestart(chain) {
+  // Paint one inline-countdown frame. The pending chip's clock always
+  // updates (it stays visible even when the user yields focus back to a
+  // running chain); the big clock / eyebrow only while the pending
+  // chain's preview is what's displayed.
+  _paintInlinePrestart(n) {
+    const chipClock = document.getElementById('run-chip-pending-clock');
+    if (chipClock) chipClock.textContent = fmt(n);
+    if (UI.prestartYielded) return;
+    const clock = document.getElementById('run-clock');
+    clock.classList.add('is-prestart');
+    clock.textContent = n;
+    document.getElementById('run-segment-tag').textContent = 'Get ready';
+    document.getElementById('run-segment-of').textContent  = '';
+  },
+
+  runPrestart(chain, opts = {}) {
     UI.cancelPrestart();
-    const overlay = document.getElementById('run-prestart');
-    const num = document.getElementById('run-prestart-num');
-    overlay.hidden = false;
+    const inline = !!opts.inline;
     let n = 3;
-    num.textContent = n;
+    if (inline) {
+      UI.prestartPendingChain = chain;
+      UI.prestartYielded = false;
+      UI.prestartN = n;
+      UI.renderRunChips();
+      UI._paintInlinePrestart(n);
+    } else {
+      const overlay = document.getElementById('run-prestart');
+      overlay.hidden = false;
+      document.getElementById('run-prestart-num').textContent = n;
+    }
     // Prestart's own audible/vibration ticks resolve at chain level
     // (segment hasn't started yet), so they ride on chain.cues.sound /
     // chain.cues.vibrate. Captured once at countdown start — the user
@@ -2449,12 +2508,17 @@ const UI = {
     UI.prestartIv = setInterval(() => {
       n--;
       if (n > 0) {
-        num.textContent = n;
+        UI.prestartN = n;
+        if (inline) UI._paintInlinePrestart(n);
+        else document.getElementById('run-prestart-num').textContent = n;
         if (sound)   Audio.prestart(n === 1);
         if (vibrate) Vibe.do(n === 1 ? 100 : 50);
       } else {
+        const yielded = UI.prestartYielded;
         UI.cancelPrestart();
-        Engine.startChain(chain);
+        // If the user hopped back to a running chain mid-countdown,
+        // start this one in the background instead of yanking focus.
+        Engine.startChain(chain, { focus: !yielded });
       }
     }, 1000);
   },
@@ -3239,6 +3303,13 @@ const UI = {
   },
 
   renderRun() {
+    // v1.4.11 — while an inline prestart preview is displayed, the run
+    // view belongs to the pending chain; don't repaint the focused run
+    // over it. (Yielding focus via a chip tap clears the gate.)
+    if (UI.prestartPendingChain && !UI.prestartYielded) {
+      UI.renderRunChips();
+      return;
+    }
     if (!Engine.chain) return;
     UI._setRunChainName(Engine.chain.name);
     UI.updateRunSegmentInfo();
@@ -3270,7 +3341,10 @@ const UI = {
     const wrap = document.getElementById('run-chips');
     if (!wrap) return;
     const runs = Engine.activeRuns();
-    if (runs.length <= 1) {
+    // v1.4.11 — a chain counting down inline gets a "pending" chip, so
+    // the strip shows during an inline prestart even with one real run.
+    const pending = UI.prestartPendingChain;
+    if (runs.length + (pending ? 1 : 0) <= 1) {
       wrap.hidden = true;
       wrap.innerHTML = '';
       return;
@@ -3278,12 +3352,15 @@ const UI = {
     wrap.hidden = false;
     wrap.innerHTML = '';
     const focusedId = Engine.focusedRunId();
+    // While the pending chain's preview is displayed, no running chip is
+    // "focused" — the pending chip carries the highlight instead.
+    const previewShown = !!pending && !UI.prestartYielded;
     runs.forEach(run => {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'run-chip'
-        + (run.id === focusedId ? ' is-focused' : '')
-        + (run.isPaused          ? ' is-paused'  : '');
+        + (run.id === focusedId && !previewShown ? ' is-focused' : '')
+        + (run.isPaused                          ? ' is-paused'  : '');
       chip.dataset.chainId = run.id;
       const dot   = document.createElement('span'); dot.className = 'run-chip-dot';
       const name  = document.createElement('span'); name.className = 'run-chip-name';
@@ -3295,11 +3372,45 @@ const UI = {
       chip.appendChild(dot);
       chip.appendChild(name);
       chip.appendChild(clock);
-      chip.addEventListener('click', () => Engine.focus(run.id));
+      chip.addEventListener('click', () => {
+        if (UI.prestartPendingChain && !UI.prestartYielded) {
+          // Hopping back to a running chain mid-countdown: the pending
+          // chain still starts when the countdown fires, but in the
+          // background. Engine.focus may no-op (the run never lost
+          // engine focus), so repaint explicitly.
+          UI.prestartYielded = true;
+          Engine.focus(run.id);
+          UI.renderRun();
+        } else {
+          Engine.focus(run.id);
+        }
+      });
       // Long-press a chip to stop that specific run.
       UI._wireChipLongPress(chip, run);
       wrap.appendChild(chip);
     });
+    if (pending) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'run-chip is-pending' + (previewShown ? ' is-focused' : '');
+      const dot   = document.createElement('span'); dot.className = 'run-chip-dot';
+      const name  = document.createElement('span'); name.className = 'run-chip-name';
+      name.textContent = pending.name || 'Chain';
+      const clock = document.createElement('span'); clock.className = 'run-chip-clock';
+      clock.id = 'run-chip-pending-clock';
+      clock.textContent = fmt(UI.prestartN);
+      chip.appendChild(dot);
+      chip.appendChild(name);
+      chip.appendChild(clock);
+      // Tapping the pending chip after yielding returns to its preview.
+      chip.addEventListener('click', () => {
+        if (!UI.prestartPendingChain || !UI.prestartYielded) return;
+        UI.prestartYielded = false;
+        UI._renderRunForChain(UI.prestartPendingChain);
+        UI._paintInlinePrestart(UI.prestartN);
+      });
+      wrap.appendChild(chip);
+    }
   },
 
   _wireChipLongPress(chip, run) {
@@ -3328,6 +3439,8 @@ const UI = {
   },
 
   updateRunSegmentInfo() {
+    // Gated during an inline prestart preview — see renderRun.
+    if (UI.prestartPendingChain && !UI.prestartYielded) return;
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
     UI._setRunChainName(Engine.chain?.name);
@@ -3375,6 +3488,13 @@ const UI = {
 
   updateRunClock(seg, remainingSec, elapsedSec) {
     if (!seg) return;
+    // Gated during an inline prestart preview: the focused run keeps
+    // ticking behind it, so still ride its tick to keep the background
+    // chip clocks live — but don't let it repaint the main clock/ring.
+    if (UI.prestartPendingChain && !UI.prestartYielded) {
+      UI._updateRunChipClocks();
+      return;
+    }
     const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
     // Ceiling the displayed second so the clock flips to "00:03" at the
     // SAME instant Audio.finalThree's first pulse fires (the engine arms
@@ -3413,8 +3533,9 @@ const UI = {
     // their own _loop (their _cbTick is gated to no-op), so we just
     // need to re-read their wall-clock state and update the chip text.
     // Skip when only one run is active — chip strip is hidden, nothing
-    // to redraw.
-    if (Engine._runs.size > 1) UI._updateRunChipClocks();
+    // to redraw. (During an inline prestart the strip shows even with a
+    // single run — the pending chip makes two — so update then too.)
+    if (Engine._runs.size > 1 || UI.prestartPendingChain) UI._updateRunChipClocks();
   },
 
   // Update the run-chip clock text in place without rebuilding the
@@ -4256,6 +4377,15 @@ function init() {
 
   // run controls
   document.getElementById('run-stop').addEventListener('click', () => {
+    // v1.4.11 — X while an inline prestart preview is showing means
+    // "abort this launch", not "stop the chain running behind it".
+    // Fall back to the focused running chain's view.
+    if (UI.prestartPendingChain && !UI.prestartYielded) {
+      UI.cancelPrestart();
+      if (Engine.activeRunningCount() > 0) UI.renderRun();
+      else View.show('library');
+      return;
+    }
     if (Engine.isRunning) {
       const otherRunning = Engine.activeRunningCount() > 1;
       const focusedName = Engine.chain?.name || 'this chain';
@@ -4531,7 +4661,7 @@ document.addEventListener('DOMContentLoaded', init);
 // (rather than separate window globals) avoids colliding with the built-in
 // browser `window.Audio` (HTMLAudioElement) constructor.
 if (typeof window !== 'undefined') {
-  window.ChainedApp = { Audio, Voice, Engine, Store };
+  window.ChainedApp = { Audio, Voice, Engine, Store, UI, View };
 }
 
 })();

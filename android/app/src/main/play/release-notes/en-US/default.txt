@@ -1,3 +1,4 @@
-v1.4.10 — Edge swipe fix
+v1.4.11 — 3-2-1 countdown for every start
 
-• Swiping from either screen edge now returns you to the library instead of minimising the app. The system's gesture-nav back swipe bypasses the old Android back callback on Android 13+, so we now register the modern predictive-back callback too. Works from the run view and the editor.
+• Starting a chain while another is already running now shows the 3-2-1 countdown too — inline in the new chain's clock, with the running chain's chip still visible and tappable. Previously the countdown was silently skipped in this case.
+• Tap the running chain's chip mid-countdown to keep watching it; the new chain starts in the background. X aborts the launch without touching the running chain.
