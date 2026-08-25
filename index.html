@@ -275,7 +275,11 @@
           <span class="run-segment-of" id="run-segment-of">of —</span>
         </div>
 
-        <h1 class="run-segment-name" id="run-segment-name">—</h1>
+        <!-- v1.4.12 — button so the segment title is tappable/focusable.
+             Click swaps it for an inline input to rename the segment
+             (works mid-run, mirroring the v1.4.9 chain rename). See the
+             wire-up in js/app.js under "run-segment-name inline rename". -->
+        <button class="run-segment-name" id="run-segment-name" type="button" aria-label="Rename segment">—</button>
 
         <div class="run-clock-wrap">
           <svg class="run-ring" viewBox="0 0 200 200" aria-hidden="true">

@@ -548,6 +548,12 @@ function expandChain(rootChain, opts = {}) {
           duration: Math.max(1, seg.duration | 0),
           color: seg.color || rootChain.color || 'amber',
           path: [`${rootChain.name}${loops > 1 ? ` · ${loop+1}/${loops}` : ''}`],
+          // v1.4.12 — source identity, so a mid-run rename can be mapped
+          // back to the owning Store segment (which may live in an
+          // embedded subchain) and fanned out to every expanded instance
+          // (loops repeat the same source segment N times).
+          srcChainId: rootChain.id,
+          srcSegId: seg.id,
         };
         // Propagate per-segment cue overrides through expansion so the
         // engine resolver can see them. Both the v1.3.5 `seg.cues` shape
@@ -957,7 +963,7 @@ const Toast = {
   // linger). Only one action toast lives at a time: a new one replaces
   // the previous (whose action is then forfeit — the underlying change
   // was already applied, so this matches Gmail-style stacking).
-  action(message, { label, onAction, kind = '', duration = 5000, wrap = false } = {}) {
+  action(message, { label, onAction, actions, kind = '', duration = 5000, wrap = false } = {}) {
     const stack = document.getElementById('toast-stack');
     stack.querySelectorAll('.toast.has-action').forEach(t => t.remove());
     const t = document.createElement('div');
@@ -972,12 +978,17 @@ const Toast = {
       t.classList.add('is-out');
       setTimeout(() => t.remove(), 280);
     };
-    if (label && typeof onAction === 'function') {
+    // v1.4.12 — multi-action support (e.g. Skip / Always skip). The
+    // single label/onAction pair remains as sugar for one action.
+    const list = Array.isArray(actions) ? actions
+      : (label && typeof onAction === 'function') ? [{ label, onAction }] : [];
+    for (const a of list) {
+      if (!a || !a.label || typeof a.onAction !== 'function') continue;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'toast-action-btn';
-      btn.textContent = label;
-      btn.addEventListener('click', () => { dismiss(); onAction(); });
+      btn.textContent = a.label;
+      btn.addEventListener('click', () => { dismiss(); a.onAction(); });
       t.appendChild(btn);
     }
     stack.appendChild(t);
@@ -1200,6 +1211,16 @@ class EngineRun {
 
     this._persist();
     this._emit('chain:start');
+
+    // v1.4.12 — remember that this chain has run at least once. The
+    // first-run prestart snackbar (Skip / Always skip) keys off this:
+    // it's only offered before a chain's very first start. Stamped here
+    // so every start path counts (solo, bulk, post-countdown).
+    const storeChain = Store.getChain(this.id);
+    if (storeChain && !storeChain.hasRun) {
+      storeChain.hasRun = true;
+      Store.save();
+    }
 
     this._loop();
     this._cbSegmentChange();
@@ -2671,7 +2692,7 @@ const UI = {
     if (!segments.length) return;
     const seg0 = segments[0];
     UI._setRunChainName(chain.name);
-    document.getElementById('run-segment-name').textContent = seg0.name;
+    UI._setRunSegmentName(seg0.name);
     document.getElementById('run-segment-tag').textContent  = 'Segment 1';
     document.getElementById('run-segment-of').textContent   = `of ${segments.length}`;
     document.getElementById('run-chain-pos').textContent    = `1 / ${segments.length}`;
@@ -2728,6 +2749,9 @@ const UI = {
 
   cancelPrestart() {
     if (this.prestartIv) { clearInterval(this.prestartIv); this.prestartIv = null; }
+    // Retire the first-run Skip snackbar along with the countdown it
+    // belongs to (natural completion, abort, or a superseding start).
+    if (this._prestartSnack) { this._prestartSnack.dismiss(); this._prestartSnack = null; }
     const overlay = document.getElementById('run-prestart');
     if (overlay) overlay.hidden = true;
     if (this.prestartPendingChain) {
@@ -2779,6 +2803,32 @@ const UI = {
     const vibrate = effectiveCue(null, chain, 'vibrate');
     if (sound)   Audio.prestart(false);
     if (vibrate) Vibe.do(50);
+    // End of the countdown — shared by the interval firing naturally
+    // and the first-run "Skip" actions below. If the user hopped back
+    // to a running chain mid-countdown, start this one in the
+    // background instead of yanking focus.
+    const finish = () => {
+      const yielded = UI.prestartYielded;
+      UI.cancelPrestart();
+      Engine.startChain(chain, { focus: !yielded });
+    };
+    // v1.4.12 — before a chain's VERY FIRST start, offer to skip the
+    // countdown (once now, or always — the latter records the same
+    // app-level preference as the settings toggle). Chains that have
+    // run before don't get the offer, so a stray tap can't change
+    // settings on a chain the user already knows.
+    if (!Store.getChain(chain.id)?.hasRun) {
+      UI._prestartSnack = Toast.action('Pre-start countdown', {
+        duration: 4000,
+        actions: [
+          { label: 'Skip', onAction: () => finish() },
+          { label: 'Always skip', onAction: () => {
+              Store.setSetting('prestart', false);
+              finish();
+            } },
+        ],
+      });
+    }
     UI.prestartIv = setInterval(() => {
       n--;
       if (n > 0) {
@@ -2788,11 +2838,7 @@ const UI = {
         if (sound)   Audio.prestart(n === 1);
         if (vibrate) Vibe.do(n === 1 ? 100 : 50);
       } else {
-        const yielded = UI.prestartYielded;
-        UI.cancelPrestart();
-        // If the user hopped back to a running chain mid-countdown,
-        // start this one in the background instead of yanking focus.
-        Engine.startChain(chain, { focus: !yielded });
+        finish();
       }
     }, 1000);
   },
@@ -3576,6 +3622,56 @@ const UI = {
     el.textContent = text || '—';
   },
 
+  // Same contract for the big segment title (a <button> since v1.4.12,
+  // briefly an <input> during inline rename).
+  _setRunSegmentName(text) {
+    const el = document.getElementById('run-segment-name');
+    if (!el || el.tagName === 'INPUT') return;
+    el.textContent = text || '—';
+  },
+
+  // v1.4.12 — commit a segment rename from the run view. The expanded
+  // segment carries srcChainId/srcSegId (see expandChain), so the write
+  // targets the OWNING Store segment — which for an embedded subchain is
+  // the subchain's own segment, exactly what the editor would edit. The
+  // new name then fans out to every expanded instance in every live run
+  // (loops repeat the source segment; two concurrent runs can share it),
+  // each of which re-persists its snapshot and, on native, re-renders
+  // its voice files + refreshes the FGS notification. The immediate
+  // fgsupdate carries the new name to the notification right away; the
+  // second one (after prerenderForChain resolves) swaps in the new TTS
+  // paths — mirroring the start() sequence.
+  _renameSegmentEverywhere(srcChainId, srcSegId, newName) {
+    const srcChain = Store.getChain(srcChainId);
+    const srcSeg = srcChain?.segments?.find(s => s && s.id === srcSegId);
+    if (!srcSeg) return false;
+    srcSeg.name = newName;
+    srcChain.updatedAt = Date.now();
+    Store.save();
+    for (const run of Engine._runs.values()) {
+      let touched = false;
+      run.segments.forEach(es => {
+        if (es.srcChainId === srcChainId && es.srcSegId === srcSegId) {
+          es.name = newName;
+          es.hasName = true;
+          touched = true;
+        }
+      });
+      if (!touched) continue;
+      run._persist();
+      if (run.isRunning && window.ChainedNative?.isNative) {
+        run._emit('chain:fgsupdate');
+        const willAnyVoiceFire = run.segments.some(s => effectiveCue(s, run.chain, 'voice'));
+        if (willAnyVoiceFire) {
+          Voice.prerenderForChain(run.segments, run.id).then(() => {
+            if (run.isRunning) run._emit('chain:fgsupdate');
+          });
+        }
+      }
+    }
+    return true;
+  },
+
   renderRun() {
     // v1.4.11 — while an inline prestart preview is displayed, the run
     // view belongs to the pending chain; don't repaint the focused run
@@ -3718,7 +3814,7 @@ const UI = {
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
     UI._setRunChainName(Engine.chain?.name);
-    document.getElementById('run-segment-name').textContent = seg.name;
+    UI._setRunSegmentName(seg.name);
     document.getElementById('run-segment-tag').textContent = `Segment ${Engine.currentIndex + 1}`;
     document.getElementById('run-segment-of').textContent  = `of ${Engine.segments.length}`;
     document.getElementById('run-chain-pos').textContent   = `${Engine.currentIndex + 1} / ${Engine.segments.length}`;
@@ -4494,6 +4590,78 @@ function init() {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
         if (e.key === 'Escape') { e.preventDefault(); input.value = chain.name || ''; input.blur(); }
+      });
+      input.addEventListener('blur', () => restore(input.value));
+    });
+  })();
+
+  // v1.4.12 — inline rename of the CURRENT SEGMENT from the run view,
+  // mirroring the chain rename above: tap the big segment title to swap
+  // it for an input; Enter/blur commits, Escape cancels, empty is
+  // refused. The run, index, and source ids are captured at edit start,
+  // so a segment boundary crossing mid-edit can't retarget the commit
+  // to the wrong segment (the display just catches up on the next
+  // repaint — _setRunSegmentName skips while the input is up). The
+  // write path is UI._renameSegmentEverywhere: Store (possibly a
+  // subchain's segment) + every live run's expanded instances + native
+  // notification/voice refresh. DELEGATED on the parent container
+  // because the button is replaceWith()-ed to the input and back.
+  (() => {
+    const host = document.getElementById('run-segment-name')?.parentElement;
+    if (!host) return;
+    let editing = false;
+    host.addEventListener('click', (e) => {
+      if (editing) return;
+      const btn = e.target.closest('.run-segment-name');
+      if (!btn || btn.tagName !== 'BUTTON') return;
+      // During an inline prestart preview the displayed segment belongs
+      // to the pending chain while Engine focus is still elsewhere —
+      // renaming through that mismatch would hit the wrong segment.
+      // It's a 3-second window; just ignore taps.
+      if (UI.prestartPendingChain && !UI.prestartYielded) return;
+      const run = Engine._focused;
+      const seg = run?.segments?.[run.currentIndex];
+      if (!seg) return;
+      if (!seg.srcChainId || !seg.srcSegId) {
+        // Run restored from a pre-v1.4.12 snapshot — no source mapping.
+        Toast.show('Rename unavailable for this run', 'warn');
+        return;
+      }
+      const { srcChainId, srcSegId } = seg;
+      const srcName = Store.getChain(srcChainId)?.segments?.find(s => s && s.id === srcSegId)?.name || '';
+      editing = true;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'run-segment-name-input';
+      input.maxLength = 48;
+      input.value = srcName;
+      input.placeholder = 'Segment name';
+      input.setAttribute('aria-label', 'Segment name');
+      btn.replaceWith(input);
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+
+      const restore = (nextName) => {
+        if (!editing) return;
+        editing = false;
+        const trimmed = (nextName || '').trim();
+        if (trimmed && trimmed !== srcName) {
+          UI._renameSegmentEverywhere(srcChainId, srcSegId, trimmed);
+        }
+        // Rebuild the button as index.html declares it, showing whatever
+        // segment is CURRENT now (it may have advanced mid-edit).
+        const nb = document.createElement('button');
+        nb.className = 'run-segment-name';
+        nb.id = 'run-segment-name';
+        nb.type = 'button';
+        nb.setAttribute('aria-label', 'Rename segment');
+        const cur = Engine._focused?.segments?.[Engine._focused.currentIndex];
+        nb.textContent = cur?.name || '—';
+        input.replaceWith(nb);
+      };
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { e.preventDefault(); input.value = srcName; input.blur(); }
       });
       input.addEventListener('blur', () => restore(input.value));
     });

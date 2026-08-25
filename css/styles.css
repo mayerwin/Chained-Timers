@@ -1639,6 +1639,38 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
   max-width: 100%;
   line-height: 1;
   word-break: break-word;
+  /* v1.4.12 — the element is a <button> now (see index.html). Strip the
+     default button chrome so it still reads as the big title, but stays
+     tappable / keyboard-focusable for the inline rename. */
+  background: transparent;
+  border: 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 140ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.run-segment-name:hover,
+.run-segment-name:focus-visible { background: var(--surface-2); outline: none; }
+/* Inline rename input — swaps in on tap, same typography as the title
+   so nothing around it shifts. */
+.run-segment-name-input {
+  font-family: var(--f-display);
+  font-size: clamp(28px, 7vw, 40px);
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 2px 10px;
+  margin-bottom: 18px;
+  max-width: 88vw;
+  width: min(88vw, 480px);
+  line-height: 1;
+  text-align: center;
+  outline: none;
 }
 
 .run-clock-wrap {
