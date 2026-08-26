@@ -1451,6 +1451,28 @@ body.is-reordering-chains .chain-card:hover { border-color: var(--rule); backgro
   text-align: center;
   padding: 8px 0 4px;
 }
+/* v1.4.13 — while the duration pointer is up, the tip line says what to
+   do rather than listing power-user gestures, and brightens so the two
+   read as one instruction. */
+.hint.is-pointing { color: var(--accent); font-style: normal; }
+
+/* First-run pointer at the duration control: a breathing amber ring.
+   Deliberately an outline pulse rather than a filled highlight — it has
+   to read as "look here", not as an already-active state. */
+.segment-duration.is-hinted {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: durationHintPulse 1.9s ease-in-out infinite;
+}
+@keyframes durationHintPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,176,66,0.45); }
+  50%      { box-shadow: 0 0 0 8px rgba(245,176,66,0); }
+}
+/* Respect a reduced-motion preference: keep the amber emphasis, drop
+   the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .segment-duration.is-hinted { animation: none; box-shadow: 0 0 0 2px rgba(245,176,66,0.35); }
+}
 
 .editor-footer {
   display: grid;

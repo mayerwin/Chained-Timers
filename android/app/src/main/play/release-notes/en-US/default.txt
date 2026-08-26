@@ -1,6 +1,7 @@
-v1.4.12 — Swipe to delete, rename mid-run
+v1.4.13 — Ring until dismissed, reorder, polish
 
-• Swipe a chain left in the library to delete it — with Undo. Chains used inside other chains are protected and tell you where they're used.
-• Rename the current segment right from the timer, even while it runs — the notification and voice cues follow.
-• First countdown ever? A snackbar now offers Skip or Always skip.
-• The big clock and the "remaining" readout no longer disagree by a second.
+• New per-segment cue "Ring until dismissed": the chain waits at that segment's end, ringing like a stock alarm, until you tap Dismiss — in the app or straight from the notification.
+• Drag chains into any order: long-press a chain, then drag by the grip.
+• The "Library" tab is now "Chains", and segment cue wording no longer talks about the whole chain.
+• Voice cues in the browser now speak in your browser's language.
+• New chains point you at the duration to set first.

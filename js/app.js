@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.12';
+const APP_VERSION = '1.4.13';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -827,11 +827,32 @@ const Voice = {
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
+      // v1.4.13 — speak in the USER'S language, not the document's.
+      // Per spec an utterance with no `lang` inherits the document's
+      // (<html lang="en">), so every PWA user got an English voice
+      // regardless of their browser or OS language — French segment
+      // names were read with English pronunciation. Native Android has
+      // always followed the device's TTS locale (we never call
+      // setLanguage, so the engine default applies), so this is the web
+      // path catching up to the native one, not a new policy.
+      u.lang = Voice.preferredLang();
       u.rate = 1.0;
       u.pitch = 1.0;
       u.volume = 1.0;
       window.speechSynthesis.speak(u);
     } catch (e) { /* noop */ }
+  },
+
+  // v1.4.13 — BCP-47 tag for web speech. navigator.language is the
+  // browser's own UI language, which is the closest web equivalent of
+  // the device TTS locale that native uses. Falls back through the
+  // languages list, then to English, so a browser that exposes neither
+  // still speaks rather than throwing.
+  preferredLang() {
+    try {
+      const tag = navigator.language || (navigator.languages || [])[0];
+      return (typeof tag === 'string' && tag) ? tag : 'en';
+    } catch { return 'en'; }
   },
 
   // Cached pre-rendered voice paths for the most recent chain. Keyed by
@@ -2153,6 +2174,9 @@ const Editor = {
 
   newChain() {
     this.draftId = null;
+    // Each brand-new chain gets the duration pointer again — it's a
+    // per-chain "where do I start", not a one-time onboarding tip.
+    UI.durationHintUsed = false;
     this.draft = {
       id: uid('c'),
       name: '',
@@ -3316,6 +3340,7 @@ const UI = {
     draft.segments.forEach((seg, idx) => {
       list.appendChild(UI._renderSegmentRow(seg, idx));
     });
+    UI._syncEditorHint();
   },
 
   _renderSegmentRow(seg, idx) {
@@ -3390,6 +3415,14 @@ const UI = {
 
       const dur = document.createElement('button');
       dur.className = 'segment-duration';
+      // v1.4.13 — first-run affordance. A brand-new chain opens on a
+      // dozen controls, but the one thing everybody wants first is the
+      // duration; beta feedback was that finding it costs a beat of
+      // thought. So we POINT at it rather than auto-opening the picker
+      // (which would cover the segment list some users want to build
+      // out first). Only on a never-saved chain whose first segment is
+      // still untouched, and it stops as soon as the picker is opened.
+      if (UI._shouldHintDuration(idx, seg)) dur.classList.add('is-hinted');
       // v1.4.8 — same "1h 5m 30s" no-zero-padding format used across
       // the rest of the app. The previous fmtSegDurationHTML style
       // ("01m 00s") wasted characters on unused units and read as
@@ -3443,6 +3476,34 @@ const UI = {
     // drag & drop wiring
     UI._wireDrag(li, handle);
     return li;
+  },
+
+  // v1.4.13 — should the first-run "set the duration" pointer show on
+  // this row? Only for the FIRST segment of a chain that has never been
+  // saved and is still exactly as newChain() created it (default
+  // duration, no name). Editing an existing chain never hints: those
+  // users already know where the control is.
+  durationHintUsed: false,
+  DEFAULT_SEGMENT_SECONDS: 60,
+
+  _shouldHintDuration(idx, seg) {
+    if (UI.durationHintUsed) return false;
+    if (idx !== 0 || !seg || seg.kind === 'subchain') return false;
+    if (Editor.draftId) return false;                       // existing chain
+    if ((seg.name || '').trim()) return false;              // already customised
+    return seg.duration === UI.DEFAULT_SEGMENT_SECONDS;
+  },
+
+  /** Point the editor's tip line at the duration while the hint is up. */
+  _syncEditorHint() {
+    const el = document.getElementById('editor-hint');
+    if (!el) return;
+    const seg = Editor.draft?.segments?.[0];
+    const hinting = !!seg && UI._shouldHintDuration(0, seg);
+    el.classList.toggle('is-pointing', hinting);
+    el.textContent = hinting
+      ? 'Start here: tap the highlighted duration to set how long this segment runs.'
+      : 'Tip: drag the handle to reorder segments. Tap the color dot to change hue, or the bell to override cues.';
   },
 
   renderLibraryStatsOnly() {
@@ -3529,6 +3590,10 @@ const UI = {
   dpickPristine: true,  // first keypress replaces the seed value entirely
 
   openDurationPicker(seg) {
+    // The user has found the duration control — retire the first-run
+    // hint for the rest of this session, whatever value they end up
+    // committing (including leaving it at the default).
+    UI.durationHintUsed = true;
     UI.durationTarget  = seg;
     UI.dpickPristine   = true;
     UI._setDpickFromSeconds(Math.max(0, seg.duration | 0));
