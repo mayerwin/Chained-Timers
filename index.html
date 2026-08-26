@@ -310,6 +310,15 @@
         </div>
       </div>
 
+      <!-- v1.4.13 — ring-until-dismissed gate. Shown in place of the
+           transport row while a segment with that cue has ended and the
+           chain is waiting; tapping it silences the alarm and starts the
+           next segment. Wired in js/app.js under "run-dismiss". -->
+      <div class="run-dismiss-bar" id="run-dismiss-bar" hidden>
+        <span class="run-dismiss-label" id="run-dismiss-label">Time's up</span>
+        <button class="btn btn-primary run-dismiss-btn" id="run-dismiss">Dismiss</button>
+      </div>
+
       <footer class="run-controls">
         <button class="run-ctrl run-ctrl-secondary" id="run-prev" aria-label="Previous segment">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>

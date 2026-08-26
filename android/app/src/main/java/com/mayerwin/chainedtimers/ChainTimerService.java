@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.util.concurrent.ConcurrentHashMap;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -93,6 +94,8 @@ public class ChainTimerService extends Service {
     public static final String COMMAND_STOP       = "stop";
     public static final String COMMAND_SKIP_PREV  = "skip-prev";
     public static final String COMMAND_SKIP_NEXT  = "skip-next";
+    /** v1.4.13 — clear a ring-until-dismissed gate and resume the chain. */
+    public static final String COMMAND_DISMISS    = "dismiss";
 
     public static final String EXTRA_CHAIN_NAME            = "chainName";
     public static final String EXTRA_PLAN_JSON             = "planJson";
@@ -102,6 +105,10 @@ public class ChainTimerService extends Service {
     public static final String EXTRA_PAUSED_REMAINING_MS   = "pausedRemainingMs";
     public static final String EXTRA_HAS_PREV              = "hasPrev";
     public static final String EXTRA_HAS_NEXT              = "hasNext";
+    /** v1.4.13 — JS-side ring-until-dismissed gate state, so the service
+     *  and the WebView agree on whether a boundary is currently held. */
+    public static final String EXTRA_AWAITING_DISMISS       = "awaitingDismiss";
+    public static final String EXTRA_DISMISSED_AT_INDEX     = "dismissedAtIndex";
     public static final String EXTRA_SILENT                = "silent";
     public static final String EXTRA_TICK_ENABLED          = "tickEnabled";
     public static final String EXTRA_SOUND_ENABLED         = "soundEnabled";
@@ -216,6 +223,16 @@ public class ChainTimerService extends Service {
         final int notificationId;
         final int completionNotificationId;
 
+        // v1.4.13 — ring-until-dismissed gate. ringingAtIndex is the plan
+        // index whose boundary is currently held (-1 = not held);
+        // dismissedAtIndex is the last gate the user cleared, so the same
+        // boundary can't immediately re-arm. ringRunnable re-posts the
+        // alarm burst until dismissal or the safety cap.
+        int ringingAtIndex = -1;
+        int dismissedAtIndex = -1;
+        long ringingSinceMs = 0L;
+        Runnable ringRunnable;
+
         ChainRun(String runId, int slot) {
             this.runId = runId;
             this.notificationId = RUN_NOTIF_BASE + (slot % SLOT_COUNT);
@@ -281,6 +298,21 @@ public class ChainTimerService extends Service {
         run.curIndex = clampIndex(run, intent.getIntExtra(EXTRA_SEGMENT_INDEX, 0));
         run.segStartedAtMs = intent.getLongExtra(EXTRA_SEGMENT_STARTED_AT_MS, System.currentTimeMillis());
         run.paused = intent.getBooleanExtra(EXTRA_PAUSED, false);
+        // v1.4.13 — reconcile the ring gate with JS. JS is authoritative
+        // whenever it is awake enough to send an update: if it says the
+        // gate is cleared (the common case — the user tapped Dismiss in
+        // the app), the service stops ringing; if it says a gate is held
+        // and we aren't ringing yet, start.
+        if (intent.hasExtra(EXTRA_AWAITING_DISMISS)) {
+            boolean jsHeld = intent.getBooleanExtra(EXTRA_AWAITING_DISMISS, false);
+            run.dismissedAtIndex = intent.getIntExtra(EXTRA_DISMISSED_AT_INDEX, run.dismissedAtIndex);
+            if (!jsHeld && run.ringingAtIndex >= 0) {
+                stopRinging(run);
+            } else if (jsHeld && run.ringingAtIndex < 0) {
+                beginRingHold(run);
+                return START_STICKY;
+            }
+        }
         run.pausedRemainingMs = Math.max(0L, intent.getLongExtra(EXTRA_PAUSED_REMAINING_MS, 0L));
         run.tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
         run.soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
@@ -400,6 +432,7 @@ public class ChainTimerService extends Service {
         releaseVoicePlayer(run);
         releaseCueMediaPlayers(run);
         runs.remove(run.runId);
+        gateStates.remove(run.runId);
         // Note: slotByRun entry is kept so a quick restart of the same
         // chain gets the same notification id slot — avoids visual flicker
         // if the user re-runs the chain within seconds.
@@ -407,6 +440,12 @@ public class ChainTimerService extends Service {
 
     private void cancelTickFor(ChainRun run) {
         if (run.tickRunnable != null) tickHandler.removeCallbacks(run.tickRunnable);
+        // v1.4.13 — the ring loop is scheduled work on this same handler,
+        // so "cancel this run's pending work" must drop it too. State
+        // flags are left alone (stopRinging owns those); teardown paths
+        // discard the run anyway, and beginRingHold cancels BEFORE it
+        // creates its runnable.
+        if (run.ringRunnable != null) tickHandler.removeCallbacks(run.ringRunnable);
     }
 
     /**
@@ -444,13 +483,25 @@ public class ChainTimerService extends Service {
     private void onTickForRun(ChainRun run) {
         if (!running || run.paused) return;
         if (!runs.containsValue(run)) return;
+        // Held at a ringing gate: nothing advances until Dismiss.
+        if (run.ringingAtIndex >= 0) return;
 
         long now = System.currentTimeMillis();
         int idxBefore = run.curIndex;
 
         while (run.curIndex < run.plan.size()) {
-            long segEndMs = run.segStartedAtMs + run.plan.get(run.curIndex).durationSec * 1000L;
+            Segment segNow = run.plan.get(run.curIndex);
+            long segEndMs = run.segStartedAtMs + segNow.durationSec * 1000L;
             if (now < segEndMs) break;
+            // v1.4.13 — a ring-until-dismissed boundary stops the walk
+            // dead, even when we're catching up across several expired
+            // segments (device asleep, Doze, etc). The user must clear
+            // this gate before anything past it can run.
+            if (segNow.ringUntilDismissed && run.dismissedAtIndex != run.curIndex) {
+                run.segStartedAtMs = segEndMs;
+                beginRingHold(run);
+                return;
+            }
             run.segStartedAtMs = segEndMs;
             run.curIndex++;
         }
@@ -864,9 +915,14 @@ public class ChainTimerService extends Service {
         int total = run.plan.size();
 
         long remainingSec = computeRemainingSec(run, cur);
-        String prefix = run.paused ? "⏸" : "▶";
+        boolean ringing = run.ringingAtIndex >= 0;
+        String prefix = ringing ? "⏰" : (run.paused ? "⏸" : "▶");
         String segName = (cur != null && cur.name != null && !cur.name.isEmpty()) ? cur.name : "Segment";
-        String title = prefix + " " + segName + " · " + fmtClock(remainingSec);
+        // A held gate reads as a finished timer, not a ticking one: no
+        // countdown in the title, since nothing is counting.
+        String title = ringing
+            ? (segName + " done · tap Dismiss")
+            : (prefix + " " + segName + " · " + fmtClock(remainingSec));
         String body = "Segment " + (run.curIndex + 1) + " of " + total + " · " + run.chainName;
         String sub  = (run.curIndex + 1) + "/" + total;
         StringBuilder large = new StringBuilder();
@@ -915,6 +971,19 @@ public class ChainTimerService extends Service {
             if (segFrac > 1f) segFrac = 1f;
             int progress = Math.round(100f * (run.curIndex + segFrac) / (float) total);
             b.setProgress(100, Math.max(0, Math.min(100, progress)), false);
+        }
+
+        // v1.4.13 — while a ring-until-dismissed gate is held, the
+        // notification's whole job is to offer the one action that
+        // matters. Transport buttons would only invite the user to
+        // sidestep the gate by accident, so Dismiss stands alone
+        // (Stop still rides along as the escape hatch).
+        if (run.ringingAtIndex >= 0) {
+            b.addAction(R.drawable.ic_notif_play, "Dismiss",
+                commandPendingIntent(run.runId, COMMAND_DISMISS, 14));
+            b.addAction(R.drawable.ic_notif_stop, "Stop chain",
+                commandPendingIntent(run.runId, COMMAND_STOP, 12));
+            return b.build();
         }
 
         boolean hasPrev = intent != null
@@ -986,6 +1055,7 @@ public class ChainTimerService extends Service {
                 Segment s = new Segment();
                 s.name = o.optString("n", "Segment");
                 s.durationSec = Math.max(0, o.optInt("d", 0));
+                s.ringUntilDismissed = o.optInt("r", 0) == 1;
                 result.add(s);
             }
         } catch (JSONException ignored) {}
@@ -1024,6 +1094,7 @@ public class ChainTimerService extends Service {
         if (COMMAND_STOP.equals(command))       return 3;
         if (COMMAND_SKIP_PREV.equals(command))  return 4;
         if (COMMAND_SKIP_NEXT.equals(command))  return 5;
+        if (COMMAND_DISMISS.equals(command))    return 6;
         return 0;
     }
 
@@ -1043,9 +1114,25 @@ public class ChainTimerService extends Service {
         boolean updated = false;
 
         if (COMMAND_STOP.equals(cmd)) {
+            stopRinging(run);
             ChainTimerPlugin.deliverChainCommand(cmd, runId);
             stopRun(runId, /*alert=*/false);
             return;
+        }
+
+        // v1.4.13 — Dismiss clears a held ring gate. Any other transport
+        // command arriving while ringing also silences it: the user is
+        // clearly present and taking control, and leaving the alarm
+        // looping under a pause or skip would be nonsense.
+        if (COMMAND_DISMISS.equals(cmd)) {
+            dismissRingHold(run);
+            ChainTimerPlugin.deliverChainCommand(cmd, runId);
+            return;
+        }
+        if (run.ringingAtIndex >= 0) {
+            int cleared = run.ringingAtIndex;
+            stopRinging(run);
+            run.dismissedAtIndex = cleared;
         }
 
         if (COMMAND_PAUSE.equals(cmd)) {
@@ -1112,6 +1199,137 @@ public class ChainTimerService extends Service {
         }
 
         ChainTimerPlugin.deliverChainCommand(cmd, runId);
+    }
+
+    // --- Ring until dismissed (v1.4.13) ---------------------------
+    //
+    // The service — not JS — owns this gate, because in the background
+    // the WebView is frozen and cannot notice a boundary at all. We hold
+    // the run on its finished segment, loop the alarm cue, and swap the
+    // notification's transport actions for a single Dismiss.
+    //
+    // Ring duration: stock Android timers (AOSP DeskClock) have no
+    // auto-silence at all — a finished timer rings until you deal with
+    // it; only alarms auto-silence (10 min by default). We honour the
+    // same "until dismissed" contract but cap the NOISE at 15 minutes so
+    // a phone left in a bag doesn't ring itself flat. The gate itself
+    // stays held after the cap: the chain never advances unattended.
+    private static final long RING_TIMEOUT_MS   = 15L * 60L * 1000L;
+    private static final long RING_INTERVAL_MS  = 1500L;
+
+    private void beginRingHold(ChainRun run) {
+        if (run.ringingAtIndex >= 0) return;
+        // Cancel pending work FIRST — cancelTickFor also drops a ring
+        // runnable, and we're about to install a fresh one.
+        cancelTickFor(run);
+        run.ringingAtIndex = run.curIndex;
+        run.ringingSinceMs = System.currentTimeMillis();
+        ensureMediaPlayers(run);
+        // Loop the alarm burst on the same handler the ticks use.
+        run.ringRunnable = new Runnable() {
+            @Override public void run() {
+                if (run.ringingAtIndex < 0 || !runs.containsValue(run)) return;
+                if (System.currentTimeMillis() - run.ringingSinceMs >= RING_TIMEOUT_MS) {
+                    // Noise cap reached — go quiet, stay held.
+                    run.ringRunnable = null;
+                    return;
+                }
+                playChime(run);
+                tickHandler.postDelayed(this, RING_INTERVAL_MS);
+            }
+        };
+        tickHandler.post(run.ringRunnable);
+        publishGateState(run);
+        pushRunNotification(run, /*alert=*/true);
+        // Tell JS so the run view can show its Dismiss bar the moment
+        // the user opens the app (no-op when JS is asleep).
+        ChainTimerPlugin.deliverChainCommand("ringing", run.runId);
+    }
+
+    private void stopRinging(ChainRun run) {
+        if (run.ringRunnable != null) {
+            tickHandler.removeCallbacks(run.ringRunnable);
+            run.ringRunnable = null;
+        }
+        run.ringingAtIndex = -1;
+        run.ringingSinceMs = 0L;
+        publishGateState(run);
+    }
+
+    /**
+     * v1.4.13 — authoritative gate state, readable by the plugin.
+     *
+     * Service→JS commands are fire-and-forget: a Dismiss tapped on the
+     * notification while the WebView is asleep never reaches JS, which
+     * would then catch up on resume and RE-ARM the gate the user just
+     * cleared. So the service also publishes what it knows, and JS
+     * reconciles against it when the app comes back to the foreground.
+     * Keyed by runId; entries are dropped with their run.
+     */
+    private static final java.util.Map<String, long[]> gateStates = new ConcurrentHashMap<>();
+
+    private static void publishGateState(ChainRun run) {
+        if (run == null || run.runId == null) return;
+        gateStates.put(run.runId, new long[] {
+            run.ringingAtIndex, run.dismissedAtIndex, run.curIndex, run.segStartedAtMs,
+        });
+    }
+
+    /**
+     * [{"id":…,"ringing":…,"dismissed":…,"index":…,"segStartedAtMs":…}, …]
+     * segStartedAtMs matters as much as the indices: after a
+     * notification-side dismissal the next segment starts at the moment
+     * of dismissal, and JS must adopt that or its own (stale) start time
+     * would make the new segment look already-expired on resume.
+     */
+    public static String gateStatesJson() {
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (java.util.Map.Entry<String, long[]> e : gateStates.entrySet()) {
+            long[] v = e.getValue();
+            if (v == null || v.length < 4) continue;
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"id\":").append(JSONObject.quote(e.getKey()))
+              .append(",\"ringing\":").append(v[0])
+              .append(",\"dismissed\":").append(v[1])
+              .append(",\"index\":").append(v[2])
+              .append(",\"segStartedAtMs\":").append(v[3]).append('}');
+        }
+        return sb.append(']').toString();
+    }
+
+    /** User cleared the gate: continue from now, exactly like JS does. */
+    private void dismissRingHold(ChainRun run) {
+        if (run.ringingAtIndex < 0) return;
+        int cleared = run.ringingAtIndex;
+        stopRinging(run);
+        run.dismissedAtIndex = cleared;
+        run.curIndex = cleared + 1;
+        run.segStartedAtMs = System.currentTimeMillis();
+        run.prevAlertIndex = run.curIndex;
+        run.finalThreeStartedAtIndex = -1;
+        publishGateState(run);
+        if (run.curIndex >= run.plan.size()) {
+            completeRun(run, /*alert=*/false);
+            return;
+        }
+        tryVoiceForCurrentSegment(run);
+        cancelTickFor(run);
+        scheduleNextTick(run);
+        pushRunNotification(run, /*alert=*/false);
+    }
+
+    /** Post this run's notification, honouring FGS ownership. */
+    private void pushRunNotification(ChainRun run, boolean alert) {
+        Notification n = buildNotification(run, null, alert);
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        if (run.runId.equals(fgsOwnerRunId)) {
+            bindForeground(run, n);
+        } else {
+            try { nm.notify(run.notificationId, n); } catch (Throwable ignored) {}
+        }
     }
 
     // --- Per-run MediaPlayer pool ---------------------------------
@@ -1363,5 +1581,9 @@ public class ChainTimerService extends Service {
     static class Segment {
         String name;
         int durationSec;
+        /** v1.4.13 — "Ring until dismissed": this boundary is a gate.
+         *  The service holds here and loops the alarm instead of
+         *  advancing, until the user taps Dismiss. */
+        boolean ringUntilDismissed;
     }
 }

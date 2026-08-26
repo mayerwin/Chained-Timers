@@ -721,6 +721,69 @@ const Audio = {
     setTimeout(() => this.beep({ freq: 784, duration: 0.16, volume: 0.22, type: 'sine' }), 240);
     setTimeout(() => this.beep({ freq: 1047, duration: 0.42, volume: 0.24, type: 'sine' }), 360);
   },
+
+  // v1.4.13 — one burst of the ring-until-dismissed alarm. Two rising
+  // pairs, deliberately more insistent than chime() (which is a passing
+  // hand-off) because this one is asking to be acted on. Repeated by
+  // Alarm below until the user dismisses.
+  alarmBurst() {
+    if (this._skipOnNative()) return;
+    this.beep({ freq: 880,  duration: 0.16, volume: 0.26, type: 'square' });
+    setTimeout(() => this.beep({ freq: 1174, duration: 0.16, volume: 0.26, type: 'square' }), 200);
+    setTimeout(() => this.beep({ freq: 880,  duration: 0.16, volume: 0.26, type: 'square' }), 460);
+    setTimeout(() => this.beep({ freq: 1174, duration: 0.26, volume: 0.26, type: 'square' }), 660);
+  },
+};
+
+// ============================================================
+// Alarm — the looping "ring until dismissed" cue (web/PWA path)
+// ============================================================
+//
+// On native this is inert: the foreground service owns every audible
+// cue (v1.4.4) and keeps ringing even with the WebView asleep, which is
+// the whole point of the feature. On web we loop from JS for as long as
+// the page is alive. Either way the loop is bounded by RING_TIMEOUT_MS
+// — see the constant's comment for why a cap exists at all.
+const Alarm = {
+  // Stock Android timers (AOSP DeskClock) ring indefinitely: there is no
+  // auto-silence for timers, only for alarms (10 min by default). We
+  // honour "until dismissed" but still cap it, because this app can be
+  // mid-chain on a phone in a gym bag and a truly unbounded loop is a
+  // battery and goodwill hazard. 15 minutes is longer than the stock
+  // alarm cap and far longer than anyone waits at a real gate.
+  RING_TIMEOUT_MS: 15 * 60 * 1000,
+  BURST_INTERVAL_MS: 1500,
+
+  _iv: null,
+  _timeout: null,
+  _runId: null,
+
+  active() { return !!this._iv; },
+  activeRunId() { return this._runId; },
+
+  start(run) {
+    this.stop();
+    this._runId = run?.id || null;
+    const vibrate = effectiveCue(run?.segments?.[run.currentIndex], run?.chain, 'vibrate');
+    const burst = () => {
+      Audio.alarmBurst();
+      if (vibrate) Vibe.do([200, 120, 200]);
+    };
+    burst();
+    this._iv = setInterval(burst, this.BURST_INTERVAL_MS);
+    this._timeout = setTimeout(() => {
+      // Timed out: stop the noise but LEAVE the gate held. The chain
+      // still waits for a real dismissal, so nothing advances unseen —
+      // only the sound gives up.
+      this.stop();
+    }, this.RING_TIMEOUT_MS);
+  },
+
+  stop() {
+    if (this._iv) { clearInterval(this._iv); this._iv = null; }
+    if (this._timeout) { clearTimeout(this._timeout); this._timeout = null; }
+    this._runId = null;
+  },
 };
 
 // ============================================================
@@ -1041,6 +1104,22 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 const CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate', 'prestart'];
 const SEGMENT_CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate'];
 
+// v1.4.13 — segment-only, NON-inheriting cues. These are plain booleans
+// (default off) rather than the tri-state default/on/off of CUE_KEYS,
+// because there is deliberately no app- or chain-level counterpart: a
+// hold-and-ring gate is a property of one specific boundary, never a
+// blanket policy. Rendered in the segment cue sheet with two choices.
+const SEGMENT_BINARY_CUES = ['ringUntilDismissed'];
+// Order the segment sheet renders its rows in (ringUntilDismissed sits
+// under sound with finalTick, both being sound sub-options).
+const SEGMENT_SHEET_KEYS = ['sound', 'finalTick', 'ringUntilDismissed', 'voice', 'vibrate'];
+
+// True when this (expanded or stored) segment should hold the chain and
+// ring until the user dismisses it. Reads the raw flag — no inheritance.
+function segmentRingsUntilDismissed(seg) {
+  return !!(seg && seg.cues && seg.cues.ringUntilDismissed);
+}
+
 function readSegCue(seg, key) {
   if (!seg) return undefined;
   // Forward path: new shape.
@@ -1146,6 +1225,11 @@ class EngineRun {
     this.totalElapsed = 0;
     this.finalThreeFiredFor = -1;
     this.warningOn = false;
+    // v1.4.13 — ring-until-dismissed gate state. awaitingDismiss is the
+    // "held at a ringing boundary" flag; dismissedAtIndex records the
+    // boundary already cleared so it can't immediately re-arm.
+    this.awaitingDismiss = false;
+    this.dismissedAtIndex = -1;
   }
 
   // ---- bridge helpers ----------------------------------------
@@ -1276,8 +1360,16 @@ class EngineRun {
           // v1.4.1's per-run native renders it dead. Keeping it absent
           // so no future code accidentally branches on it.
           name: this.chain?.name,
-          segments: this.segments.map(s => ({ name: s.name, duration: s.duration, color: s.color })),
+          // v1.4.13 — ringUntilDismissed travels per segment so the FGS
+          // can hold the gate itself while the WebView is asleep (JS
+          // can't detect the boundary in the background at all).
+          segments: this.segments.map(s => ({
+            name: s.name, duration: s.duration, color: s.color,
+            ringUntilDismissed: segmentRingsUntilDismissed(s),
+          })),
           currentIndex: this.currentIndex,
+          awaitingDismiss: this.awaitingDismiss,
+          dismissedAtIndex: this.dismissedAtIndex,
           segmentStartedAtMs,
           pausedAtMs,
           isPaused: this.isPaused,
@@ -1307,6 +1399,14 @@ class EngineRun {
       const seg = this.segments[this.currentIndex];
       if (!seg) break;
       if (this._elapsedMs() >= seg.duration * 1000) {
+        // v1.4.13 — a ring-until-dismissed boundary is a hard stop even
+        // when we're replaying elapsed time (e.g. the web app was
+        // backgrounded across it). Catch-up must not silently step over
+        // a gate the user never dismissed: hold and ring instead.
+        if (this.dismissedAtIndex !== this.currentIndex && segmentRingsUntilDismissed(seg)) {
+          this._beginAlarmHold();
+          return true;
+        }
         this._advance('catchup');
         advanced = true;
       } else break;
@@ -1390,11 +1490,26 @@ class EngineRun {
 
   _advance(reason = 'auto') {
     const seg = this.segments[this.currentIndex];
+    // v1.4.13 — "Ring until dismissed": this segment's boundary is a
+    // gate, not a hand-off. Freeze here and ring until the user
+    // dismisses; dismissAlarm() re-enters with reason 'dismiss', which
+    // starts the next segment from the moment of dismissal (the held
+    // time is not charged to it). Only natural expiry gates — a user
+    // skip means "move on", and catch-up is replaying history where
+    // the gate has no live alarm to attach to.
+    if (reason === 'auto' && !this.awaitingDismiss
+        && this.dismissedAtIndex !== this.currentIndex
+        && segmentRingsUntilDismissed(seg)) {
+      this._beginAlarmHold();
+      return;
+    }
     const segDurMs = (seg?.duration || 0) * 1000;
     this.totalElapsed += segDurMs;
 
     const now = Date.now();
-    const nextStartWall = (reason === 'skip')
+    // 'dismiss' behaves like 'skip' for timing (the next segment starts
+    // now, not back when the gate was reached) but fires cues normally.
+    const nextStartWall = (reason === 'skip' || reason === 'dismiss')
       ? now
       : (this.segmentStartedAtWall + this.pausedDuration + segDurMs);
 
@@ -1432,8 +1547,57 @@ class EngineRun {
     this._persist();
     this._cbSegmentChange();
     this._loop();
-    if (reason === 'skip')      this._emit('chain:reschedule');
+    if (reason === 'skip' || reason === 'dismiss') this._emit('chain:reschedule');
     else if (reason === 'auto') this._emit('chain:fgsupdate');
+  }
+
+  // ---- Ring-until-dismissed gate -------------------------------
+  //
+  // The run stays on its (now finished) segment with the clock at
+  // 00:00 while the alarm loops. We reuse the pause plumbing for the
+  // freeze so every existing read-path (clock, chips, persistence,
+  // catch-up) already treats the run as not-counting-down; awaitingDismiss
+  // is what distinguishes "held at a gate, ringing" from "user paused".
+  _beginAlarmHold() {
+    if (this.awaitingDismiss) return;
+    this.awaitingDismiss = true;
+    this.isPaused = true;
+    this.pausedAtWall = this.segmentStartedAtWall + this.pausedDuration
+      + (this.segments[this.currentIndex]?.duration || 0) * 1000;
+    cancelAnimationFrame(this.rafId);
+    this.warningOn = false;
+    if (this._isFocused()) {
+      const view = document.querySelector('.view-run');
+      view?.classList.remove('is-warning');
+      view?.classList.add('is-alarm');
+    }
+    this._persist();
+    // Native owns the audible loop in both foreground and background
+    // (same rule as every other cue since v1.4.4); on web we ring from
+    // JS. The FGS learns about the gate from the segment payload, so a
+    // plain state emit is enough.
+    this._emit('chain:fgsupdate');
+    if (!window.ChainedNative?.isNative && this._isFocused()) Alarm.start(this);
+    this._cbSegmentChange();
+    if (typeof Engine.onAlarmChange === 'function') Engine.onAlarmChange(this);
+  }
+
+  /** User dismissed the ringing gate — continue the chain from now. */
+  dismissAlarm() {
+    if (!this.awaitingDismiss) return false;
+    this.awaitingDismiss = false;
+    this.isPaused = false;
+    this.pausedDuration = 0;
+    // Remember which boundary was cleared so re-entering _advance for
+    // this same segment doesn't immediately re-arm the gate.
+    this.dismissedAtIndex = this.currentIndex;
+    Alarm.stop();
+    if (this._isFocused()) {
+      document.querySelector('.view-run')?.classList.remove('is-alarm', 'is-paused');
+    }
+    if (typeof Engine.onAlarmChange === 'function') Engine.onAlarmChange(this);
+    this._advance('dismiss');
+    return true;
   }
 
   pause() {
@@ -1467,6 +1631,7 @@ class EngineRun {
 
   resume() {
     if (!this.isRunning || !this.isPaused) return;
+    if (this.awaitingDismiss) return;   // only dismissAlarm() clears a gate
     this.pausedDuration += Date.now() - this.pausedAtWall;
     this.isPaused = false;
     if (this._isFocused()) {
@@ -1478,10 +1643,18 @@ class EngineRun {
     this._emit('chain:reschedule');
   }
 
-  toggle() { if (this.isPaused) this.resume(); else this.pause(); }
+  // While a ring-until-dismissed gate is held, the primary transport
+  // button IS the dismiss button (the run view relabels it), so both
+  // play/pause and skip-next resolve the gate rather than fighting it —
+  // resume() would otherwise un-pause a run whose alarm is still ringing.
+  toggle() {
+    if (this.awaitingDismiss) { this.dismissAlarm(); return; }
+    if (this.isPaused) this.resume(); else this.pause();
+  }
 
   skipNext() {
     if (!this.isRunning) return;
+    if (this.awaitingDismiss) { this.dismissAlarm(); return; }
     if (!this.isPaused) this._catchup({ silent: true });
     if (!this.isRunning) return;
     this._advance('skip');
@@ -1594,6 +1767,10 @@ class EngineRun {
         pausedDuration: this.pausedDuration,
         isPaused: this.isPaused,
         totalElapsed: this.totalElapsed,
+        // v1.4.13 — a run held at a ringing gate must come back held,
+        // not silently resumed, if the app is killed and restored.
+        awaitingDismiss: this.awaitingDismiss,
+        dismissedAtIndex: this.dismissedAtIndex,
         savedAt: Date.now(),
       };
       localStorage.setItem(this._persistKey(), JSON.stringify(snap));
@@ -1754,6 +1931,10 @@ const Engine = {
   pause()    { this._focused?.pause(); },
   resume()   { this._focused?.resume(); },
   toggle()   { this._focused?.toggle(); },
+  // v1.4.13 — ring-until-dismissed gate, focused-run facade.
+  get awaitingDismiss() { return !!this._focused?.awaitingDismiss; },
+  dismissAlarm() { return !!this._focused?.dismissAlarm(); },
+  anyAwaitingDismiss() { return [...this._runs.values()].some(r => r.awaitingDismiss); },
   skipNext() { this._focused?.skipNext(); },
   skipPrev() { this._focused?.skipPrev(); },
   // Stop the focused run. UI's confirm dialog already fired (or wasn't
@@ -1902,6 +2083,8 @@ const Engine = {
         run.totalElapsed = Number(snap.totalElapsed) || 0;
         run.finalThreeFiredFor = -1;
         run.warningOn = false;
+        run.awaitingDismiss = !!snap.awaitingDismiss;
+        run.dismissedAtIndex = Number.isFinite(snap.dismissedAtIndex) ? snap.dismissedAtIndex : -1;
         this._runs.set(chain.id, run);
         // Most-recently-saved wins the focus slot. With the sort above
         // this is deterministic (always the last one in iteration).
@@ -1917,6 +2100,11 @@ const Engine = {
     if (Store.getSettings().wake && restored.some(r => !r.isPaused)) Wake.acquire();
     for (const run of restored) {
       run._emit('chain:reschedule');
+      // A run restored mid-gate resumes ringing rather than counting.
+      if (run.awaitingDismiss) {
+        if (!window.ChainedNative?.isNative && run._isFocused()) Alarm.start(run);
+        continue;
+      }
       if (!run.isPaused) run._catchup();
       if (!run.isPaused && run.isRunning) run._loop();
     }
@@ -3673,7 +3861,7 @@ const UI = {
 
     const isChain = scope === 'chain';
     const inheritLevel = isChain ? 'chain' : 'segment';
-    const keys = isChain ? CUE_KEYS : SEGMENT_CUE_KEYS;
+    const keys = isChain ? CUE_KEYS : SEGMENT_SHEET_KEYS;
 
     // Copy is scope-aware. A chain-level override governs every segment
     // AND the chain's own start/end cues, so its wording talks about
@@ -3692,6 +3880,12 @@ const UI = {
     } : {
       sound:     { title: 'Sound cue',            hint: 'Chime when this segment ends.' },
       finalTick: { title: 'Final 3 seconds tick', hint: "Three quick tones counting down this segment's last 3s.", requires: 'sound' },
+      ringUntilDismissed: {
+        title: 'Ring until dismissed',
+        hint: 'Keep ringing at the end of this segment; the chain waits here until you tap Dismiss.',
+        requires: 'sound',
+        binary: true,
+      },
       voice:     { title: 'Voice cue',            hint: "Speak this segment's name aloud as it begins." },
       vibrate:   { title: 'Buzz cue',             hint: 'Vibrate when this segment ends.' },
     };
@@ -3720,20 +3914,28 @@ const UI = {
       row.appendChild(head);
 
       const pill = document.createElement('div');
-      pill.className = 'cue-pill';
+      pill.className = 'cue-pill' + (meta.binary ? ' is-binary' : '');
       pill.setAttribute('role', 'radiogroup');
       pill.setAttribute('aria-label', meta.title);
+      // Binary cues have no inherited state, so "selected" is just the
+      // stored boolean (absent = off) rather than the tri-state.
+      const selectedState = meta.binary
+        ? (current ? 'on' : 'off')
+        : (current == null ? 'default' : current ? 'on' : 'off');
       const mkBtn = (state, label, subLabel) => {
         const b = document.createElement('button');
         b.type = 'button';
         b.dataset.state = state;
         b.setAttribute('role', 'radio');
-        b.setAttribute('aria-pressed', String(state === (current == null ? 'default' : current ? 'on' : 'off')));
+        b.setAttribute('aria-pressed', String(state === selectedState));
         b.innerHTML = subLabel
           ? `${escape(label)}<span class="pill-default-inherit">${escape(subLabel)}</span>`
           : escape(label);
         b.addEventListener('click', () => {
-          if (state === 'default') setCueOverride(holder, key, null);
+          // Binary: store true, or clear the key entirely for off — an
+          // absent key is the default, so chains stay clean on export.
+          if (meta.binary)         setCueOverride(holder, key, state === 'on' ? true : null);
+          else if (state === 'default') setCueOverride(holder, key, null);
           else                     setCueOverride(holder, key, state === 'on');
           // Refresh just this row's pill states (cheap full re-render keeps
           // it simple; the dependent finalTick sub-row's visibility may
@@ -3743,7 +3945,7 @@ const UI = {
         });
         return b;
       };
-      pill.appendChild(mkBtn('default', 'Default', inheritedLabel));
+      if (!meta.binary) pill.appendChild(mkBtn('default', 'Default', inheritedLabel));
       pill.appendChild(mkBtn('on',  'On'));
       pill.appendChild(mkBtn('off', 'Off'));
       row.appendChild(pill);
@@ -3813,6 +4015,33 @@ const UI = {
     if (!el) return;             // input has no ID during rename
     if (el.tagName === 'INPUT') return; // don't stomp user typing
     el.textContent = text || '—';
+  },
+
+  // v1.4.13 — reflect the ring-until-dismissed gate in the run view:
+  // swap the transport row for a Dismiss bar, pin the clock at 00:00,
+  // and tint the view. Called from renderRun / updateRunSegmentInfo and
+  // whenever a run enters or leaves the gate.
+  _syncAlarmUI() {
+    const run = Engine._focused;
+    const held = !!run?.awaitingDismiss;
+    const bar = document.getElementById('run-dismiss-bar');
+    const controls = document.querySelector('.run-controls');
+    const view = document.querySelector('.view-run');
+    if (bar) bar.hidden = !held;
+    if (controls) controls.hidden = held;
+    if (view) view.classList.toggle('is-alarm', held);
+    if (held) {
+      const seg = run.segments[run.currentIndex];
+      const isLast = run.currentIndex >= run.segments.length - 1;
+      const label = document.getElementById('run-dismiss-label');
+      if (label) {
+        label.textContent = isLast
+          ? `${run.chain?.name || 'Chain'} complete`
+          : `${seg?.name || 'Segment'} done`;
+      }
+      const clock = document.getElementById('run-clock');
+      if (clock) clock.textContent = fmt(0);
+    }
   },
 
   // Same contract for the big segment title (a <button> since v1.4.12,
@@ -4047,6 +4276,8 @@ const UI = {
     ico.innerHTML = Engine.isPaused
       ? `<path d="M8 5v14l11-7z"/>`
       : `<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>`;
+
+    UI._syncAlarmUI();
   },
 
   updateRunClock(seg, remainingSec, elapsedSec) {
@@ -4058,7 +4289,12 @@ const UI = {
       UI._updateRunChipClocks();
       return;
     }
-    const r = remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec;
+    // A run held at a ringing gate is finished with this segment: pin
+    // the clock at zero rather than letting a stray tick paint a stale
+    // remaining time behind the Dismiss bar.
+    const r = Engine._focused?.awaitingDismiss
+      ? 0
+      : (remainingSec == null ? Math.max(0, seg.duration - elapsedSec) : remainingSec);
     // Ceiling the displayed second so the clock flips to "00:03" at the
     // SAME instant Audio.finalThree's first pulse fires (the engine arms
     // the 3-2-1 burst on Math.ceil(remainingSec) == 3 — same calculation).
@@ -5049,6 +5285,14 @@ function init() {
     Engine.toggle();
     UI.updateRunSegmentInfo();
   });
+  // v1.4.13 — dismiss a ring-until-dismissed gate: silence the alarm
+  // and let the chain continue from this moment.
+  document.getElementById('run-dismiss').addEventListener('click', () => {
+    Audio.unlock();
+    Engine.dismissAlarm();
+    UI.updateRunSegmentInfo();
+    UI._syncAlarmUI();
+  });
   document.getElementById('run-next-btn').addEventListener('click', () => Engine.skipNext());
   document.getElementById('run-prev').addEventListener('click', () => Engine.skipPrev());
   document.getElementById('run-mute').addEventListener('click', () => {
@@ -5073,6 +5317,9 @@ function init() {
   // engine callbacks
   Engine.onTick = (seg, remaining, elapsed) => UI.updateRunClock(seg, remaining, elapsed);
   Engine.onSegmentChange = () => UI.updateRunSegmentInfo();
+  // Gate entered/left — refresh the Dismiss bar and the chip strip (a
+  // held background run shows as ringing there too).
+  Engine.onAlarmChange = () => { UI._syncAlarmUI(); UI.renderRunChips(); };
   Engine.onComplete = (totalSeconds) => UI.showCompletion(totalSeconds);
   // v1.4 — chip strip wakes up whenever a run is added/removed/focused.
   // The chip clocks themselves redraw on every focused-run tick (see
@@ -5187,15 +5434,68 @@ function init() {
       bailOutOfStaleRunView();
     }
   }
+  // v1.4.13 — reconcile ring-until-dismissed gates with the foreground
+  // service BEFORE catching up to the wall clock. While the WebView was
+  // asleep the service may have held a gate (JS knows nothing about it)
+  // or the user may have cleared one from the notification (JS would
+  // otherwise catch up and re-arm the gate they just dismissed). The
+  // service is authoritative for anything that happened in the
+  // background, so its answer wins here.
+  async function reconcileGatesWithService() {
+    const CT = window.Capacitor?.Plugins?.ChainTimer;
+    if (!CT || typeof CT.getGateStates !== 'function') return;
+    let states;
+    try {
+      const res = await CT.getGateStates();
+      states = JSON.parse(res?.states || '[]');
+    } catch { return; }
+    if (!Array.isArray(states)) return;
+    for (const st of states) {
+      const run = Engine.runById(st?.id);
+      if (!run || !run.isRunning) continue;
+      if (st.ringing >= 0) {
+        // Service is holding a gate JS hasn't noticed yet.
+        run.currentIndex = Math.min(st.ringing, run.segments.length - 1);
+        run.dismissedAtIndex = st.dismissed;
+        if (!run.awaitingDismiss) run._beginAlarmHold();
+      } else {
+        // Service says no gate is held. Adopt its cleared boundary so a
+        // later catch-up doesn't re-arm it, and drop any stale hold.
+        run.dismissedAtIndex = st.dismissed;
+        if (run.awaitingDismiss) {
+          run.awaitingDismiss = false;
+          run.isPaused = false;
+          Alarm.stop();
+          document.querySelector('.view-run')?.classList.remove('is-alarm');
+        }
+        if (Number.isFinite(st.index) && st.index > run.currentIndex) {
+          run.currentIndex = Math.min(st.index, run.segments.length - 1);
+          // Adopt the service's start time for that segment too — ours
+          // predates the gate, so catch-up would expire it instantly.
+          if (Number.isFinite(st.segStartedAtMs) && st.segStartedAtMs > 0) {
+            run.segmentStartedAtWall = st.segStartedAtMs;
+            run.pausedDuration = 0;
+          }
+          run._loop();
+        }
+      }
+    }
+    UI._syncAlarmUI();
+  }
+
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refreshFromWallClock();
+    if (document.visibilityState === 'visible') {
+      reconcileGatesWithService().then(refreshFromWallClock, refreshFromWallClock);
+    }
   });
   window.addEventListener('pageshow', refreshFromWallClock);
   window.addEventListener('focus',    refreshFromWallClock);
   // Capacitor App resume — the native bridge dispatches this when the
   // activity returns to foreground (more reliable than visibilitychange
   // on some Android skins).
-  window.addEventListener('chained:appresume', refreshFromWallClock);
+  window.addEventListener('chained:appresume', () => {
+    reconcileGatesWithService().then(refreshFromWallClock, refreshFromWallClock);
+  });
 
   // Native-bridge heartbeat: every few minutes (and on every visibility
   // change), the bridge asks the engine to re-emit chain:reschedule so
@@ -5234,6 +5534,19 @@ function init() {
       targetRun.skipNext();
     } else if (cmd === 'skip-prev') {
       targetRun.skipPrev();
+    } else if (cmd === 'dismiss') {
+      // v1.4.13 — the notification's Dismiss cleared a ring gate the
+      // SERVICE was holding (background). Mirror it in JS so the two
+      // agree; if JS never noticed the boundary (WebView was asleep),
+      // catch up to it first so the dismissal lands on the same segment.
+      if (!targetRun.awaitingDismiss) targetRun._catchup({ silent: true });
+      targetRun.dismissAlarm();
+      UI._syncAlarmUI();
+    } else if (cmd === 'ringing') {
+      // Service hit a gate while JS was asleep. Sync into the held state
+      // so the run view shows the Dismiss bar when the user opens the app.
+      if (!targetRun.awaitingDismiss) targetRun._catchup({ silent: true });
+      UI._syncAlarmUI();
     } else if (cmd === 'stop') {
       UI.cancelPrestart();
       Engine.stopRun(targetRun.id);
@@ -5305,7 +5618,7 @@ document.addEventListener('DOMContentLoaded', init);
 // (rather than separate window globals) avoids colliding with the built-in
 // browser `window.Audio` (HTMLAudioElement) constructor.
 if (typeof window !== 'undefined') {
-  window.ChainedApp = { Audio, Voice, Engine, Store, UI, View, Editor };
+  window.ChainedApp = { Audio, Voice, Alarm, Engine, Store, UI, View, Editor };
 }
 
 })();

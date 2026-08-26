@@ -92,8 +92,10 @@ console.log('\nTest 2: cue sheet copy is scope-aware');
   const segSound = segCopy.find(r => /sound/i.test(r.title));
   if (/this segment/i.test(segSound.hint)) ok(`segment sound hint scoped ("${segSound.hint}")`);
   else bad(`segment sound hint: ${segSound.hint}`);
-  // prestart is chain-only; make sure that didn't change.
-  eq(segCopy.length, 4, 'segment scope still shows 4 cue rows');
+  // prestart is chain-only — assert that directly rather than pinning a
+  // row count (the sheet legitimately grows, e.g. ring-until-dismissed).
+  if (!/pre-start/i.test(joined)) ok('pre-start countdown stays chain-only');
+  else bad(`prestart leaked into segment scope: ${joined}`);
   await page.evaluate(() => { document.getElementById('cues-sheet').hidden = true; });
 }
 

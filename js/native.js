@@ -462,7 +462,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', ringThroughDnd = false, runId = null } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', ringThroughDnd = false, runId = null, awaitingDismiss = false, dismissedAtIndex = -1 } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -488,9 +488,13 @@
     // segment. The service self-advances through this list so the
     // notification keeps ticking and disappears at chain end even
     // when the WebView (and therefore JS) is paused or killed.
+    // v1.4.13 — `r` carries the ring-until-dismissed gate per segment.
+    // The service needs it in its own plan copy because the gate has to
+    // hold while the WebView is asleep, i.e. with no JS to notice.
     const planJson = JSON.stringify(segments.map(s => ({
       n: s.name || 'Segment',
       d: Math.max(0, s.duration | 0),
+      ...(s.ringUntilDismissed ? { r: 1 } : {}),
     })));
     return {
       title:    `${titlePrefix} ${cur.name || 'Segment'}`,
@@ -514,6 +518,10 @@
       // notification action buttons (we hide whichever has no target).
       segmentIndex: currentIndex,
       segmentTotal: total,
+      // v1.4.13 — ring-until-dismissed gate, so the FGS and the WebView
+      // agree on whether a boundary is currently held.
+      awaitingDismiss: !!awaitingDismiss,
+      dismissedAtIndex: Number.isFinite(dismissedAtIndex) ? dismissedAtIndex : -1,
       hasPrev:      currentIndex > 0,
       hasNext:      currentIndex < total - 1,
       // Pre-rendered voice WAV paths + per-segment effective voice

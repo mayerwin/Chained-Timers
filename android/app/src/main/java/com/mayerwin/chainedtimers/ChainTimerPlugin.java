@@ -318,6 +318,19 @@ public class ChainTimerPlugin extends Plugin {
      * essential for medication-grade reliability checks.
      */
     @PluginMethod
+    public void getGateStates(PluginCall call) {
+        // v1.4.13 — authoritative ring-until-dismissed state from the
+        // service. JS calls this on resume: a Dismiss tapped on the
+        // notification while the WebView slept never reached JS, and
+        // without reconciling, JS would catch up and re-arm the gate the
+        // user already cleared.
+        JSObject ret = new JSObject();
+        try { ret.put("states", ChainTimerService.gateStatesJson()); }
+        catch (Throwable t) { ret.put("states", "[]"); }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void getNotificationHealth(PluginCall call) {
         Context ctx = getContext();
         JSObject ret = new JSObject();
@@ -594,6 +607,17 @@ public class ChainTimerPlugin extends Plugin {
         // model of "headphones win when they're plugged in."
         String audioRoute = call.getString("audioRoute", "headset");
         intent.putExtra(ChainTimerService.EXTRA_AUDIO_ROUTE, audioRoute);
+
+        // v1.4.13 — ring-until-dismissed gate state. Only forwarded when
+        // JS actually supplies it, so the service can tell "JS says the
+        // gate is clear" from "JS said nothing" (older payloads).
+        Boolean awaitingDismiss = call.getBoolean("awaitingDismiss", null);
+        if (awaitingDismiss != null) {
+            intent.putExtra(ChainTimerService.EXTRA_AWAITING_DISMISS, awaitingDismiss.booleanValue());
+            Integer dismissedAtIndex = call.getInt("dismissedAtIndex", -1);
+            intent.putExtra(ChainTimerService.EXTRA_DISMISSED_AT_INDEX,
+                dismissedAtIndex == null ? -1 : dismissedAtIndex.intValue());
+        }
 
         // segmentStartedAtMs: effective wall-clock moment the current
         // segment started, with paused-time excluded. The service derives
