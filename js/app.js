@@ -451,7 +451,15 @@ const Store = {
     chain.updatedAt = Date.now();
     const idx = this.state.chains.findIndex(c => c.id === chain.id);
     if (idx >= 0) this.state.chains[idx] = chain;
-    else { chain.createdAt = Date.now(); this.state.chains.unshift(chain); }
+    else {
+      chain.createdAt = Date.now();
+      // v1.4.14 — append, don't prepend. The + button lives at the
+      // BOTTOM of the library, so that is where users look for what it
+      // just made (Android's stock Clock does the same). Prepending
+      // also meant a throwaway timer landed above the chains you care
+      // about. Callers reveal the new row via UI.revealChain.
+      this.state.chains.push(chain);
+    }
     this.save();
   },
 
@@ -502,7 +510,10 @@ const Store = {
       : [];
     copy.createdAt = Date.now();
     copy.updatedAt = Date.now();
-    this.state.chains.unshift(copy);
+    // A copy belongs beside the thing it was copied from — sending it
+    // to either end of the list makes the user hunt for it.
+    const at = this.state.chains.findIndex(x => x.id === id);
+    this.state.chains.splice(at < 0 ? this.state.chains.length : at + 1, 0, copy);
     this.save();
     return copy;
   },
@@ -2606,6 +2617,24 @@ const UI = {
     grip.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
   },
 
+  // v1.4.14 — scroll a chain into view and flash it. Used right after
+  // a chain is created: new rows are appended, so on a long list the
+  // new one is off-screen and the library looks unchanged. Scrolling
+  // to it (and briefly marking it) answers "where did it go?" without
+  // a toast the user has to read.
+  revealChain(chainId) {
+    if (!chainId) return;
+    // Wait for the list to actually exist: callers switch views first,
+    // and renderLibrary runs synchronously inside View.show.
+    requestAnimationFrame(() => {
+      const li = document.querySelector(`li.chain-card[data-chain-id="${CSS.escape(chainId)}"]`);
+      if (!li) return;
+      try { li.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      catch { li.scrollIntoView(); }
+      li.classList.add("is-new");
+      setTimeout(() => li.classList.remove("is-new"), 1600);
+    });
+  },
   // Long-press enters selection mode and pre-selects this row.
   _wireLongPress(li, chainId) {
     let timer = null;
@@ -3933,14 +3962,15 @@ const UI = {
     // boundaries in the plural. A SEGMENT-level override can only ever
     // affect that one segment — mentioning "chain start/end" there was
     // describing behaviour the row couldn't control. Same for the
-    // vibrate row, whose chain-level title ("When a segment ends")
-    // reads as a scope selector; at segment scope the scope is already
-    // fixed, so it's simply the buzz channel for this segment.
+    // vibrate row: it is "Buzz cues" at every scope now (it used to be
+    // "When a segment ends" at chain/app level, which read as a scope
+    // selector rather than a cue name). Only the hint differs — chain
+    // and app scope cover every boundary, a segment covers just itself.
     const CUE_META = isChain ? {
       sound:     { title: 'Sound cues',           hint: 'Chime when a segment ends and at chain start/end.' },
       finalTick: { title: 'Final 3 seconds tick', hint: 'Three quick tones counting down the last 3s.', requires: 'sound' },
       voice:     { title: 'Voice cues',           hint: 'Speak each segment name aloud as it begins.' },
-      vibrate:   { title: 'When a segment ends',  hint: 'Buzz at every segment boundary and at chain end.' },
+      vibrate:   { title: 'Buzz cues',            hint: 'Buzz at every segment boundary and at chain end.' },
       prestart:  { title: 'Pre-start countdown',  hint: '3-2-1 before the chain starts.' },
     } : {
       sound:     { title: 'Sound cue',            hint: 'Chime when this segment ends.' },
@@ -4919,9 +4949,16 @@ function init() {
   document.getElementById('add-subchain').addEventListener('click', () => UI.openSubchainPicker());
 
   document.getElementById('editor-save-only').addEventListener('click', () => {
+    // Capture "was this a brand-new chain?" BEFORE saving — saveDraft
+    // sets draftId, so afterwards every save looks like an edit.
+    const wasNew = !Editor.draftId;
     const c = Editor.saveDraft();
     if (c) Toast.show('Chain saved', 'good');
     View.show('library');
+    // New chains are appended, so on a long list the new row is below
+    // the fold; scroll to it rather than leaving the library looking
+    // untouched. Edits stay put — the user knows where that chain was.
+    if (c && wasNew) UI.revealChain(c.id);
   });
   document.getElementById('editor-start').addEventListener('click', () => {
     Audio.unlock();

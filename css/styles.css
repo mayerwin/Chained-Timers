@@ -317,6 +317,21 @@ a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2
 body.is-reordering-chains { user-select: none; -webkit-user-select: none; }
 body.is-reordering-chains .chain-card:hover { border-color: var(--rule); background: var(--surface); }
 
+/* v1.4.14 — brief flash on a freshly created chain. New chains are
+   appended to the bottom of the list, so revealChain() scrolls to the
+   new row; this makes the landing spot obvious once the scroll ends,
+   instead of leaving the user to work out which row is new. */
+.chain-card.is-new {
+  animation: newChainFlash 1.6s ease-out;
+}
+@keyframes newChainFlash {
+  0%, 55% { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 22px -4px rgba(245,176,66,0.55); }
+  100%    { border-color: var(--rule);   box-shadow: var(--sh-soft); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chain-card.is-new { animation: none; border-color: var(--accent); }
+}
+
 .chain-card.is-selected {
   /* 2px-effective amber outline via combined border + outer shadow.
      box-shadow doesn't reflow, so there's no layout shift on toggle. */

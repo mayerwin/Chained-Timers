@@ -68,9 +68,11 @@ console.log('\nTest 2: cue sheet copy is scope-aware');
   const chainSound = chainCopy.find(r => /sound/i.test(r.title));
   if (/chain start\/end/.test(chainSound.hint)) ok('chain scope keeps chain-level sound wording');
   else bad(`chain sound hint: ${chainSound.hint}`);
-  const chainVib = chainCopy.find(r => /segment ends/i.test(r.title));
-  if (chainVib) ok('chain scope keeps "When a segment ends" title');
-  else bad('chain vibrate row title changed unexpectedly');
+  // The vibrate row is "Buzz cues" at chain/app scope and "Buzz cue" at
+  // segment scope — one cue name everywhere, only the hint differs.
+  const chainVib = chainCopy.find(r => /^buzz cues$/i.test(r.title));
+  if (chainVib) ok(`chain scope titled "${chainVib.title}" — "${chainVib.hint}"`);
+  else bad(`chain vibrate row title wrong: ${JSON.stringify(chainCopy.map(r => r.title))}`);
 
   const segCopy = await page.evaluate(() => {
     const { UI, Store } = window.ChainedApp;
