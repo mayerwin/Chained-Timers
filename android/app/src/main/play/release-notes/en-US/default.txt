@@ -1,7 +1,7 @@
 v1.4.13 — Ring until dismissed, reorder, polish
 
-• New per-segment cue "Ring until dismissed": the chain waits at that segment's end, ringing like a stock alarm, until you tap Dismiss — in the app or straight from the notification.
-• Drag chains into any order: long-press a chain, then drag by the grip.
-• The "Library" tab is now "Chains", and segment cue wording no longer talks about the whole chain.
-• Voice cues in the browser now speak in your browser's language.
+• New per-segment cue "Ring until dismissed": the chain waits at that segment's end, ringing like an alarm, until you tap Dismiss — in the app or from the notification.
+• Drag chains into any order: long-press one, then drag by the grip.
+• "Library" is now "Chains"; segment cue wording no longer mentions the whole chain.
+• Browser voice cues now speak in your browser's language.
 • New chains point you at the duration to set first.
