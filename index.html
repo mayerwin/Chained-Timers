@@ -384,6 +384,17 @@
             </span>
             <input type="checkbox" id="setting-finaltick" />
           </label>
+          <!-- v1.4.14 — app-scope "Ring until dismissed" gates the END OF
+               THE CHAIN only. Gating every segment boundary would halt a
+               workout at each one; per-segment gating stays a per-segment
+               choice (segment cue sheet). -->
+          <label class="setting-row setting-row-sub" id="setting-row-ringdismiss">
+            <span>
+              <strong>Ring until dismissed</strong>
+              <small>When a chain finishes, keep ringing until you tap Dismiss.</small>
+            </span>
+            <input type="checkbox" id="setting-ringdismiss" />
+          </label>
           <label class="setting-row">
             <span>
               <strong>Voice cues</strong>

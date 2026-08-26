@@ -255,6 +255,12 @@ const DEFAULT_SETTINGS = {
   wake: true,
   prestart: true,
   finalTick: true,
+  // v1.4.14 — "Ring until dismissed" at APP/CHAIN scope gates the END OF
+  // THE CHAIN (not every boundary): turning it on globally should make a
+  // finished timer wait for you, not halt a workout at every segment.
+  // Per-SEGMENT ring-until-dismissed is a separate, non-inheriting flag
+  // (seg.cues.ringUntilDismissed) that gates that one boundary.
+  ringUntilDismissed: false,
   notifsAsked: false,
   // Audio routing when a headset is connected:
   //   'headset' (default) — audio plays only on the headset; speaker stays silent
@@ -1133,7 +1139,7 @@ const escape = (s) => String(s).replace(/[&<>"']/g, c => ({
 // without dragging along default-redundant cue objects. The legacy
 // seg.voice field (v1.3.4) is migrated lazily by readSegCue below so
 // users upgrading from v1.3.4 keep their silenced segments silent.
-const CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate', 'prestart'];
+const CUE_KEYS = ['sound', 'finalTick', 'ringUntilDismissed', 'voice', 'vibrate', 'prestart'];
 const SEGMENT_CUE_KEYS = ['sound', 'finalTick', 'voice', 'vibrate'];
 
 // v1.4.13 — segment-only, NON-inheriting cues. These are plain booleans
@@ -1150,6 +1156,27 @@ const SEGMENT_SHEET_KEYS = ['sound', 'finalTick', 'ringUntilDismissed', 'voice',
 // ring until the user dismisses it. Reads the raw flag — no inheritance.
 function segmentRingsUntilDismissed(seg) {
   return !!(seg && seg.cues && seg.cues.ringUntilDismissed);
+}
+
+// v1.4.14 — does the CHAIN END ring until dismissed? Chain override wins,
+// else the app default. Deliberately NOT resolved through effectiveCue:
+// that would blend this chain/app-scope setting into every segment, and
+// these two scopes mean different things — a segment flag gates that one
+// boundary, the chain/app flag gates only the finish.
+function chainRingsAtEnd(chain) {
+  const c = chain && chain.cues ? chain.cues.ringUntilDismissed : undefined;
+  if (c != null) return !!c;
+  return !!Store.getSettings().ringUntilDismissed;
+}
+
+// The single question every gate check asks: should the boundary AFTER
+// segment `index` hold and ring? The last segment's boundary IS the chain
+// end, so a segment flag and the chain-end flag can both point at it —
+// this collapses them to ONE gate, so the user never dismisses twice.
+function boundaryRingsUntilDismissed(seg, index, segments, chain) {
+  if (segmentRingsUntilDismissed(seg)) return true;
+  const isLast = index >= (segments ? segments.length : 0) - 1;
+  return isLast && chainRingsAtEnd(chain);
 }
 
 function readSegCue(seg, key) {
@@ -1395,9 +1422,9 @@ class EngineRun {
           // v1.4.13 — ringUntilDismissed travels per segment so the FGS
           // can hold the gate itself while the WebView is asleep (JS
           // can't detect the boundary in the background at all).
-          segments: this.segments.map(s => ({
+          segments: this.segments.map((s, i) => ({
             name: s.name, duration: s.duration, color: s.color,
-            ringUntilDismissed: segmentRingsUntilDismissed(s),
+            ringUntilDismissed: boundaryRingsUntilDismissed(s, i, this.segments, this.chain),
           })),
           currentIndex: this.currentIndex,
           awaitingDismiss: this.awaitingDismiss,
@@ -1435,7 +1462,8 @@ class EngineRun {
         // when we're replaying elapsed time (e.g. the web app was
         // backgrounded across it). Catch-up must not silently step over
         // a gate the user never dismissed: hold and ring instead.
-        if (this.dismissedAtIndex !== this.currentIndex && segmentRingsUntilDismissed(seg)) {
+        if (this.dismissedAtIndex !== this.currentIndex
+            && boundaryRingsUntilDismissed(seg, this.currentIndex, this.segments, this.chain)) {
           this._beginAlarmHold();
           return true;
         }
@@ -1531,7 +1559,7 @@ class EngineRun {
     // the gate has no live alarm to attach to.
     if (reason === 'auto' && !this.awaitingDismiss
         && this.dismissedAtIndex !== this.currentIndex
-        && segmentRingsUntilDismissed(seg)) {
+        && boundaryRingsUntilDismissed(seg, this.currentIndex, this.segments, this.chain)) {
       this._beginAlarmHold();
       return;
     }
@@ -3797,6 +3825,7 @@ const UI = {
     document.getElementById('setting-wake').checked      = !!s.wake;
     document.getElementById('setting-prestart').checked  = !!s.prestart;
     document.getElementById('setting-finaltick').checked = !!s.finalTick;
+    document.getElementById('setting-ringdismiss').checked = !!s.ringUntilDismissed;
     const ringDndEl = document.getElementById('setting-ring-through-dnd');
     if (ringDndEl) ringDndEl.checked = !!s.ringThroughDnd;
     // Final-3 tick depends on the sound channel being on at all — hide
@@ -3969,6 +3998,11 @@ const UI = {
     const CUE_META = isChain ? {
       sound:     { title: 'Sound cues',           hint: 'Chime when a segment ends and at chain start/end.' },
       finalTick: { title: 'Final 3 seconds tick', hint: 'Three quick tones counting down the last 3s.', requires: 'sound' },
+      ringUntilDismissed: {
+        title: 'Ring until dismissed',
+        hint: 'Keep ringing when the chain finishes, until you tap Dismiss.',
+        requires: 'sound',
+      },
       voice:     { title: 'Voice cues',           hint: 'Speak each segment name aloud as it begins.' },
       vibrate:   { title: 'Buzz cues',            hint: 'Buzz at every segment boundary and at chain end.' },
       prestart:  { title: 'Pre-start countdown',  hint: '3-2-1 before the chain starts.' },
@@ -4073,9 +4107,13 @@ const UI = {
   },
 
   _syncFinalTickRowVisibility() {
-    const row = document.getElementById('setting-row-finaltick');
-    if (!row) return;
-    row.hidden = !Store.getSettings().sound;
+    // Both nested rows hang off Sound cues: neither can fire when the
+    // sound channel they ride on is off.
+    const on = !!Store.getSettings().sound;
+    for (const id of ['setting-row-finaltick', 'setting-row-ringdismiss']) {
+      const row = document.getElementById(id);
+      if (row) row.hidden = !on;
+    }
   },
 
   // Reflect the persisted audio-route value onto the 3-segment pill.
@@ -4810,6 +4848,12 @@ function init() {
       // Sound is the parent of "Final 3 seconds tick" in the Defaults
       // section — hide/show the nested row as the user flips the parent.
       if (key === 'sound') UI._syncFinalTickRowVisibility();
+      // Push a cue change that alters a GATE straight to the foreground
+      // service — it decides in the background off its own plan copy, so
+      // a stale flag there would ring (or fail to ring) at chain end.
+      if (key === 'ringUntilDismissed' || key === 'sound') {
+        for (const r of Engine._runs.values()) if (r.isRunning) r._emit('chain:fgsupdate');
+      }
     });
   };
   wireToggle('setting-sound', 'sound');
@@ -4818,6 +4862,7 @@ function init() {
   wireToggle('setting-wake', 'wake');
   wireToggle('setting-prestart', 'prestart');
   wireToggle('setting-finaltick', 'finalTick');
+  wireToggle('setting-ringdismiss', 'ringUntilDismissed');
   // v1.4.5 — Ring through DND toggle. Changing this while a chain is
   // running triggers a rebuild of the FGS MediaPlayer cue pool via the
   // next chain:fgsupdate emit (see EXTRA_RING_THROUGH_DND in the Java

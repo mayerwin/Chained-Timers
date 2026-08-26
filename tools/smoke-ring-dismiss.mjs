@@ -6,8 +6,9 @@
 // moment of dismissal (held time is not charged to it).
 //
 // Covered:
-//   1. Cue sheet: two choices only, off by default, nested under Sound,
-//      and absent from chain/app scope.
+//   1. Cue sheet: two choices only, off by default, nested under Sound.
+//      (Chain/app scope gained a SEPARATE chain-end gate in v1.4.14 —
+//      see tools/smoke-ring-scope.mjs.)
 //   2. Mid-chain gate: holds, clock pins at 00:00, Dismiss bar replaces
 //      the transport row, chain does NOT advance on its own.
 //   3. Dismiss: advances, next segment starts fresh, alarm stops.
@@ -112,9 +113,14 @@ console.log('Test 1: cue sheet — two choices, off by default, segment scope on
     UI._openCueSheet('chain', chain, chain, () => {});
     return [...document.querySelectorAll('#cues-list .cue-row')].map(r => r.dataset.cueKey);
   });
-  eq(chainKeys.includes('ringUntilDismissed'), false, 'absent from chain scope');
-  const appHasIt = await page.evaluate(() => !!document.getElementById('setting-ringUntilDismissed'));
-  eq(appHasIt, false, 'absent from app settings');
+  // v1.4.14 — chain and app scope gained their own ring-until-dismissed,
+  // but it means something different there: it gates only the CHAIN END,
+  // where this SEGMENT flag gates one specific boundary. Scope behaviour
+  // is covered in tools/smoke-ring-scope.mjs; here we only check the two
+  // controls exist and that the segment one stays the binary variant.
+  eq(chainKeys.includes('ringUntilDismissed'), true, 'chain scope has its own (chain-end) row');
+  const appHasIt = await page.evaluate(() => !!document.getElementById('setting-ringdismiss'));
+  eq(appHasIt, true, 'app settings has the chain-end toggle');
   // Toggling On stores the flag; Off clears the key entirely.
   const store = await page.evaluate(() => {
     const { UI, Store } = window.ChainedApp;
