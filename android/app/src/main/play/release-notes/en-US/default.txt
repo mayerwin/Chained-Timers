@@ -1,7 +1,4 @@
-v1.4.15 — Set the duration first
+v1.4.16 — Tell us how it is going
 
-• Creating a chain or a segment now opens the duration pad right away, titled with the segment it is setting, so it is clear you are setting that segment only.
-• New segments start at 0s, so you can type the duration straight in.
-• Adding a segment takes you to its duration rather than its name.
-
-Also includes everything from 1.4.14: chain-wide "Ring until dismissed", new chains added at the bottom, and "Buzz cues".
+• After a chain finishes, the app may ask once whether you are enjoying it. Say yes and Google's rating sheet opens inside the app; say not really and it opens a prefilled GitHub issue so the feedback reaches us directly.
+• It asks at most once, never during a run, and only after you have used the app for a few days and finished a few chains.
