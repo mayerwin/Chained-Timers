@@ -1,6 +1,7 @@
-v1.4.14 — Ring until dismissed for a whole chain
+v1.4.14 — Set the duration first
 
-• "Ring until dismissed" is now an app-wide and per-chain option too: when a chain finishes it keeps ringing until you tap Dismiss. Per-segment gates still work, and you never have to dismiss twice.
+• Creating a chain or a segment now opens the duration pad right away, titled with the segment it is setting. New segments start at 0s.
+• "Ring until dismissed" is now app-wide and per-chain too: a finished chain keeps ringing until you tap Dismiss — and never asks twice.
 • New chains are added at the bottom, next to the + button, and the list scrolls to them.
-• A duplicated chain now appears right below the one it came from.
-• The vibration setting is called "Buzz cues" everywhere.
+• A duplicate appears right below its original.
+• The vibration setting is "Buzz cues" everywhere.
