@@ -1,7 +1,7 @@
-v1.4.14 — Set the duration first
+v1.4.15 — Set the duration first
 
-• Creating a chain or a segment now opens the duration pad right away, titled with the segment it is setting. New segments start at 0s.
-• "Ring until dismissed" is now app-wide and per-chain too: a finished chain keeps ringing until you tap Dismiss — and never asks twice.
-• New chains are added at the bottom, next to the + button, and the list scrolls to them.
-• A duplicate appears right below its original.
-• The vibration setting is "Buzz cues" everywhere.
+• Creating a chain or a segment now opens the duration pad right away, titled with the segment it is setting, so it is clear you are setting that segment only.
+• New segments start at 0s, so you can type the duration straight in.
+• Adding a segment takes you to its duration rather than its name.
+
+Also includes everything from 1.4.14: chain-wide "Ring until dismissed", new chains added at the bottom, and "Buzz cues".
