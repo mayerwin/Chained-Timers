@@ -549,6 +549,32 @@
       </div>
     </div>
 
+    <!-- ░░░░░░░░ FEEDBACK PROMPT ░░░░░░░░
+         Deliberately NOT a star picker. Showing stars and sending only
+         the 5-star taps to the Store is "review gating", which Play
+         prohibits — and which Google can detect, since it owns the
+         review sheet. This asks a neutral satisfaction question and
+         then offers the SAME quality of follow-up either way: Play's
+         own review sheet, or a prefilled GitHub issue. Android only.
+         See UI.maybeAskForFeedback in js/app.js. -->
+    <div class="sheet" id="feedback-sheet" hidden>
+      <div class="sheet-scrim" data-close-sheet></div>
+      <div class="sheet-card sheet-card-compact" role="dialog" aria-labelledby="feedback-title">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <h2 class="sheet-title" id="feedback-title">Enjoying Chained Timers?</h2>
+          <button class="icon-btn" data-close-sheet aria-label="Close">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </header>
+        <p class="feedback-body">However it is going, we would like to hear it.</p>
+        <div class="feedback-actions">
+          <button class="btn btn-secondary" id="feedback-no">Not really</button>
+          <button class="btn btn-primary" id="feedback-yes">Yes</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ░░░░░░░░ DURATION PICKER SHEET ░░░░░░░░ -->
     <div class="sheet" id="duration-sheet" hidden>
       <div class="sheet-scrim" data-close-sheet></div>

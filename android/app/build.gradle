@@ -115,6 +115,11 @@ dependencies {
     // When it was sideloaded, the SDK returns UPDATE_NOT_AVAILABLE and
     // JS falls back to the GitHub Releases API check.
     implementation "com.google.android.play:app-update:2.1.0"
+    // Play In-App Review. Google owns the rating sheet: we can ask it to
+    // appear, but never pre-fill stars, read the result, or gate it on
+    // sentiment -- which is exactly why the flow in front of it is a
+    // neutral "Enjoying the app?" question rather than a star picker.
+    implementation "com.google.android.play:review:2.0.2"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

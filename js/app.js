@@ -38,6 +38,9 @@ const UPDATE_URLS = {
 // Store has no record of, so the Play In-App Updates API would return
 // UPDATE_NOT_AVAILABLE for them regardless. Set to null to disable.
 const UPDATE_CHECK_URL = 'https://api.github.com/repos/mayerwin/Chained-Timers/releases/latest';
+// Where "Not really" goes: a prefilled issue, so unhappy feedback reaches
+// us privately instead of the public store listing.
+const FEEDBACK_ISSUE_URL = 'https://github.com/mayerwin/Chained-Timers/issues/new';
 
 // ============================================================
 // Updater — "is a newer version out?"
@@ -267,6 +270,13 @@ const DEFAULT_SETTINGS = {
   // Per-SEGMENT ring-until-dismissed is a separate, non-inheriting flag
   // (seg.cues.ringUntilDismissed) that gates that one boundary.
   ringUntilDismissed: false,
+  // v1.4.16 — feedback prompt bookkeeping. firstLaunchAt/chainsCompleted
+  // decide WHEN we may ask; feedbackState records that we already did so
+  // we never nag. See UI.maybeAskForFeedback.
+  firstLaunchAt: 0,
+  chainsCompleted: 0,
+  feedbackState: '',        // '' | 'asked' | 'declined' | 'snoozed'
+  feedbackSnoozedAt: 0,
   notifsAsked: false,
   // Audio routing when a headset is connected:
   //   'headset' (default) — audio plays only on the headset; speaker stays silent
@@ -4786,6 +4796,9 @@ const UI = {
   },
 
   showCompletion(totalSeconds) {
+    // Readiness signal for the feedback prompt: a finished chain is the
+    // app doing its job, which is a fairer basis than days installed.
+    Store.setSetting('chainsCompleted', (Number(Store.getSettings().chainsCompleted) || 0) + 1);
     document.getElementById('run-complete').hidden = false;
     document.getElementById('run-complete-time').textContent = fmtLong(totalSeconds);
     document.getElementById('run-complete-count').textContent = Engine.segments.length;
@@ -4794,6 +4807,94 @@ const UI = {
 
   hideCompletion() {
     document.getElementById('run-complete').hidden = true;
+  },
+
+  // ------- Feedback prompt (Android only) -------
+  //
+  // POLICY, not preference: Play prohibits "review gating" — showing a
+  // rating widget and routing only the happy answers to the Store. So
+  // there is no star picker here. We ask a neutral question and give
+  // both answers a real destination: Play's own review sheet, or a
+  // prefilled GitHub issue. Google owns the review sheet, cannot be
+  // pre-filled, and never tells us what (or whether) the user
+  // submitted — which is exactly why the question in front of it has
+  // to be sentiment-neutral.
+  //
+  // Timing follows the usual "ask after a success, never mid-task"
+  // rule: at least FEEDBACK_MIN_DAYS since first launch, at least
+  // FEEDBACK_MIN_CHAINS finished chains, and only once the user has
+  // dismissed a completion overlay — never during a run.
+  FEEDBACK_MIN_DAYS: 3,
+  FEEDBACK_MIN_CHAINS: 3,
+  FEEDBACK_SNOOZE_DAYS: 90,
+
+  _feedbackEligible() {
+    // Android only for now: the Play review sheet is the whole point of
+    // the "Yes" branch, and the PWA has no equivalent.
+    if (!window.ChainedNative?.isNative) return false;
+    const s = Store.getSettings();
+    // 'asked' and 'declined' are terminal — one offer per install. There
+    // is no API to ask Play whether this user already reviewed (the
+    // review flow reports the same success either way), so "offer once"
+    // IS the de-dup. Play also silently no-ops its sheet for users who
+    // have already reviewed, so the worst case is a sheet that does not
+    // appear.
+    if (s.feedbackState === 'asked' || s.feedbackState === 'declined') return false;
+    if (Engine.activeRunningCount() > 0) return false;
+    const DAY = 24 * 60 * 60 * 1000;
+    const age = Date.now() - (Number(s.firstLaunchAt) || Date.now());
+    if (age < UI.FEEDBACK_MIN_DAYS * DAY) return false;
+    if ((Number(s.chainsCompleted) || 0) < UI.FEEDBACK_MIN_CHAINS) return false;
+    // Dismissed once already: wait out the snooze, then this is the last ask.
+    if (s.feedbackState === 'snoozed') {
+      const since = Date.now() - (Number(s.feedbackSnoozedAt) || 0);
+      if (since < UI.FEEDBACK_SNOOZE_DAYS * DAY) return false;
+    }
+    return true;
+  },
+
+  maybeAskForFeedback() {
+    if (!UI._feedbackEligible()) return false;
+    document.getElementById('feedback-sheet').hidden = false;
+    return true;
+  },
+
+  closeFeedback() {
+    const sheet = document.getElementById('feedback-sheet');
+    if (sheet) sheet.hidden = true;
+  },
+
+  /** "Yes" — hand off to Play's own review sheet. */
+  async feedbackPositive() {
+    UI.closeFeedback();
+    const CT = window.Capacitor?.Plugins?.ChainTimer;
+    if (!CT || typeof CT.requestReview !== 'function') return;
+    try {
+      const r = await CT.requestReview();
+      // Only burn the single offer if Play actually ran the flow. A
+      // failure here means the user never saw anything, so leaving the
+      // state clear lets them be asked again another day.
+      if (r?.shown) Store.setSetting('feedbackState', 'asked');
+    } catch { /* leave the state clear — nothing was shown */ }
+  },
+
+  /** "Not really" — private feedback, straight into a GitHub issue. */
+  feedbackNegative() {
+    UI.closeFeedback();
+    Store.setSetting('feedbackState', 'declined');
+    const body = [
+      'What happened / what would you change?',
+      '',
+      '',
+      '---',
+      `App version: ${APP_VERSION}`,
+      `Platform: ${window.Capacitor?.getPlatform?.() || 'web'}`,
+      `User agent: ${navigator.userAgent}`,
+    ].join('\n');
+    const url = FEEDBACK_ISSUE_URL
+      + '?title=' + encodeURIComponent('Feedback')
+      + '&body='  + encodeURIComponent(body);
+    try { window.open(url, '_blank', 'noopener'); } catch {}
   },
 
   // ------- Install hint -------
@@ -4812,6 +4913,9 @@ const UI = {
 
 function init() {
   Store.load();
+  // v1.4.16 — remember when this install first ran, so the feedback
+  // prompt can wait a few days rather than ambushing a new user.
+  if (!Store.getSettings().firstLaunchAt) Store.setSetting('firstLaunchAt', Date.now());
 
   // tabs
   document.querySelectorAll('.tab[data-tab]').forEach(tab => {
@@ -5310,6 +5414,7 @@ function init() {
       // sheet is #cues-sheet, so Android back fell through it to the
       // view-level handler and left the sheet open on screen.
       'cues-sheet',
+      'feedback-sheet',
       'settings-sheet',
     ];
     for (const id of sheetIds) {
@@ -5493,6 +5598,25 @@ function init() {
   document.getElementById('run-complete-done').addEventListener('click', () => {
     UI.hideCompletion();
     View.show('library');
+    // Ask right after a success the user has acknowledged — never mid-run,
+    // and never on top of the completion overlay.
+    UI.maybeAskForFeedback();
+  });
+
+  document.getElementById('feedback-yes').addEventListener('click', () => UI.feedbackPositive());
+  document.getElementById('feedback-no').addEventListener('click', () => UI.feedbackNegative());
+  // Closing without answering is not a "no": snooze and allow exactly one
+  // more ask much later.
+  document.querySelectorAll('#feedback-sheet [data-close-sheet]').forEach(el => {
+    el.addEventListener('click', () => {
+      UI.closeFeedback();
+      if (Store.getSettings().feedbackState === 'snoozed') {
+        Store.setSetting('feedbackState', 'declined');   // second dismissal = done asking
+      } else {
+        Store.setSetting('feedbackState', 'snoozed');
+        Store.setSetting('feedbackSnoozedAt', Date.now());
+      }
+    });
   });
 
   // engine callbacks

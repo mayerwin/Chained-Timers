@@ -2724,3 +2724,27 @@ input:focus-visible,
       radial-gradient(ellipse 60% 40% at 100% 100%, rgba(125,90,40,0.04), transparent 70%);
   }
 }
+
+/* ====================================================================
+   FEEDBACK PROMPT (v1.4.16)
+   ==================================================================== */
+
+/* Short sheet — one question, two answers, no scroll. */
+.sheet-card-compact { padding-bottom: calc(18px + var(--safe-bot)); }
+.feedback-body {
+  font-family: var(--f-serif);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ink-soft);
+  padding: 0 18px 18px;
+  text-align: center;
+}
+/* Equal weight either way. The negative answer is not hidden or made
+   harder to reach — that asymmetry is exactly what review gating is. */
+.feedback-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 0 18px 6px;
+}
+.feedback-actions .btn { width: 100%; }

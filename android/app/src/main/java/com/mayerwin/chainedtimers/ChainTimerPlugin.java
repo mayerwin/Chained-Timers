@@ -29,6 +29,15 @@ import com.google.android.play.core.install.model.AppUpdateType;
 import com.google.android.play.core.install.model.InstallStatus;
 import com.google.android.play.core.install.model.UpdateAvailability;
 
+// Play In-App Review. Google owns the rating sheet end to end: an app
+// may ask for it, but cannot pre-fill a rating, learn what (or whether)
+// the user submitted, or make it conditional on sentiment. That is a
+// policy boundary, not just an API limit -- routing only happy users to
+// the Store is "review gating" and is prohibited.
+import com.google.android.play.core.review.ReviewInfo;
+import com.google.android.play.core.review.ReviewManager;
+import com.google.android.play.core.review.ReviewManagerFactory;
+
 import androidx.core.app.NotificationManagerCompat;
 
 import com.getcapacitor.JSArray;
@@ -952,5 +961,63 @@ public class ChainTimerPlugin extends Plugin {
             try { activity.finish(); } catch (Throwable ignored) {}
         }
         call.resolve();
+    }
+
+    /**
+     * Ask Play to show its in-app review sheet.
+     *
+     * Resolves { shown: true } once the flow completes -- which is NOT a
+     * claim that the user reviewed anything. Play deliberately reports
+     * the same success whether the sheet appeared, was dismissed, or was
+     * silently skipped by its own quota (including, usefully, when this
+     * user has already reviewed). There is no API to ask "has this user
+     * reviewed?", so the rule on the JS side is simply: offer once,
+     * then never again.
+     *
+     * Resolves { shown: false, reason } when we could not even ask, so
+     * the caller can decide whether to burn its one offer.
+     */
+    @PluginMethod
+    public void requestReview(PluginCall call) {
+        final Activity activity = getActivity();
+        if (activity == null) {
+            JSObject ret = new JSObject();
+            ret.put("shown", false);
+            ret.put("reason", "no-activity");
+            call.resolve(ret);
+            return;
+        }
+        try {
+            final ReviewManager manager = ReviewManagerFactory.create(activity);
+            manager.requestReviewFlow().addOnCompleteListener(task -> {
+                if (!task.isSuccessful()) {
+                    JSObject ret = new JSObject();
+                    ret.put("shown", false);
+                    ret.put("reason", "request-failed");
+                    call.resolve(ret);
+                    return;
+                }
+                try {
+                    ReviewInfo info = task.getResult();
+                    manager.launchReviewFlow(activity, info).addOnCompleteListener(flow -> {
+                        JSObject ret = new JSObject();
+                        // Success here only means "the flow finished".
+                        ret.put("shown", flow.isSuccessful());
+                        if (!flow.isSuccessful()) ret.put("reason", "launch-failed");
+                        call.resolve(ret);
+                    });
+                } catch (Throwable t) {
+                    JSObject ret = new JSObject();
+                    ret.put("shown", false);
+                    ret.put("reason", "launch-threw");
+                    call.resolve(ret);
+                }
+            });
+        } catch (Throwable t) {
+            JSObject ret = new JSObject();
+            ret.put("shown", false);
+            ret.put("reason", "unavailable");
+            call.resolve(ret);
+        }
     }
 }
