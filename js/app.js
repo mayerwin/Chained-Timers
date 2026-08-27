@@ -248,6 +248,12 @@ const COLORS = [
 const COLOR_BY_ID = Object.fromEntries(COLORS.map(c => [c.id, c.hex]));
 const colorHex = id => COLOR_BY_ID[id] || COLOR_BY_ID.amber;
 
+// v1.4.14 — a brand-new segment starts at ZERO, not one minute. The
+// duration picker now opens immediately on create, and its numpad shifts
+// digits in from the right: starting from 00:00:00 means "5" then "0"
+// types 50s, where a pre-filled 01m00s would have to be cleared first.
+const NEW_SEGMENT_SECONDS = 0;
+
 const DEFAULT_SETTINGS = {
   sound: true,
   voice: false,
@@ -2222,7 +2228,7 @@ const Editor = {
       color: 'amber',
       loops: 1,
       segments: [
-        { id: uid('s'), kind: 'segment', name: '', duration: 60, color: 'amber' },
+        { id: uid('s'), kind: 'segment', name: '', duration: NEW_SEGMENT_SECONDS, color: 'amber' },
       ],
     };
   },
@@ -2250,7 +2256,7 @@ const Editor = {
       id: uid('s'),
       kind: 'segment',
       name: '',
-      duration: 60,
+      duration: NEW_SEGMENT_SECONDS,
       color: this.draft.color,
       // voice: undefined → treated as ON. Stored explicitly only when the
       // user has toggled the per-segment speaker icon to OFF, so legacy
@@ -3541,7 +3547,7 @@ const UI = {
   // duration, no name). Editing an existing chain never hints: those
   // users already know where the control is.
   durationHintUsed: false,
-  DEFAULT_SEGMENT_SECONDS: 60,
+  DEFAULT_SEGMENT_SECONDS: NEW_SEGMENT_SECONDS,
 
   _shouldHintDuration(idx, seg) {
     if (UI.durationHintUsed) return false;
@@ -3646,12 +3652,35 @@ const UI = {
   dpickDigits: '000000',
   dpickPristine: true,  // first keypress replaces the seed value entirely
 
-  openDurationPicker(seg) {
-    // The user has found the duration control — retire the first-run
-    // hint for the rest of this session, whatever value they end up
-    // committing (including leaving it at the default).
-    UI.durationHintUsed = true;
+  // v1.4.14 — a freshly created segment has no duration yet, and that
+  // is the first thing anyone wants to set, so open the picker for it
+  // straight away. Deferred a frame so the editor has rendered and the
+  // sheet lands on top of it (and, for a new chain, so the view switch
+  // has already happened).
+  openDurationPickerFor(seg) {
+    if (!seg) return;
+    requestAnimationFrame(() => UI.openDurationPicker(seg, { auto: true }));
+  },
+
+  openDurationPicker(seg, opts = {}) {
+    // Retire the first-run pointer once the user has FOUND the control
+    // themselves. An auto-open doesn't count: if they dismiss the sheet
+    // without setting anything, the segment is still 0s and the pointer
+    // should stay up as the reminder it was written to be.
+    if (!opts.auto) UI.durationHintUsed = true;
     UI.durationTarget  = seg;
+    // v1.4.14 — say WHICH segment this is. The picker now opens by
+    // itself when a chain or segment is created, so a bare "Duration"
+    // left the user guessing what they were setting — especially on a
+    // new chain, where it must be obvious this is only segment 1.
+    const titleEl = document.getElementById('duration-sheet-title');
+    if (titleEl) {
+      const idx = (Editor.draft?.segments || []).indexOf(seg);
+      const name = (seg?.name || '').trim();
+      titleEl.textContent = idx < 0
+        ? 'Duration'
+        : (name ? `Segment ${idx + 1} · ${name}` : `Segment ${idx + 1}`);
+    }
     UI.dpickPristine   = true;
     UI._setDpickFromSeconds(Math.max(0, seg.duration | 0));
     document.getElementById('duration-sheet').hidden = false;
@@ -4798,11 +4827,17 @@ function init() {
     Audio.unlock();
     Editor.newChain();
     View.show('editor');
+    // Straight into setting segment 1's duration — the sheet title names
+    // the segment so it is clear this is only the first one.
+    UI.openDurationPickerFor(Editor.draft.segments[0]);
   });
   document.getElementById('empty-new-chain').addEventListener('click', () => {
     Audio.unlock();
     Editor.newChain();
     View.show('editor');
+    // Straight into setting segment 1's duration — the sheet title names
+    // the segment so it is clear this is only the first one.
+    UI.openDurationPickerFor(Editor.draft.segments[0]);
   });
   document.getElementById('empty-templates').addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active'));
@@ -4985,11 +5020,10 @@ function init() {
   document.getElementById('add-segment').addEventListener('click', () => {
     Editor.addSegment();
     UI.renderEditor();
-    // focus the new row's name input
-    requestAnimationFrame(() => {
-      const rows = document.querySelectorAll('.segment-name-input');
-      rows[rows.length - 1]?.focus();
-    });
+    // v1.4.14 — open the duration picker for the new segment instead of
+    // focusing its name field: the duration is the thing that must be
+    // set for the segment to mean anything, and the name is optional.
+    UI.openDurationPickerFor(Editor.draft.segments[Editor.draft.segments.length - 1]);
   });
   document.getElementById('add-subchain').addEventListener('click', () => UI.openSubchainPicker());
 
