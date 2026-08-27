@@ -1,7 +1,6 @@
-v1.4.13 — Ring until dismissed, reorder, polish
+v1.4.14 — Ring until dismissed for a whole chain
 
-• New per-segment cue "Ring until dismissed": the chain waits at that segment's end, ringing like an alarm, until you tap Dismiss — in the app or from the notification.
-• Drag chains into any order: long-press one, then drag by the grip.
-• "Library" is now "Chains"; segment cue wording no longer mentions the whole chain.
-• Browser voice cues now speak in your browser's language.
-• New chains point you at the duration to set first.
+• "Ring until dismissed" is now an app-wide and per-chain option too: when a chain finishes it keeps ringing until you tap Dismiss. Per-segment gates still work, and you never have to dismiss twice.
+• New chains are added at the bottom, next to the + button, and the list scrolls to them.
+• A duplicated chain now appears right below the one it came from.
+• The vibration setting is called "Buzz cues" everywhere.
