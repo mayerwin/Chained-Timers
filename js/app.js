@@ -3161,7 +3161,7 @@ const UI = {
     document.getElementById('run-segment-tag').textContent  = 'Segment 1';
     document.getElementById('run-segment-of').textContent   = `of ${segments.length}`;
     document.getElementById('run-chain-pos').textContent    = `1 / ${segments.length}`;
-    document.getElementById('run-clock').textContent        = fmt(seg0.duration);
+    UI._setClockText(fmt(seg0.duration));
     const ring = document.getElementById('run-ring-fill');
     ring.style.stroke = colorHex(seg0.color);
     // Reset the ring to empty — when another chain is running its last
@@ -3240,7 +3240,7 @@ const UI = {
     if (UI.prestartYielded) return;
     const clock = document.getElementById('run-clock');
     clock.classList.add('is-prestart');
-    clock.textContent = n;
+    UI._setClockText(n);
     document.getElementById('run-segment-tag').textContent = 'Get ready';
     document.getElementById('run-segment-of').textContent  = '';
   },
@@ -4211,8 +4211,24 @@ const UI = {
           ? `${run.chain?.name || 'Chain'} complete`
           : `${seg?.name || 'Segment'} done`;
       }
-      const clock = document.getElementById('run-clock');
-      if (clock) clock.textContent = fmt(0);
+      UI._setClockText(fmt(0));
+    }
+  },
+
+  // v1.4.17 — single place that writes the big clock. Also tells CSS how
+  // many characters it now has to fit, so a chain that runs past an hour
+  // ("HH:MM:SS") shrinks to fit instead of running off the screen. Only
+  // touched when the LENGTH changes: this is called every animation
+  // frame, and setting a custom property invalidates style on each write.
+  _clockChars: -1,
+  _setClockText(text) {
+    const el = document.getElementById('run-clock');
+    if (!el) return;
+    const str = String(text);
+    el.textContent = str;
+    if (str.length !== UI._clockChars) {
+      UI._clockChars = str.length;
+      el.style.setProperty('--clock-chars', String(Math.max(1, str.length)));
     }
   },
 
@@ -4474,7 +4490,7 @@ const UI = {
     // the tick, making the sound feel like it's chasing the visual.
     // The notification path uses ceiling for both the displayed remaining
     // and the tick trigger, so we mirror that here for parity.
-    document.getElementById('run-clock').textContent = fmt(Math.ceil(r));
+    UI._setClockText(fmt(Math.ceil(r)));
 
     // ring (use inline style — CSS class values otherwise override presentation attrs)
     const ring = document.getElementById('run-ring-fill');

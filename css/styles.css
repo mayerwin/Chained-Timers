@@ -1784,12 +1784,45 @@ body.is-reordering-chains .chain-card:hover { border-color: var(--rule); backgro
   font-family: var(--f-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
-  font-size: clamp(56px, 18vw, 96px);
+  /* v1.4.17 — size the clock from how many characters it has to show.
+     The old clamp() was tuned for "MM:SS"; the moment a chain ran past
+     an hour the string became "HH:MM:SS" and ran off the screen.
+
+     --clock-chars is set by UI._setClockText whenever the length
+     changes. 0.55 is this monospace face's measured per-character
+     advance (0.5398em) rounded UP, so the result under-shoots the
+     available width rather than overflowing it. That width is the APP
+     COLUMN, not the viewport: .app is capped at 560px, so plain 100vw
+     would overflow it in a wide window. */
+  --clock-chars: 5;
+  --clock-gutter: 20px;
+  --clock-advance: 0.55;
+  font-size: min(
+    96px,
+    calc((min(100vw, 560px) - 2 * var(--clock-gutter)) / (var(--clock-chars) * var(--clock-advance)))
+  );
   letter-spacing: -0.01em;
   color: var(--ink);
   line-height: 1;
-  position: relative;
+  /* Absolutely centred on the ring rather than laid out inside it.
+     As a grid item the clock could be WIDER than the 320px ring track,
+     and Chrome resolves overflow on a centred grid item with *safe*
+     alignment — it falls back to start, so the text spilled off the
+     right edge instead of overflowing evenly. Centring on the wrap
+     keeps it symmetric at any width; the wrap centre is the column
+     centre. NOTE: clockPulse must carry this translate too, since a
+     keyframe transform would otherwise replace it. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
   z-index: 1;
+  /* Stay on one line and stay centred even if some future format is
+     wider than the formula anticipated. */
+  white-space: nowrap;
+  text-align: center;
+  max-width: calc(min(100vw, 560px) - 2 * var(--clock-gutter));
 }
 .is-warning .run-clock { color: var(--warn); animation: clockPulse 0.95s ease-in-out infinite; }
 /* v1.4.11 — inline prestart: the 3-2-1 renders in the clock itself
@@ -1838,8 +1871,11 @@ body.is-reordering-chains .chain-card:hover { border-color: var(--rule); backgro
    same track, just without the inherited "Default" slot. */
 .cue-pill.is-binary { grid-template-columns: 1fr 1fr; }
 @keyframes clockPulse {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.04); }
+  /* Includes the centring translate: a transform here REPLACES the
+     rule-level one, which would otherwise knock the clock off centre
+     for the whole animation. */
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50%      { transform: translate(-50%, -50%) scale(1.04); }
 }
 
 .run-progress {
