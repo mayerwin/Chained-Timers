@@ -2336,7 +2336,7 @@ const View = {
     if (name === 'library')   UI.renderLibrary();
     if (name === 'templates') UI.renderTemplates();
     if (name === 'editor')    UI.renderEditor();
-    if (name === 'run')       UI.renderRun();
+    if (name === 'run')       { UI.renderRun(); UI.fitClockToRing(); }
     // v1.4.5: library ticker is only useful when the library view is
     // visible AND at least one chain is running (background clocks
     // freeze otherwise because the focused-run rAF loop is what usually
@@ -4229,7 +4229,66 @@ const UI = {
     if (str.length !== UI._clockChars) {
       UI._clockChars = str.length;
       el.style.setProperty('--clock-chars', String(Math.max(1, str.length)));
+      UI.fitClockToRing();
     }
+  },
+
+  // v1.4.18 — keep the clock INSIDE the progress ring.
+  //
+  // Fitting text in a circle is a chord problem, not a width problem: the
+  // widest the text may be is the chord at its own height, not the full
+  // diameter. With the line box 1em tall and a monospace advance of
+  // CLOCK_ADVANCE em per character, requiring
+  //
+  //     chars * advance * f  =  2 * sqrt(r^2 - (f/2)^2)
+  //
+  // and solving for the font size f gives the closed form below. (CSS
+  // can't do this: sqrt() isn't portable yet, and the radius depends on
+  // the rendered ring, so it is computed here instead.)
+  //
+  // Only runs when the character count changes or the ring is resized —
+  // not on every tick.
+  CLOCK_ADVANCE: 0.5398,   // measured em/char for this monospace face
+  CLOCK_RING_PAD: 10,      // breathing room inside the ring, px
+  CLOCK_MAX_PX: 96,
+  CLOCK_MIN_PX: 14,
+
+  fitClockToRing() {
+    const el = document.getElementById('run-clock');
+    const ring = document.getElementById('run-ring-fill');
+    if (!el || !ring) return;
+    const rect = ring.getBoundingClientRect();
+    // Zero while the run view is hidden — refit when it is shown.
+    if (!rect.width) return;
+    const stroke = parseFloat(getComputedStyle(ring).strokeWidth) || 0;
+    // The stroke straddles the path, so the box is 2r + stroke wide and
+    // the clear inner radius is (box - 2*stroke) / 2.
+    const rEff = (rect.width - 2 * stroke) / 2 - UI.CLOCK_RING_PAD;
+    if (!(rEff > 0)) return;
+
+    // MEASURE, do not model. A closed form from the character count was
+    // 1-2px optimistic because the rendered line box is taller than 1em
+    // (ascender/descender), and that error put the corners just outside
+    // the ring. Both box dimensions scale linearly with font-size, so
+    // probing once at a known size and scaling is exact for any font,
+    // any string, any letter-spacing.
+    const PROBE = 100;
+    // Drop the CSS max-width for the probe. With white-space: nowrap the
+    // box would otherwise be CLAMPED while the text overflowed it, so the
+    // measurement would understate the true width and we would scale up
+    // to something far too big.
+    const prevMaxWidth = el.style.maxWidth;
+    el.style.maxWidth = 'none';
+    el.style.fontSize = PROBE + 'px';
+    const b = el.getBoundingClientRect();
+    el.style.maxWidth = prevMaxWidth;
+    // Farthest corner of the text box from its own centre. Fitting text
+    // in a circle is a chord problem: the limit is the corner, not the
+    // width.
+    const halfDiag = Math.hypot(b.width / 2, b.height / 2);
+    if (!halfDiag) return;
+    const size = Math.max(UI.CLOCK_MIN_PX, Math.min(UI.CLOCK_MAX_PX, PROBE * rEff / halfDiag));
+    el.style.fontSize = size.toFixed(2) + 'px';
   },
 
   // Same contract for the big segment title (a <button> since v1.4.12,
@@ -5803,6 +5862,20 @@ function init() {
     }
     UI._syncAlarmUI();
   }
+
+  // Refit whenever the ring's box actually changes size. This is the
+  // reliable trigger: a fit computed before layout settled (the run view
+  // is shown, then styles/fonts resolve a frame later) would otherwise
+  // stick, because the character count never changes again mid-segment
+  // and nothing else would recompute it. Observed live: 55px frozen in
+  // where 50.5px was correct. The window listeners stay as a fallback
+  // for engines without ResizeObserver.
+  const clockWrap = document.querySelector('.run-clock-wrap');
+  if (clockWrap && typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => UI.fitClockToRing()).observe(clockWrap);
+  }
+  window.addEventListener('resize', () => UI.fitClockToRing());
+  window.addEventListener('orientationchange', () => UI.fitClockToRing());
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
