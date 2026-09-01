@@ -1,3 +1,3 @@
-v1.4.17 — Long timers fit the screen
+v1.4.18 — The countdown stays inside the ring
 
-• Fixed the countdown running off the edge of the screen once a chain passed an hour. It now scales to fit whatever it has to show, stays centred, and makes better use of the width — so shorter times read larger too.
+• The countdown now always sits inside the progress ring with a little breathing room, shrinking just enough when a chain runs past an hour. Checked from the smallest iPhone SE up to the largest Pro Max.
