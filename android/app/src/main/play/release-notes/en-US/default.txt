@@ -1,3 +1,5 @@
-v1.4.18 — The countdown stays inside the ring
+v1.4.19 — Alarms that really ring
 
-• The countdown now always sits inside the progress ring with a little breathing room, shrinking just enough when a chain runs past an hour. Checked from the smallest iPhone SE up to the largest Pro Max.
+• "Ring until dismissed" now keeps ringing AND vibrating until you dismiss it, instead of going quiet after one burst. Alarm cues also finally follow the "Ring through Do Not Disturb" setting.
+• Fixed a chain that refused to start again after its alarm was dismissed: it showed 00 and ignored Play.
+• The clock drops the leading "00:" and shows the last ten seconds as one digit — then keeps counting, negative, so you can see how long ago a timer went off.

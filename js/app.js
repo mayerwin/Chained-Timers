@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.18';
+const APP_VERSION = '1.4.19';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -1454,9 +1454,24 @@ class EngineRun {
           voiceEnabled,
           audioRoute,
           ringThroughDnd,
+          // v1.4.19 — the ring-until-dismissed hold buzzes natively, so
+          // the service needs the vibrate cue too. Resolved for the
+          // CURRENT segment, same as soundEnabled above.
+          vibrateEnabled: effectiveCue(curSeg, this.chain, 'vibrate'),
         },
       }));
     } catch {}
+  }
+
+  // v1.4.19 — how long a held gate has been ringing, in seconds. The
+  // stock Android timer keeps counting once a timer is up, negative, so
+  // you can see how long ago it fired; the run clock does the same while
+  // a ring-until-dismissed gate waits. pausedAtWall is set to the exact
+  // boundary moment in _beginAlarmHold, and it is persisted, so this
+  // survives a reload or a hold that began while the app was asleep.
+  overtimeSec() {
+    if (!this.awaitingDismiss) return 0;
+    return Math.max(0, (Date.now() - this.pausedAtWall) / 1000);
   }
 
   _elapsedMs() {
@@ -4211,8 +4226,33 @@ const UI = {
           ? `${run.chain?.name || 'Chain'} complete`
           : `${seg?.name || 'Segment'} done`;
       }
-      UI._setClockText(fmt(0));
+      UI._startOvertimeTicker();
+    } else {
+      UI._stopOvertimeTicker();
     }
+  },
+
+  // v1.4.19 — while a gate rings, the clock counts UP in negative time,
+  // the way the stock Android timer does, so you can tell at a glance
+  // how long ago it fired. The rAF loop is cancelled for a held run
+  // (_beginAlarmHold), hence this small interval instead. A quarter of a
+  // second keeps the flip within a frame or two of the true boundary.
+  _overtimeTimer: null,
+  _startOvertimeTicker() {
+    UI._stopOvertimeTicker();
+    const paint = () => {
+      const run = Engine._focused;
+      if (!run?.awaitingDismiss) { UI._stopOvertimeTicker(); return; }
+      const over = Math.floor(run.overtimeSec());
+      // No "-0": the first whole second of overtime is where the sign
+      // starts to mean something.
+      UI._setClockText(over < 1 ? fmt(0) : '-' + fmt(over));
+    };
+    paint();
+    UI._overtimeTimer = setInterval(paint, 250);
+  },
+  _stopOvertimeTicker() {
+    if (UI._overtimeTimer) { clearInterval(UI._overtimeTimer); UI._overtimeTimer = null; }
   },
 
   // v1.4.17 — single place that writes the big clock. Also tells CSS how
@@ -4220,11 +4260,24 @@ const UI = {
   // ("HH:MM:SS") shrinks to fit instead of running off the screen. Only
   // touched when the LENGTH changes: this is called every animation
   // frame, and setting a custom property invalidates style on each write.
+  // v1.4.19 — under a minute, "00:32" wastes the widest characters on
+  // a constant zero, and the last ten seconds read as a single digit on
+  // the stock Android timer. So "00:32" → "32" and "00:09" → "9".
+  // Both cap out at CLOCK_MAX_PX in the ring, so the 10 → 9 flip does
+  // not resize the clock. Applied ONLY to the big clock — the elapsed /
+  // remaining pair below it stays MM:SS so the two columns line up.
+  // A leading "-" (overtime on a held gate) rides through untouched.
+  _clockDisplay(text) {
+    const str = String(text);
+    const m = /^(-?)00:(\d{2})$/.exec(str);
+    return m ? m[1] + String(Number(m[2])) : str;
+  },
+
   _clockChars: -1,
   _setClockText(text) {
     const el = document.getElementById('run-clock');
     if (!el) return;
-    const str = String(text);
+    const str = UI._clockDisplay(text);
     el.textContent = str;
     if (str.length !== UI._clockChars) {
       UI._clockChars = str.length;
@@ -5833,6 +5886,18 @@ function init() {
     for (const st of states) {
       const run = Engine.runById(st?.id);
       if (!run || !run.isRunning) continue;
+      // Stale-state guard. The service keys gate state by runId, which IS
+      // the chain id and is therefore reused by every later run of the
+      // same chain. An entry describing an earlier run reports a segment
+      // start from before this run began; applying it would fast-forward
+      // the new run onto a finished segment showing 00:00 with a dead
+      // Play button. Anything genuinely newer (the service dismissed a
+      // gate while the WebView slept) has a start time at or after ours.
+      const svcStart = Number(st.segStartedAtMs);
+      if (Number.isFinite(svcStart) && svcStart > 0
+          && svcStart < run.segmentStartedAtWall - 1000) {
+        continue;
+      }
       if (st.ringing >= 0) {
         // Service is holding a gate JS hasn't noticed yet.
         run.currentIndex = Math.min(st.ringing, run.segments.length - 1);

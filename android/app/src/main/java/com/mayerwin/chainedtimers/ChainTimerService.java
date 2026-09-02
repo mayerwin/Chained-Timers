@@ -105,6 +105,9 @@ public class ChainTimerService extends Service {
     public static final String EXTRA_PAUSED_REMAINING_MS   = "pausedRemainingMs";
     public static final String EXTRA_HAS_PREV              = "hasPrev";
     public static final String EXTRA_HAS_NEXT              = "hasNext";
+    /** v1.4.19 — per-run vibrate cue, so the ring-until-dismissed hold
+     *  can buzz as well as sound. */
+    public static final String EXTRA_VIBRATE_ENABLED       = "vibrateEnabled";
     /** v1.4.13 — JS-side ring-until-dismissed gate state, so the service
      *  and the WebView agree on whether a boundary is currently held. */
     public static final String EXTRA_AWAITING_DISMISS       = "awaitingDismiss";
@@ -199,6 +202,7 @@ public class ChainTimerService extends Service {
         int finalThreeStartedAtIndex = -1;
         boolean tickEnabled = true;
         boolean soundEnabled = true;
+        boolean vibrateEnabled = true;
         final List<String> voicePaths = new ArrayList<>();
         final List<Boolean> voiceEnabled = new ArrayList<>();
         String audioRoute = "headset";
@@ -298,24 +302,10 @@ public class ChainTimerService extends Service {
         run.curIndex = clampIndex(run, intent.getIntExtra(EXTRA_SEGMENT_INDEX, 0));
         run.segStartedAtMs = intent.getLongExtra(EXTRA_SEGMENT_STARTED_AT_MS, System.currentTimeMillis());
         run.paused = intent.getBooleanExtra(EXTRA_PAUSED, false);
-        // v1.4.13 — reconcile the ring gate with JS. JS is authoritative
-        // whenever it is awake enough to send an update: if it says the
-        // gate is cleared (the common case — the user tapped Dismiss in
-        // the app), the service stops ringing; if it says a gate is held
-        // and we aren't ringing yet, start.
-        if (intent.hasExtra(EXTRA_AWAITING_DISMISS)) {
-            boolean jsHeld = intent.getBooleanExtra(EXTRA_AWAITING_DISMISS, false);
-            run.dismissedAtIndex = intent.getIntExtra(EXTRA_DISMISSED_AT_INDEX, run.dismissedAtIndex);
-            if (!jsHeld && run.ringingAtIndex >= 0) {
-                stopRinging(run);
-            } else if (jsHeld && run.ringingAtIndex < 0) {
-                beginRingHold(run);
-                return START_STICKY;
-            }
-        }
         run.pausedRemainingMs = Math.max(0L, intent.getLongExtra(EXTRA_PAUSED_REMAINING_MS, 0L));
         run.tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
         run.soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
+        run.vibrateEnabled = intent.getBooleanExtra(EXTRA_VIBRATE_ENABLED, true);
 
         String voicePathsJson = intent.getStringExtra(EXTRA_VOICE_PATHS_JSON);
         if (voicePathsJson != null) {
@@ -344,6 +334,26 @@ public class ChainTimerService extends Service {
             if (previousDnd != run.ringThroughDnd) {
                 releaseCueMediaPlayers(run);
                 ensureMediaPlayers(run);
+            }
+        }
+
+        // v1.4.13 — reconcile the ring gate with JS, AFTER every extra
+        // above has been applied. JS is authoritative whenever it is awake
+        // enough to send an update: if it says the gate is cleared (the
+        // usual case — Dismiss tapped in the app) the service stops
+        // ringing; if it says a gate is held and we are not ringing yet,
+        // start. This deliberately runs last: beginRingHold builds the
+        // MediaPlayer pool, and that pool's USAGE is chosen from
+        // ringThroughDnd and audioRoute — both read off extras above, so
+        // holding a gate any earlier would build the pool from the
+        // previous update's policy.
+        if (intent.hasExtra(EXTRA_AWAITING_DISMISS)) {
+            boolean jsHeld = intent.getBooleanExtra(EXTRA_AWAITING_DISMISS, false);
+            run.dismissedAtIndex = intent.getIntExtra(EXTRA_DISMISSED_AT_INDEX, run.dismissedAtIndex);
+            if (!jsHeld && run.ringingAtIndex >= 0) {
+                stopRinging(run);
+            } else if (jsHeld && run.ringingAtIndex < 0) {
+                beginRingHold(run);
             }
         }
 
@@ -394,7 +404,11 @@ public class ChainTimerService extends Service {
         // Schedule this run's next tick. Each run has its own runnable,
         // so two runs tick independently on the shared Handler.
         cancelTickFor(run);
-        if (!run.paused && !run.plan.isEmpty()) {
+        if (run.ringingAtIndex >= 0) {
+            // A held gate has no next tick — it has an alarm to keep
+            // playing. cancelTickFor above just dropped it.
+            armRingLoop(run, /*immediate=*/false);
+        } else if (!run.paused && !run.plan.isEmpty()) {
             scheduleNextTick(run);
         }
 
@@ -586,6 +600,11 @@ public class ChainTimerService extends Service {
             releaseCueMediaPlayers(run);
         }
         runs.clear();
+        // v1.4.19 — gate state outlives its run otherwise. It is keyed by
+        // runId, which IS the chain id, so a leftover "this chain was
+        // ringing" entry is handed to the NEXT run of the same chain on
+        // resume, which then fast-forwards onto a finished segment.
+        gateStates.clear();
         running = false;
         // Clear every run's notification + the summary.
         NotificationManager nm = getSystemService(NotificationManager.class);
@@ -607,7 +626,9 @@ public class ChainTimerService extends Service {
     /** Stop a specific run — leaves other runs untouched. */
     private void stopRun(String runId, boolean alert) {
         ChainRun run = runs.get(runId);
-        if (run == null) return;
+        // Same reasoning as stopAllRuns: never leave gate state behind,
+        // including for a run this service has already forgotten.
+        if (run == null) { gateStates.remove(runId); return; }
         NotificationManager nm = getSystemService(NotificationManager.class);
         boolean wasFgsOwner = runId.equals(fgsOwnerRunId);
         releaseRun(run);
@@ -635,6 +656,8 @@ public class ChainTimerService extends Service {
      */
     private void completeRun(ChainRun run, boolean alert) {
         cancelTickFor(run);
+        stopRinging(run);
+        gateStates.remove(run.runId);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) postCompletionNotification(nm, run, alert);
         // v1.4.4: finale plays via FGS MediaPlayer regardless of foreground
@@ -1225,7 +1248,29 @@ public class ChainTimerService extends Service {
         run.ringingAtIndex = run.curIndex;
         run.ringingSinceMs = System.currentTimeMillis();
         ensureMediaPlayers(run);
-        // Loop the alarm burst on the same handler the ticks use.
+        armRingLoop(run, /*immediate=*/true);
+        publishGateState(run);
+        pushRunNotification(run, /*alert=*/true);
+        // Tell JS so the run view can show its Dismiss bar the moment
+        // the user opens the app (no-op when JS is asleep).
+        ChainTimerPlugin.deliverChainCommand("ringing", run.runId);
+    }
+
+    /**
+     * v1.4.19 — (re)install the looping alarm burst for a held gate.
+     *
+     * Split out of beginRingHold because the loop has to survive things
+     * that cancel this run's pending work. Every JS update ends in
+     * cancelTickFor, which drops the ring runnable along with the tick;
+     * JS sends one the instant it notices the hold, so the alarm used to
+     * play a single burst and then go quiet while the Dismiss bar sat
+     * there — exactly the "just a Dismiss button, no sound or vibration"
+     * report. Re-arming is silent (immediate=false) so a burst of updates
+     * cannot turn into a burst of chimes.
+     */
+    private void armRingLoop(ChainRun run, boolean immediate) {
+        if (run.ringingAtIndex < 0) return;
+        if (run.ringRunnable != null) tickHandler.removeCallbacks(run.ringRunnable);
         run.ringRunnable = new Runnable() {
             @Override public void run() {
                 if (run.ringingAtIndex < 0 || !runs.containsValue(run)) return;
@@ -1235,15 +1280,12 @@ public class ChainTimerService extends Service {
                     return;
                 }
                 playChime(run);
+                buzzForRing(run);
                 tickHandler.postDelayed(this, RING_INTERVAL_MS);
             }
         };
-        tickHandler.post(run.ringRunnable);
-        publishGateState(run);
-        pushRunNotification(run, /*alert=*/true);
-        // Tell JS so the run view can show its Dismiss bar the moment
-        // the user opens the app (no-op when JS is asleep).
-        ChainTimerPlugin.deliverChainCommand("ringing", run.runId);
+        if (immediate) tickHandler.post(run.ringRunnable);
+        else tickHandler.postDelayed(run.ringRunnable, RING_INTERVAL_MS);
     }
 
     private void stopRinging(ChainRun run) {
@@ -1415,6 +1457,44 @@ public class ChainTimerService extends Service {
             if (mp.isPlaying()) mp.pause();
             mp.seekTo(0);
             mp.start();
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * v1.4.19 — buzz for one ring-until-dismissed burst.
+     *
+     * The hold used to be silent to the hand: the service only played a
+     * chime, and the JS Alarm that vibrates is skipped on native (the
+     * foreground service owns cues there). So an alarm the user is
+     * supposed to notice had no haptic at all. Rides the same vibrate cue
+     * as every other buzz, so turning Buzz cues off keeps it quiet.
+     */
+    private void buzzForRing(ChainRun run) {
+        if (!run.vibrateEnabled) return;
+        try {
+            android.os.Vibrator v;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                android.os.VibratorManager vm =
+                    (android.os.VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                v = vm == null ? null : vm.getDefaultVibrator();
+            } else {
+                v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (v == null || !v.hasVibrator()) return;
+            // Two pulses per burst — reads as an alarm rather than as the
+            // single tick used at ordinary segment boundaries.
+            long[] pattern = new long[] { 0L, 220L, 130L, 220L };
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                    .setUsage(run.ringThroughDnd
+                        ? android.media.AudioAttributes.USAGE_ALARM
+                        : android.media.AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+                v.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1), attrs);
+            } else {
+                v.vibrate(pattern, -1);
+            }
         } catch (Throwable ignored) {}
     }
 

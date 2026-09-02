@@ -148,7 +148,9 @@ console.log('\nTest 2: mid-chain gate holds the chain and rings');
   const s = await gateState();
   eq(s.awaiting, true, 'held at the gate');
   eq(s.index, 0, 'still on the gated segment (did not advance)');
-  eq(s.clock, '00:00', 'clock pinned at zero');
+  // v1.4.19: the clock counts overtime from the boundary — '0', then '-1', '-2', …
+  if (/^(0|-\d+|-\d{2}:\d{2})$/.test(s.clock)) ok('clock at or past zero ("' + s.clock + '")');
+  else bad('clock reads "' + s.clock + '" at the gate');
   eq(s.barHidden, false, 'Dismiss bar shown');
   eq(s.controlsHidden, true, 'transport row hidden');
   eq(s.alarmClass, true, 'run view flagged is-alarm');

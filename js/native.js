@@ -462,7 +462,7 @@
   // On iOS this is a no-op (iOS apps can't keep arbitrary code running
   // in the background; we rely on UNUserNotificationCenter scheduling).
   function buildStatusContent(detail) {
-    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', ringThroughDnd = false, runId = null, awaitingDismiss = false, dismissedAtIndex = -1 } = detail;
+    const { name, segments, currentIndex = 0, isPaused, segmentStartedAtMs, pausedAtMs = 0, tickEnabled = true, soundEnabled = true, voicePaths = null, voiceEnabled = null, audioRoute = 'headset', ringThroughDnd = false, runId = null, awaitingDismiss = false, dismissedAtIndex = -1, vibrateEnabled = true } = detail;
     const cur = segments[currentIndex] || { name: 'Segment', duration: 0 };
     const next = segments[currentIndex + 1];
     const total = segments.length;
@@ -520,6 +520,7 @@
       segmentTotal: total,
       // v1.4.13 — ring-until-dismissed gate, so the FGS and the WebView
       // agree on whether a boundary is currently held.
+      vibrateEnabled: !!vibrateEnabled,
       awaitingDismiss: !!awaitingDismiss,
       dismissedAtIndex: Number.isFinite(dismissedAtIndex) ? dismissedAtIndex : -1,
       hasPrev:      currentIndex > 0,

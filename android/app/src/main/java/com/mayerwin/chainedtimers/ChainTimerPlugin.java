@@ -611,6 +611,23 @@ public class ChainTimerPlugin extends Plugin {
         if (voiceEnabledJson != null && !voiceEnabledJson.isEmpty()) {
             intent.putExtra(ChainTimerService.EXTRA_VOICE_ENABLED_JSON, voiceEnabledJson);
         }
+        // v1.4.19 — vibrate cue, so a ring-until-dismissed hold buzzes
+        // as well as sounds. Same switch as every other buzz: with Buzz
+        // cues off, the hold stays silent to the hand.
+        Boolean vibrateEnabled = call.getBoolean("vibrateEnabled", Boolean.TRUE);
+        intent.putExtra(ChainTimerService.EXTRA_VIBRATE_ENABLED,
+            vibrateEnabled == null || vibrateEnabled.booleanValue());
+
+        // v1.4.19 — forward the Do Not Disturb policy. JS has sent
+        // ringThroughDnd since v1.4.5 and the service has always read
+        // it, but nothing put it on the intent, so every foreground
+        // cue was built as USAGE_MEDIA — the one usage Do Not Disturb
+        // silences. A held alarm was mute on exactly the phones the
+        // setting exists for.
+        Boolean ringThroughDnd = call.getBoolean("ringThroughDnd", Boolean.FALSE);
+        intent.putExtra(ChainTimerService.EXTRA_RING_THROUGH_DND,
+            ringThroughDnd != null && ringThroughDnd.booleanValue());
+
         // Per-chain audio routing policy. Defaults to "headset" if
         // omitted — matches the in-app default and the user's mental
         // model of "headphones win when they're plugged in."

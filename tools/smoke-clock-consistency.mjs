@@ -49,7 +49,9 @@ await page.waitForTimeout(400);
 
 const toSec = (t) => {
   const p = t.trim().split(':').map(Number);
-  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
+  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  // v1.4.19: under a minute the big clock is seconds only ("32", "9").
+  return p.length === 2 ? p[0] * 60 + p[1] : p[0];
 };
 
 console.log('Sampling clock vs bottom row across second boundaries');
