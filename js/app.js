@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.20';
+const APP_VERSION = '1.4.21';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -797,10 +797,14 @@ const Alarm = {
   start(run) {
     this.stop();
     this._runId = run?.id || null;
-    const vibrate = effectiveCue(run?.segments?.[run.currentIndex], run?.chain, 'vibrate');
+    // v1.4.21 — cues are resolved per BURST, not captured once at the
+    // start of the hold. The mute button and the run-view cue bell can
+    // both flip these while the gate is ringing, and a loop that had
+    // captured them kept ringing a phone the user had just muted.
     const burst = () => {
-      Audio.alarmBurst();
-      if (vibrate) Vibe.do([200, 120, 200]);
+      const seg = run?.segments?.[run.currentIndex];
+      if (effectiveCue(seg, run?.chain, 'sound'))   Audio.alarmBurst();
+      if (effectiveCue(seg, run?.chain, 'vibrate')) Vibe.do([200, 120, 200]);
     };
     burst();
     this._iv = setInterval(burst, this.BURST_INTERVAL_MS);
@@ -2081,6 +2085,51 @@ const Engine = {
       // v1.4.1 — per-run native already tracks the survivor's slot
       // (it's been emitting ticks continuously). No re-emit needed
       // on promotion; the service handles FGS owner switching itself.
+    }
+  },
+
+  // v1.4.21 — a cue changed while chains are running (the run-view mute
+  // button, the run-view cue bell, or an App Settings toggle). Nothing
+  // re-reads cues on its own once a run is under way:
+  //
+  //   - the foreground service caches the RESOLVED cues per run and
+  //     decides in the background off its own copy of the plan, so a
+  //     stale flag there rings a muted phone (or fails to ring at all);
+  //   - voice is pre-rendered to WAV before the chain starts, so a chain
+  //     that began with voice off has no files to play. Re-rendering is
+  //     keyed by the segment-name signature, so it is free when the
+  //     files already exist and a few hundred ms when they don't; the
+  //     second emit swaps them in when it lands.
+  //
+  // The web/PWA ring loop needs nothing here — Alarm.start resolves its
+  // cues on every burst.
+  cuesChanged() {
+    // Snapshot: releasing a gate below can complete a run, which removes
+    // it from _runs mid-iteration.
+    for (const run of [...this._runs.values()]) {
+      if (!run.isRunning) continue;
+      // A gate that is no longer supposed to ring lets go NOW. Turning
+      // "Ring until dismissed" off while the chain sits ringing at its
+      // end is a request to stop, not a preference for the next run —
+      // leaving it held would just look like the setting did nothing.
+      // dismissAlarm is the same path the Dismiss button takes, so the
+      // chain continues (or completes) exactly as it would have.
+      if (run.awaitingDismiss && !boundaryRingsUntilDismissed(
+            run.segments[run.currentIndex], run.currentIndex, run.segments, run.chain)) {
+        run.dismissAlarm();
+        continue;   // dismissAlarm emits for us
+      }
+      run._emit('chain:fgsupdate');
+      if (!window.ChainedNative?.isNative) continue;
+      if (run.segments.some(s => effectiveCue(s, run.chain, 'voice'))) {
+        Voice.prerenderForChain(run.segments, run.id).then(() => {
+          if (run.isRunning) run._emit('chain:fgsupdate');
+        });
+      }
+    }
+    if (View.current === 'run') {
+      UI.updateRunSegmentInfo();
+      UI._syncAlarmUI();
     }
   },
 
@@ -4127,7 +4176,7 @@ const UI = {
           // it simple; the dependent finalTick sub-row's visibility may
           // also change if `sound` was just toggled).
           UI._openCueSheet(scope, holder, chainContext, onChange);
-          if (onChange) onChange();
+          if (onChange) onChange(key);
         });
         return b;
       };
@@ -4152,6 +4201,69 @@ const UI = {
     });
 
     sheet.hidden = false;
+  },
+
+  // ------- Run-view cue controls (v1.4.21) -------
+
+  /** The chain the run view is currently ABOUT — the focused run's chain,
+   *  or the pending one during an inline pre-start preview. */
+  runViewChain() {
+    return Engine._focused?.chain || UI.prestartPendingChain || null;
+  },
+
+  /** Whether sound will actually fire for that chain: the app default as
+   *  seen THROUGH the chain's own override, which outranks it. */
+  runViewSoundOn() {
+    const chain = UI.runViewChain();
+    return chain ? effectiveCue(null, chain, 'sound') : !!Store.getSettings().sound;
+  },
+
+  // The icon tracks the EFFECTIVE answer, not the raw app default: now
+  // that the cue bell sits next to it, a chain overriding "Sound cues:
+  // On" would otherwise show a crossed-out speaker over a chiming phone.
+  _muteIconOn: null,
+  _syncMuteIcon() {
+    const icon = document.getElementById('mute-icon');
+    if (!icon) return;
+    const on = UI.runViewSoundOn();
+    if (on === UI._muteIconOn) return;
+    UI._muteIconOn = on;
+    icon.innerHTML = on
+      ? `<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19 12c0-2-1-4-3-5M16 8c1 1 2 2 2 4s-1 3-2 4"/>`
+      : `<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/>`;
+    const btn = document.getElementById('run-mute');
+    if (btn) btn.setAttribute('aria-label', on ? 'Mute' : 'Unmute');
+  },
+
+  // The run-view cue sheet is CHAIN scope, but a gate can also be held by
+  // the current segment's own "Ring until dismissed" — a binary cue that
+  // outranks the chain, so a chain-level Off would leave the phone
+  // ringing and look like the switch did nothing. The user is staring at
+  // that boundary and has just said "stop ringing", so clear the
+  // segment's override too: on the running copy (this run stops holding)
+  // and on the saved segment (the loop repeat and the next run agree).
+  // Only ever the boundary currently ringing — no other segment is
+  // touched. Engine.cuesChanged, called right after, does the release.
+  // Only ever called for a change to the RING row (see the run-view
+  // bell wiring) — every other cue leaves a held gate exactly where it is.
+  _releaseGateIfRingTurnedOff() {
+    const run = Engine._focused;
+    if (!run?.awaitingDismiss || chainRingsAtEnd(run.chain)) return;
+    const seg = run.segments[run.currentIndex];
+    if (!seg || !segmentRingsUntilDismissed(seg)) return;
+    setCueOverride(seg, 'ringUntilDismissed', null);
+    const src = Store.getChain(seg.srcChainId)?.segments?.find(s => s && s.id === seg.srcSegId);
+    if (src) { setCueOverride(src, 'ringUntilDismissed', null); Store.save(); }
+  },
+
+  _syncRunCueBell() {
+    const btn = document.getElementById('run-cues-btn');
+    const dot = document.getElementById('run-cues-dot');
+    if (!btn || !dot) return;
+    const chain = UI.runViewChain();
+    const has = !!(chain?.cues && Object.keys(chain.cues).length);
+    btn.classList.toggle('has-overrides', has);
+    dot.hidden = !has;
   },
 
   _syncChainCueBell() {
@@ -4401,6 +4513,11 @@ const UI = {
     // v1.4.11 — while an inline prestart preview is displayed, the run
     // view belongs to the pending chain; don't repaint the focused run
     // over it. (Yielding focus via a chip tap clears the gate.)
+    // v1.4.21 — the topbar cue controls belong to whichever chain the
+    // run view is showing, so they are refreshed on every render (focus
+    // swaps between concurrent chains, and each carries its own cues).
+    UI._syncMuteIcon();
+    UI._syncRunCueBell();
     if (UI.prestartPendingChain && !UI.prestartYielded) {
       UI.renderRunChips();
       return;
@@ -4536,6 +4653,10 @@ const UI = {
   updateRunSegmentInfo() {
     // Gated during an inline prestart preview — see renderRun.
     if (UI.prestartPendingChain && !UI.prestartYielded) return;
+    // Focus can swap between concurrent chains without a full renderRun,
+    // and each chain carries its own cue overrides.
+    UI._syncMuteIcon();
+    UI._syncRunCueBell();
     const seg = Engine.segments[Engine.currentIndex];
     if (!seg) return;
     UI._setRunChainName(Engine.chain?.name);
@@ -5138,11 +5259,15 @@ function init() {
       // Sound is the parent of "Final 3 seconds tick" in the Defaults
       // section — hide/show the nested row as the user flips the parent.
       if (key === 'sound') UI._syncFinalTickRowVisibility();
-      // Push a cue change that alters a GATE straight to the foreground
-      // service — it decides in the background off its own plan copy, so
-      // a stale flag there would ring (or fail to ring) at chain end.
-      if (key === 'ringUntilDismissed' || key === 'sound') {
-        for (const r of Engine._runs.values()) if (r.isRunning) r._emit('chain:fgsupdate');
+      // v1.4.21 — every cue change reaches the running chains, not just
+      // the two that used to be forwarded here. The foreground service
+      // decides in the background off its own resolved copy, so a stale
+      // flag rings a muted phone, skips a buzz, or holds a gate the user
+      // has just switched off. Engine.cuesChanged handles all of it,
+      // including re-rendering voice files a chain started without.
+      if (CUE_KEYS.includes(key)) {
+        Engine.cuesChanged();
+        UI._syncMuteIcon();
       }
     });
   };
@@ -5733,12 +5858,43 @@ function init() {
   document.getElementById('run-next-btn').addEventListener('click', () => Engine.skipNext());
   document.getElementById('run-prev').addEventListener('click', () => Engine.skipPrev());
   document.getElementById('run-mute').addEventListener('click', () => {
-    const cur = Store.getSettings().sound;
-    Store.setSetting('sound', !cur);
-    document.getElementById('mute-icon').innerHTML = cur
-      ? `<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/>`
-      : `<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19 12c0-2-1-4-3-5M16 8c1 1 2 2 2 4s-1 3-2 4"/>`;
-    Toast.show(cur ? 'Sound muted' : 'Sound on', cur ? 'warn' : 'good');
+    const wasOn = UI.runViewSoundOn();
+    Store.setSetting('sound', !wasOn);
+    // A chain-level override outranks the app default, so a chain saying
+    // "Sound cues: On" would swallow the mute whole. Drop that override
+    // back to Default so the button always does what it says — the bell
+    // beside it shows, and can restore, the chain's own answer.
+    const chain = Store.getChain(UI.runViewChain()?.id || '');
+    if (chain?.cues && chain.cues.sound === wasOn) {
+      setCueOverride(chain, 'sound', null);
+      Store.save();
+      UI._syncRunCueBell();
+    }
+    UI._syncMuteIcon();
+    // v1.4.21 — the reported bug: this used to change the setting and
+    // stop there, so an alarm already ringing at the end of a chain
+    // carried on. The foreground service owns that loop and reads the
+    // cue it was last told about; push the new answer at it.
+    Engine.cuesChanged();
+    Toast.show(wasOn ? 'Sound muted' : 'Sound on', wasOn ? 'warn' : 'good');
+  });
+
+  // v1.4.21 — the chain-editor cue bell, on the running chain. Same sheet,
+  // same chain scope: the holder IS the stored chain, so a change persists
+  // exactly as it would from the editor (see .claude/ROADMAP.md — this was
+  // the decision made when the feature was first discussed). The live run
+  // resolves cues against that same object, so the effect is immediate.
+  document.getElementById('run-cues-btn').addEventListener('click', () => {
+    const chain = UI.runViewChain();
+    if (!chain) return;
+    const stored = Store.getChain(chain.id);
+    UI._openCueSheet('chain', stored || chain, stored || chain, (key) => {
+      if (stored) Store.save();
+      if (key === 'ringUntilDismissed') UI._releaseGateIfRingTurnedOff();
+      UI._syncRunCueBell();
+      UI._syncMuteIcon();
+      Engine.cuesChanged();
+    });
   });
 
   // completion overlay actions

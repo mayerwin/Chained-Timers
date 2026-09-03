@@ -1451,7 +1451,26 @@ public class ChainTimerService extends Service {
         if (run.finalePlayer     != null) try { run.finalePlayer.setPreferredDevice(preferred); }     catch (Throwable ignored) {}
     }
 
+    /** v1.4.21 — debug-only cue trace. Live cue changes are decided in
+     *  here, off the flags the last intent carried, and nothing outside
+     *  the process can see that decision: dumpsys audio reports the whole
+     *  app's playback (the WebView holds a track open throughout), so a
+     *  muted chime is indistinguishable from a ringing one. Read by
+     *  tools/verify-v1421-emu.mjs. */
+    private static final String CUE_TAG = "ChainTimerCue";
+
+    /** Debug builds only — never traced in a release install. */
+    private boolean cueTraceOn() {
+        try {
+            return (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        } catch (Throwable t) { return false; }
+    }
+
     private void playCueSound(ChainRun run, android.media.MediaPlayer mp) {
+        if (cueTraceOn()) {
+            android.util.Log.d(CUE_TAG, "cue run=" + run.runId + " sound=" + run.soundEnabled
+                + " ringing=" + run.ringingAtIndex);
+        }
         if (!run.soundEnabled || mp == null) return;
         try {
             if (mp.isPlaying()) mp.pause();
@@ -1470,6 +1489,9 @@ public class ChainTimerService extends Service {
      * as every other buzz, so turning Buzz cues off keeps it quiet.
      */
     private void buzzForRing(ChainRun run) {
+        if (cueTraceOn()) {
+            android.util.Log.d(CUE_TAG, "buzz run=" + run.runId + " vibrate=" + run.vibrateEnabled);
+        }
         if (!run.vibrateEnabled) return;
         try {
             android.os.Vibrator v;

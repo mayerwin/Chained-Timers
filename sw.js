@@ -1,5 +1,5 @@
 /* Chained Timers — Service Worker */
-const CACHE = 'chained-timers-v1.4.20';
+const CACHE = 'chained-timers-v1.4.21';
 const ASSETS = [
   './',
   './index.html',

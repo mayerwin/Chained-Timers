@@ -1,4 +1,4 @@
-v1.4.20 — Run again actually runs again
+v1.4.21 — Cue settings you can change mid-chain
 
-• "Run again" on the finish screen now restarts the chain you just finished. It did nothing at all before, so repeating a chain meant leaving the screen and coming back. The finish screen also counts the chain's segments correctly again.
-• Includes everything from v1.4.19: a "Ring until dismissed" alarm that keeps ringing and vibrating until you dismiss it, and a clock that drops the leading "00:" and counts on past zero.
+• Mute now silences an alarm that is already ringing at the end of a chain. It used to change the setting and leave the phone ringing.
+• New bell button in the running-chain screen, next to mute: adjust sound, buzz, voice, the final-3 tick and "Ring until dismissed" without stopping the chain. Every change applies immediately — switching "Ring until dismissed" off while it rings lets the chain finish there and then.

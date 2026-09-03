@@ -1586,11 +1586,17 @@ body.is-reordering-chains .chain-card:hover { border-color: var(--rule); backgro
   position: relative;
   z-index: 2;
 }
-.run-topbar-left {
+.run-topbar-left,
+.run-topbar-right {
   display: flex;
   align-items: center;
   gap: 4px;
 }
+/* The run-view cue bell borrows .cue-bell for its dot + accent, but keeps
+   the 42px .icon-btn box so it lines up with mute and the back/stop pair
+   across the topbar. */
+.run-cues { width: 42px; height: 42px; color: var(--ink); }
+.run-cues .cue-bell-dot { top: 8px; right: 8px; border-color: var(--bg); }
 .run-back svg { opacity: 0.85; }
 /* When the user is swiping left-to-go-back, apply a real-time drag so the
    view feels physical. Removed as soon as the swipe ends. */
