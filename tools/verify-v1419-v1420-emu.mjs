@@ -1,4 +1,4 @@
-// v1.4.19 — on-device evidence for the three beta-tester reports.
+// v1.4.19 / v1.4.20 — on-device evidence for the beta-tester reports.
 //
 //   1. A ring-until-dismissed hold must RING AND BUZZ, over and over,
 //      until it is dismissed. Three separate faults made it a silent
@@ -12,7 +12,10 @@
 //      service keys it by runId — which is the chain id, reused by the
 //      next run — so a leftover entry fast-forwarded the next run onto a
 //      finished segment: "00" on the clock and a dead Play button.
-//   3. Under a minute the clock shows seconds only, and the last ten
+//   3. "Run again" on the completion overlay must actually run the
+//      chain again — it read the FOCUSED run's chain, and there is no
+//      focused run once the last one finishes.
+//   4. Under a minute the clock shows seconds only, and the last ten
 //      seconds a single digit, like the stock Android timer. Once a gate
 //      rings, it keeps counting in negative time.
 //
@@ -197,7 +200,27 @@ console.log('\nReport 2: dismiss at chain end, then run again — a clean run');
   if (gates.replace(/\s/g, '') !== '[]') fail(`service kept stale gate state: ${gates}`);
   ok('no gate state left behind by any finished or stopped run');
 
-  // Run it again — the actual user-visible symptom.
+  // v1.4.20 — the overlay's own "Run again" is the button the user
+  // actually reaches for here, and it used to do nothing at all.
+  const overlayShown = await evalJs(`!document.getElementById('run-complete').hidden`);
+  if (!overlayShown) fail('no completion overlay after Dismiss');
+  const segCount = await evalJs(`document.getElementById('run-complete-count').textContent`);
+  if (segCount !== '1') fail(`overlay counted ${segCount} segments, expected 1`);
+  ok('completion overlay shows the finished chain (1 segment)');
+  await tap('#run-complete-again');
+  await wait(1800);
+  const again = await evalJs(`(() => ({
+    running: window.ChainedApp.Engine.activeRuns().map(r => r.id),
+    overlay: !document.getElementById('run-complete').hidden,
+    clock: document.getElementById('run-clock').textContent,
+  }))()`);
+  if (again.overlay) fail('overlay still up after Run again');
+  if (!again.running.includes('c_end')) fail(`Run again started nothing (running: ${JSON.stringify(again.running)})`);
+  ok(`"Run again" restarts the finished chain (clock "${again.clock}")`);
+  await evalJs(`window.ChainedApp.Engine.stopRun('c_end'); true;`);
+  await wait(400);
+
+  // Run it again the long way round too — the path the user had to take.
   await evalJs(`(() => { const { Store, UI } = window.ChainedApp; UI.hideCompletion(); UI.startRunForChain(Store.getChain('c_end')); return true; })()`);
   await wait(2500);
   const s = await evalJs(`(() => {
@@ -279,5 +302,5 @@ console.log('\nReport 3: under a minute the clock drops the leading "00:"');
   await evalJs(`window.ChainedApp.Engine.stopRun('c_secs'); true;`);
 }
 
-console.log('\n✅ emulator checks for v1.4.19 passed');
+console.log('\n✅ emulator checks for v1.4.19 / v1.4.20 passed');
 process.exit(0);

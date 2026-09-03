@@ -1,4 +1,4 @@
-// v1.4.19 — three ring-until-dismissed / clock fixes.
+// v1.4.19 / v1.4.20 — ring-until-dismissed, clock, and completion fixes.
 //
 //   A. Restarting a chain after dismissing its gate must start CLEAN.
 //      The foreground service keys gate state by runId, which IS the
@@ -15,6 +15,11 @@
 //
 //   C. Once a gate rings, the clock keeps counting in NEGATIVE time, so
 //      you can see how long ago the timer went off.
+//
+//   D. (v1.4.20) "Run again" on the completion overlay restarts the chain
+//      that just finished. It read Engine.chain — the FOCUSED run's chain
+//      — and by then there is no focused run, so the button did nothing
+//      at all and the overlay counted 0 segments.
 //
 // (The native buzz during a hold is Java-side and is checked on device.)
 //
@@ -245,6 +250,85 @@ console.log('\nTest C: a ringing gate counts overtime in negative time');
   else ok(`clock back to counting down after Dismiss ("${after.clock}")`);
   eq(after.ticking, false, 'overtime ticker stopped');
   await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_over'));
+}
+
+console.log('\nTest D: "Run again" on the completion overlay actually runs again');
+{
+  const overlay = () => page.evaluate(() => ({
+    shown: !document.getElementById('run-complete').hidden,
+    count: document.getElementById('run-complete-count').textContent,
+    running: window.ChainedApp.Engine.activeRuns().map(r => r.id),
+    view: document.body.dataset.view,
+  }));
+
+  // (a) a chain that ends on its own.
+  await page.evaluate(() => {
+    const { Store, Engine, UI } = window.ChainedApp;
+    UI.hideCompletion();
+    Store.upsertChain({ id: 'c_again', name: 'Again', color: 'amber', loops: 1, hasRun: true,
+      segments: [{ id: 'g1', kind: 'segment', name: 'One', duration: 1, color: 'amber' },
+                 { id: 'g2', kind: 'segment', name: 'Two', duration: 1, color: 'teal' }] });
+    Engine.startChain(Store.getChain('c_again'));
+  });
+  await page.waitForTimeout(2800);
+  let s = await overlay();
+  eq(s.shown, true, 'completion overlay shown');
+  eq(s.running, [], 'nothing left running');
+  eq(s.count, '2', 'segment count is the finished chain\'s, not the empty engine\'s');
+
+  await page.click('#run-complete-again');
+  await page.waitForTimeout(600);
+  s = await overlay();
+  eq(s.shown, false, 'overlay dismissed');
+  eq(s.running, ['c_again'], 'the same chain is running again');
+  eq(s.view, 'run', 'still on the run view');
+  await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_again'));
+  await page.waitForTimeout(200);
+
+  // (b) the reported path: a chain whose LAST segment holds a ring gate,
+  // finished by tapping Dismiss.
+  await page.evaluate(() => {
+    const { Store, Engine, UI } = window.ChainedApp;
+    UI.hideCompletion();
+    Store.upsertChain({ id: 'c_gated', name: 'Gated', color: 'amber', loops: 1, hasRun: true,
+      segments: [{ id: 'h1', kind: 'segment', name: 'Last', duration: 1, color: 'amber',
+                   cues: { ringUntilDismissed: true } }] });
+    Engine.startChain(Store.getChain('c_gated'));
+  });
+  await page.waitForTimeout(1600);
+  eq(await page.evaluate(() => !!window.ChainedApp.Engine._focused?.awaitingDismiss), true, 'held at the end gate');
+  await page.click('#run-dismiss');
+  await page.waitForTimeout(700);
+  eq((await overlay()).shown, true, 'overlay shown after Dismiss');
+
+  await page.click('#run-complete-again');
+  await page.waitForTimeout(600);
+  s = await overlay();
+  eq(s.shown, false, 'overlay dismissed');
+  eq(s.running, ['c_gated'], 'the dismissed chain runs again');
+  const clock = await page.evaluate(() => document.getElementById('run-clock').textContent);
+  if (!clock.startsWith('-')) ok(`clock counting down again ("${clock}")`);
+  else bad(`still showing overtime ("${clock}")`);
+  await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_gated'));
+  await page.waitForTimeout(200);
+
+  // (c) a chain deleted while its overlay was up must not wedge the button.
+  await page.evaluate(() => {
+    const { Store, Engine, UI } = window.ChainedApp;
+    UI.hideCompletion();
+    Store.upsertChain({ id: 'c_gone', name: 'Gone', color: 'amber', loops: 1, hasRun: true,
+      segments: [{ id: 'x1', kind: 'segment', name: 'Solo', duration: 1, color: 'amber' }] });
+    Engine.startChain(Store.getChain('c_gone'));
+  });
+  await page.waitForTimeout(1800);
+  eq((await overlay()).shown, true, 'overlay shown');
+  await page.evaluate(() => window.ChainedApp.Store.deleteChain('c_gone'));
+  await page.click('#run-complete-again');
+  await page.waitForTimeout(600);
+  s = await overlay();
+  eq(s.shown, false, 'overlay dismissed');
+  eq(s.running, ['c_gone'], 'the deleted chain still runs from the overlay copy');
+  await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_gone'));
 }
 
 console.log(failures ? `\n❌ ${failures} assertion(s) failed` : '\n✅ all checks passed');

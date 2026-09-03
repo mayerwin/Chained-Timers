@@ -15,7 +15,7 @@ const STORAGE_KEY = 'chained-timers/v1';
 // version field. Kept as a literal here (not injected via <script>) so
 // the file is self-contained when opened directly in a browser during
 // development. Update by hand if editing this file outside the build.
-const APP_VERSION = '1.4.19';
+const APP_VERSION = '1.4.20';
 
 // Where "Update available" points on native. Selection order at run time:
 //   1. If the plugin reports the install came from the Play Store, the
@@ -2103,7 +2103,10 @@ const Engine = {
         // already removed from _runs and Engine.segments resolves to []
         // (or the promoted run if there were 3, but the gate above
         // ensures there isn't a promoted run on this branch).
-        this.onComplete(totalSeconds, run.segments.length);
+        // v1.4.20 — the chain travels with it for the same reason: the
+        // overlay's "Run again" has to know WHICH chain just finished,
+        // and Engine.chain no longer answers that question.
+        this.onComplete(totalSeconds, run.segments.length, run.chain);
       }
     }
     this._notifyRunsChange();
@@ -4923,18 +4926,38 @@ const UI = {
     if (modal) modal.hidden = true;
   },
 
-  showCompletion(totalSeconds) {
+  // v1.4.20 — the chain that just finished, remembered for as long as its
+  // overlay is up. By the time this runs the EngineRun is already gone
+  // from Engine._runs, so Engine.chain is null (or, with another chain
+  // still running, a DIFFERENT chain's) — which is why "Run again" used
+  // to do nothing, and why the segment count came out wrong.
+  _completedChain: null,
+
+  showCompletion(totalSeconds, segmentCount, chain) {
     // Readiness signal for the feedback prompt: a finished chain is the
     // app doing its job, which is a fairer basis than days installed.
     Store.setSetting('chainsCompleted', (Number(Store.getSettings().chainsCompleted) || 0) + 1);
+    UI._completedChain = chain || null;
     document.getElementById('run-complete').hidden = false;
     document.getElementById('run-complete-time').textContent = fmtLong(totalSeconds);
-    document.getElementById('run-complete-count').textContent = Engine.segments.length;
+    document.getElementById('run-complete-count').textContent =
+      Number.isFinite(segmentCount) ? segmentCount : Engine.segments.length;
     document.getElementById('run-complete-title').textContent = 'Well done.';
   },
 
   hideCompletion() {
     document.getElementById('run-complete').hidden = true;
+    UI._completedChain = null;
+  },
+
+  /** The chain a visible completion overlay belongs to, live from the
+   *  store when it still exists (so a rename or an edit made since is
+   *  picked up), falling back to the run's own copy for a chain that has
+   *  been deleted meanwhile. */
+  completedChain() {
+    const done = UI._completedChain;
+    if (!done) return null;
+    return Store.getChain(done.id) || done;
   },
 
   // ------- Feedback prompt (Android only) -------
@@ -5720,8 +5743,15 @@ function init() {
 
   // completion overlay actions
   document.getElementById('run-complete-again').addEventListener('click', () => {
+    // Read the chain BEFORE hiding — hideCompletion drops it. It used to
+    // read Engine.chain here, which is the FOCUSED run's chain: there is
+    // no focused run once the last one finishes, so the button silently
+    // did nothing, and with another chain still running it would have
+    // restarted the wrong one.
+    const chain = UI.completedChain();
     UI.hideCompletion();
-    if (Engine.chain) UI.startRunForChain(Engine.chain);
+    if (chain) UI.startRunForChain(chain);
+    else View.show('library');
   });
   document.getElementById('run-complete-done').addEventListener('click', () => {
     UI.hideCompletion();
@@ -5753,7 +5783,8 @@ function init() {
   // Gate entered/left — refresh the Dismiss bar and the chip strip (a
   // held background run shows as ringing there too).
   Engine.onAlarmChange = () => { UI._syncAlarmUI(); UI.renderRunChips(); };
-  Engine.onComplete = (totalSeconds) => UI.showCompletion(totalSeconds);
+  Engine.onComplete = (totalSeconds, segmentCount, chain) =>
+    UI.showCompletion(totalSeconds, segmentCount, chain);
   // v1.4 — chip strip wakes up whenever a run is added/removed/focused.
   // The chip clocks themselves redraw on every focused-run tick (see
   // updateRunClock) so background clocks stay live.
