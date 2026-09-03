@@ -1,10 +1,10 @@
 // v1.4.21 — cue changes while a chain is running.
 //
-//   A. The run-view mute button silences an alarm that is ALREADY
-//      ringing at the end of a chain. It used to write the setting and
-//      stop there: the ring loop had captured its cues when the gate
-//      opened, and the foreground service was never told, so the phone
-//      kept ringing.
+//   A. Silencing a chain from the run view stops an alarm that is
+//      ALREADY ringing at the end of it. The ring loop had captured its
+//      cues when the gate opened and the foreground service was never
+//      told, so the phone kept ringing. (Reported against the mute
+//      button, which v1.4.22 removed — the bell is the path now.)
 //   B. Turning "Ring until dismissed" off while a gate is ringing lets
 //      the gate go immediately, instead of leaving the chain waiting on
 //      a Dismiss the user has just said they don't want.
@@ -64,8 +64,14 @@ const lastEmit = (id) => page.evaluate((runId) =>
   [...window.__emits].reverse().find(d => d.runId === runId) || null, id);
 const bursts = () => page.evaluate(() => window.__bursts);
 
-console.log('Test A: mute silences an alarm that is already ringing');
+console.log('Test A: Sound cues off silences an alarm that is already ringing');
 {
+  // v1.4.22: this used to go through a mute button in the run topbar.
+  // That button wrote the GLOBAL sound default from a transient screen,
+  // so it was removed and the bell is now the one way to silence a chain
+  // from the run view. The fault it exposed is the same either way: a
+  // ring loop that had captured its cues when the gate opened, and a
+  // foreground service nobody told.
   await page.evaluate(() => {
     const { Store, UI } = window.ChainedApp;
     UI.startRunForChain(Store.getChain('c_ring'));
@@ -76,30 +82,33 @@ console.log('Test A: mute silences an alarm that is already ringing');
   if (before > 0) ok(`ringing (${before} burst(s) so far)`);
   else bad('the gate is not ringing at all');
 
-  await page.click('#run-mute');
+  await page.click('#run-cues-btn');
+  await page.waitForTimeout(200);
+  await page.click('.cue-row[data-cue-key="sound"] button[data-state="off"]');
   await page.waitForTimeout(300);
   const atMute = await bursts();
   await page.waitForTimeout(3400);              // two full burst intervals
-  eq(await bursts(), atMute, 'no further bursts after muting');
-  eq(await page.evaluate(() => window.ChainedApp.Store.getSettings().sound), false, 'sound setting off');
+  eq(await bursts(), atMute, 'no further bursts once sound is off');
 
-  // The gate itself stays: muting silences, it does not dismiss.
-  eq(await page.evaluate(() => !!window.ChainedApp.Engine._focused?.awaitingDismiss), true, 'still held after muting');
+  // The gate itself stays: silencing is not dismissing.
+  eq(await page.evaluate(() => !!window.ChainedApp.Engine._focused?.awaitingDismiss), true, 'still held');
   eq(await page.evaluate(() => document.getElementById('run-dismiss-bar').hidden), false, 'Dismiss bar still shown');
 
   // What the foreground service would be told.
-  const emit = await lastEmit('c_ring');
-  eq(emit?.soundEnabled, false, 'the service is told sound is off');
+  eq((await lastEmit('c_ring'))?.soundEnabled, false, 'the service is told sound is off');
 
-  // Unmuting brings it back.
-  await page.click('#run-mute');
+  // Back to Default brings it back.
+  await page.click('.cue-row[data-cue-key="sound"] button[data-state="default"]');
   await page.waitForTimeout(1900);
-  if (await bursts() > atMute) ok('ringing resumes on unmute');
-  else bad('unmute did not resume the ring');
+  if (await bursts() > atMute) ok('ringing resumes when sound comes back');
+  else bad('restoring sound did not resume the ring');
   eq((await lastEmit('c_ring'))?.soundEnabled, true, 'the service is told sound is back on');
 
-  await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_ring'));
-  await page.evaluate(() => window.ChainedApp.UI.hideCompletion());
+  await page.evaluate(() => {
+    document.getElementById('cues-sheet').hidden = true;
+    window.ChainedApp.Engine.stopRun('c_ring');
+    window.ChainedApp.UI.hideCompletion();
+  });
   await page.waitForTimeout(200);
 }
 
@@ -199,32 +208,15 @@ console.log('\nTest C: the run-view bell edits the running chain');
   await page.evaluate(() => { document.getElementById('cues-sheet').hidden = true; });
 }
 
-console.log('\nTest D: mute wins over a chain that overrides Sound to On');
+console.log('\nTest D: the run view carries no global sound switch any more');
 {
-  await page.evaluate(() => {
-    const { Store } = window.ChainedApp;
-    const chain = Store.getChain('c_long');
-    chain.cues = { ...(chain.cues || {}), sound: true };
-    Store.save();
-    window.ChainedApp.UI.updateRunSegmentInfo();
-  });
-  await page.waitForTimeout(200);
-  eq(await page.evaluate(() => window.ChainedApp.UI.runViewSoundOn()), true, 'sound is on via the chain override');
-
-  await page.click('#run-mute');
-  await page.waitForTimeout(300);
-  eq(await page.evaluate(() => window.ChainedApp.UI.runViewSoundOn()), false, 'muting actually mutes');
-  eq(await page.evaluate(() => (window.ChainedApp.Store.getChain('c_long').cues || {}).sound), undefined,
-     'the conflicting chain override was cleared, not left to swallow the mute');
-  eq((await lastEmit('c_long'))?.soundEnabled, false, 'the service agrees');
-
-  // The icon follows the EFFECTIVE answer, not the raw app default.
-  const muted = await page.evaluate(() => document.getElementById('mute-icon').innerHTML.includes('M22 9l-6 6'));
-  eq(muted, true, 'icon shows the crossed-out speaker');
-  await page.click('#run-mute');
-  await page.waitForTimeout(300);
-  eq(await page.evaluate(() => window.ChainedApp.UI.runViewSoundOn()), true, 'and unmutes again');
-  await page.evaluate(() => window.ChainedApp.Engine.stopRun('c_long'));
+  // v1.4.22 — the mute button is gone. It wrote the app-wide Sound
+  // default from a screen you leave, so one tap during a workout
+  // silenced every chain after it, with only an icon to say so.
+  eq(await page.evaluate(() => !!document.getElementById('run-mute')), false, 'no mute button in the run view');
+  eq(await page.evaluate(() => !!document.getElementById('run-cues-btn')), true, 'the cue bell is what remains');
+  // Sound still has exactly one home per scope.
+  eq(await page.evaluate(() => !!document.getElementById('setting-sound')), true, 'app default lives in Settings');
 }
 
 console.log('\nTest E: an App Settings cue change reaches a running chain');

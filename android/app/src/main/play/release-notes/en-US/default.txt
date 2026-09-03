@@ -1,4 +1,4 @@
-v1.4.21 — Cue settings you can change mid-chain
+v1.4.22 — One home for sound settings
 
-• Mute now silences an alarm that is already ringing at the end of a chain. It used to change the setting and leave the phone ringing.
-• New bell button in the running-chain screen, next to mute: adjust sound, buzz, voice, the final-3 tick and "Ring until dismissed" without stopping the chain. Every change applies immediately — switching "Ring until dismissed" off while it rings lets the chain finish there and then.
+• The mute button is gone from the running-chain screen. It changed the app-wide sound default from a screen you leave, so a mute during one chain quietly silenced every chain after it.
+• Sound now has two obvious homes: the bell on the running chain (this chain, with a dot when it differs from your defaults) and Settings (the default for everything else). To stop an alarm that is ringing, tap Dismiss; to turn things down, use the volume keys.

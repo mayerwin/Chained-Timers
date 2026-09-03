@@ -1,4 +1,4 @@
-// v1.4.21 — on-device evidence for live cue changes.
+// v1.4.21 / v1.4.22 — on-device evidence for live cue changes.
 //
 // The browser suite proves the JS side. Only the device can prove the
 // part that actually failed for the user: on Android the foreground
@@ -6,9 +6,11 @@
 // cues, so muting in the WebView changed nothing at all until the run
 // started pushing updates at it.
 //
-//   1. Mute during a ringing gate stops the chime, and the gate stays
-//      held (mute silences, it does not dismiss). Unmuting brings it
-//      back.
+//   1. Silencing a chain from the run view (Sound cues → Off on the
+//      bell) stops a gate that is already ringing, and the gate stays
+//      held. Restoring sound brings it back. v1.4.22 also checks the
+//      mute button is GONE: it wrote the app-wide default from a screen
+//      you leave, so one tap silenced every later chain.
 //   2. Buzz cues off, from the new run-view bell, stops the haptic and
 //      leaves the chime alone.
 //   3. "Ring until dismissed" off releases the held gate on the spot —
@@ -110,8 +112,11 @@ const reachGate = async () => {
   if (!await evalJs(`!!window.ChainedApp.Engine._focused?.awaitingDismiss`)) fail('never reached the gate');
 };
 
-console.log('Report 1: mute silences a gate that is already ringing');
+console.log('Report 1: Sound cues off silences a gate that is already ringing');
 {
+  // Reported against a mute button in the run topbar. v1.4.22 removed
+  // that button — it wrote the app-wide default from a screen you leave
+  // — so the bell is the path now; the fault underneath is the same.
   await seed(JSON.stringify(GATED_CHAIN));
   await reachGate();
   ok('held at the gate');
@@ -119,24 +124,29 @@ console.log('Report 1: mute silences a gate that is already ringing');
   if (t.played < 2) fail(`the gate is not ringing to begin with (${JSON.stringify(t)})`);
   ok(`ringing (${t.played} chimes in 5s)`);
 
-  await tap('#run-mute');
+  if (await evalJs(`!!document.getElementById('run-mute')`)) fail('the mute button is still in the run view');
+  ok('no global mute switch in the run view');
+
+  await tap('#run-cues-btn');
+  await wait(500);
+  await tap('.cue-row[data-cue-key="sound"] button[data-state="off"]');
   await wait(1500);                       // let the update land
   t = await cueTrace(6000);
-  if (t.played > 0) fail(`STILL chiming after mute — the service never got the news (${JSON.stringify(t)})`);
+  if (t.played > 0) fail(`STILL chiming — the service never got the news (${JSON.stringify(t)})`);
   if (t.silenced < 2) fail(`the ring loop stopped running altogether (${JSON.stringify(t)}) — expected it to keep looping, silently`);
-  ok(`silent after mute (${t.silenced} bursts suppressed, 0 played)`);
-  if (t.buzzed < 1) fail('the buzz stopped too — mute is sound-only');
-  ok(`still buzzing (${t.buzzed}) — mute governs sound alone`);
-  if (!await evalJs(`!!window.ChainedApp.Engine._focused?.awaitingDismiss`)) fail('mute dismissed the gate — it should only silence it');
-  ok('the gate is still held (mute silences, it does not dismiss)');
-  shot('emu-51-muted-gate.png');
+  ok(`silent (${t.silenced} bursts suppressed, 0 played)`);
+  if (t.buzzed < 1) fail('the buzz stopped too — Sound cues is sound-only');
+  ok(`still buzzing (${t.buzzed}) — Sound cues governs sound alone`);
+  if (!await evalJs(`!!window.ChainedApp.Engine._focused?.awaitingDismiss`)) fail('silencing dismissed the gate — it should only go quiet');
+  ok('the gate is still held (silencing is not dismissing)');
+  shot('emu-51-silenced-gate.png');
 
-  await tap('#run-mute');
+  await tap('.cue-row[data-cue-key="sound"] button[data-state="default"]');
   await wait(1500);
   t = await cueTrace(5000);
-  if (t.played < 2) fail(`unmute did not bring the ring back (${JSON.stringify(t)})`);
-  ok(`ringing again after unmute (${t.played} chimes)`);
-  await evalJs(`window.ChainedApp.Engine.stopRun('c_ring'); true;`);
+  if (t.played < 2) fail(`restoring sound did not bring the ring back (${JSON.stringify(t)})`);
+  ok(`ringing again (${t.played} chimes)`);
+  await evalJs(`window.ChainedApp.Engine.stopRun('c_ring'); document.getElementById('cues-sheet').hidden = true; true;`);
   await wait(500);
 }
 
@@ -244,5 +254,5 @@ console.log('\nReport 4: Voice cues switched ON mid-run get their files rendered
   await evalJs(`window.ChainedApp.Engine.stopRun('c_voice'); document.getElementById('cues-sheet').hidden = true; true;`);
 }
 
-console.log('\n✅ emulator checks for v1.4.21 passed');
+console.log('\n✅ emulator checks for v1.4.21 / v1.4.22 passed');
 process.exit(0);
