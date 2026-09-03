@@ -1,5 +1,4 @@
-v1.4.19 — Alarms that really ring
+v1.4.20 — Run again actually runs again
 
-• "Ring until dismissed" now keeps ringing AND vibrating until you dismiss it, instead of going quiet after one burst. Alarm cues also finally follow the "Ring through Do Not Disturb" setting.
-• Fixed a chain that refused to start again after its alarm was dismissed: it showed 00 and ignored Play.
-• The clock drops the leading "00:" and shows the last ten seconds as one digit — then keeps counting, negative, so you can see how long ago a timer went off.
+• "Run again" on the finish screen now restarts the chain you just finished. It did nothing at all before, so repeating a chain meant leaving the screen and coming back. The finish screen also counts the chain's segments correctly again.
+• Includes everything from v1.4.19: a "Ring until dismissed" alarm that keeps ringing and vibrating until you dismiss it, and a clock that drops the leading "00:" and counts on past zero.
