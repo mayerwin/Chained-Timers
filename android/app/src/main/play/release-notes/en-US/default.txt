@@ -1,4 +1,5 @@
-v1.4.22 — One home for sound settings
+v1.4.23 — The timer that's up is the one you see
 
-• The mute button is gone from the running-chain screen. It changed the app-wide sound default from a screen you leave, so a mute during one chain quietly silenced every chain after it.
-• Sound now has two obvious homes: the bell on the running chain (this chain, with a dot when it differs from your defaults) and Settings (the default for everything else). To stop an alarm that is ringing, tap Dismiss; to turn things down, use the volume keys.
+• When one chain's alarm goes off while another is still running, the app now opens the chain that finished, with its Dismiss — instead of leaving you on the one still counting, unable to stop the ringing.
+• A chain waiting on its alarm reads as ringing now, not paused, in your chain list and in the run screen's strip.
+• Fixed: a run screen could show a finished chain's red while its own timer counted down normally.
