@@ -427,6 +427,17 @@ body.is-reordering-chains .chain-card:hover { border-color: var(--rule); backgro
 }
 .run-chip.is-paused .run-chip-clock { color: var(--good); }
 
+/* v1.4.23 — chip for a chain held at a ringing gate. The freeze rides on
+   the pause plumbing, so without this the ringing chain read as "paused"
+   in the strip — no way to tell which of two chains was the one going
+   off. Same warn colour and pulse as the run view it belongs to. */
+.run-chip.is-ringing .run-chip-dot {
+  background: var(--warn);
+  box-shadow: 0 0 6px rgba(226,72,58,0.7);
+  animation: pendingBlink 0.95s ease-in-out infinite;
+}
+.run-chip.is-ringing .run-chip-clock { color: var(--warn); }
+
 /* v1.4.11 — chip for a chain counting down inline (prestart while
    another chain is running). Blinking dot = "about to start". */
 .run-chip.is-pending .run-chip-dot {

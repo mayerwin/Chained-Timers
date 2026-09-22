@@ -102,21 +102,34 @@
   log(`ChainTimer plugin: available=${chainTimerAvailable} (Plugins.ChainTimer=${!!(Plugins && Plugins.ChainTimer)}, isPluginAvailable=${typeof window.Capacitor.isPluginAvailable === 'function' ? window.Capacitor.isPluginAvailable('ChainTimer') : 'n/a'})`);
   window.ChainedNativeStatus.fgServiceAvailable = chainTimerAvailable;
 
-  // Notification-action -> JS plumbing. When the user taps Pause/Resume/Stop
-  // in the persistent notification, ChainTimerPlugin.handleOnNewIntent
-  // fires a "chainCommand" event with { command: 'pause' | 'resume' | 'stop' }.
-  // We re-emit it as a plain DOM event so the engine in app.js can react
-  // without taking a hard dependency on Capacitor.
+  // Notification-action -> JS plumbing. When the user taps a button in a
+  // run's notification, ChainTimerPlugin fires a "chainCommand" event
+  // with { command, runId }. We re-emit it as a plain DOM event so the
+  // engine in app.js can react without taking a hard dependency on
+  // Capacitor.
+  //
+  // v1.4.23 — two things this used to lose on the way through:
+  //
+  //   - runId. The engine falls back to the FOCUSED run when it isn't
+  //     told which run a command is for, so with two chains up, Pause /
+  //     Stop / Skip tapped on the background chain's notification acted
+  //     on the chain the user happened to be looking at instead.
+  //   - 'dismiss' and 'ringing', which the old allow-list left out.
+  //     The engine has handlers for both (a gate cleared from the
+  //     notification, and a gate the service started ringing while the
+  //     WebView slept); neither had ever been reachable.
+  const ENGINE_COMMANDS = ['pause', 'resume', 'stop', 'skip-prev', 'skip-next',
+                           'dismiss', 'ringing'];
   if (chainTimerAvailable) {
     try {
       ChainTimer.addListener('chainCommand', (event) => {
         const cmd = event && event.command;
-        if (cmd !== 'pause' && cmd !== 'resume' && cmd !== 'stop'
-            && cmd !== 'skip-prev' && cmd !== 'skip-next') return;
-        log('chainCommand from notification:', cmd);
+        if (ENGINE_COMMANDS.indexOf(cmd) === -1) return;
+        const runId = (event && event.runId) || null;
+        log('chainCommand from notification:', cmd, runId || '(focused run)');
         try {
           window.dispatchEvent(new CustomEvent('chained:enginecommand', {
-            detail: { command: cmd, source: 'notification' },
+            detail: { command: cmd, runId, source: 'notification' },
           }));
         } catch (e) { log('dispatch chained:enginecommand failed:', e); }
       });

@@ -251,6 +251,12 @@ const COLORS = [
 const COLOR_BY_ID = Object.fromEntries(COLORS.map(c => [c.id, c.hex]));
 const colorHex = id => COLOR_BY_ID[id] || COLOR_BY_ID.amber;
 
+// Transport glyph for a run in the library's now-playing card. v1.4.23:
+// a run held at a ringing gate is paused underneath (that is how the
+// freeze is implemented), so it used to show the pause glyph — the one
+// chain actually demanding attention read as the one that wasn't.
+const runStatusIcon = run => run?.awaitingDismiss ? '⏰' : (run?.isPaused ? '⏸' : '▶');
+
 // v1.4.14 — a brand-new segment starts at ZERO, not one minute. The
 // duration picker now opens immediately on create, and its numpad shifts
 // digits in from the right: starting from 00:00:00 means "5" then "0"
@@ -1550,12 +1556,15 @@ class EngineRun {
         }
       }
 
-      // Warning state for last 5 seconds — only on the focused run (the
-      // background run isn't drawing the ring, no point colouring it).
+      // Warning state for last 5 seconds. The FLAG is kept honest for
+      // every run (v1.4.23: it used to be updated only while focused, so
+      // a background run carried whatever it had when it lost focus); the
+      // repaint only happens for the run actually drawing the ring, and
+      // only when the state changes — this runs every frame.
       const shouldWarn = remainingInt <= 5 && !this.isPaused && remainingInt > 0;
-      if (this._isFocused() && shouldWarn !== this.warningOn) {
+      if (shouldWarn !== this.warningOn) {
         this.warningOn = shouldWarn;
-        document.querySelector('.view-run')?.classList.toggle('is-warning', shouldWarn);
+        if (this._isFocused()) UI._syncRunViewState();
       }
 
       this._cbTick(seg, remainingSec, elapsedMs / 1000);
@@ -1635,9 +1644,7 @@ class EngineRun {
     this.pausedDuration = 0;
     this.finalThreeFiredFor = -1;
     this.warningOn = false;
-    if (this._isFocused()) {
-      document.querySelector('.view-run')?.classList.remove('is-warning');
-    }
+    UI._syncRunViewState();
 
     this._persist();
     this._cbSegmentChange();
@@ -1655,17 +1662,22 @@ class EngineRun {
   // is what distinguishes "held at a gate, ringing" from "user paused".
   _beginAlarmHold() {
     if (this.awaitingDismiss) return;
+    // v1.4.23 — a ringing gate IS the thing that wants the user now, so
+    // it takes the run view. Before this, a gate that rang while another
+    // chain was focused left the run view on the chain still counting:
+    // the alarm sounded, and nothing on screen said which timer was up
+    // or offered its Dismiss (reported as "it rings but the finished
+    // timer doesn't open"). A gate already ringing keeps the view — the
+    // user is dealing with that one; don't move the target under them.
+    const otherHeld = [...Engine._runs.values()].some(r => r !== this && r.awaitingDismiss);
     this.awaitingDismiss = true;
     this.isPaused = true;
     this.pausedAtWall = this.segmentStartedAtWall + this.pausedDuration
       + (this.segments[this.currentIndex]?.duration || 0) * 1000;
     cancelAnimationFrame(this.rafId);
     this.warningOn = false;
-    if (this._isFocused()) {
-      const view = document.querySelector('.view-run');
-      view?.classList.remove('is-warning');
-      view?.classList.add('is-alarm');
-    }
+    if (!otherHeld && !this._isFocused() && Engine._runs.has(this.id)) Engine.focus(this.id);
+    UI._syncRunViewState();
     this._persist();
     // Native owns the audible loop in both foreground and background
     // (same rule as every other cue since v1.4.4); on web we ring from
@@ -1687,9 +1699,7 @@ class EngineRun {
     // this same segment doesn't immediately re-arm the gate.
     this.dismissedAtIndex = this.currentIndex;
     Alarm.stop();
-    if (this._isFocused()) {
-      document.querySelector('.view-run')?.classList.remove('is-alarm', 'is-paused');
-    }
+    UI._syncRunViewState();
     if (typeof Engine.onAlarmChange === 'function') Engine.onAlarmChange(this);
     this._advance('dismiss');
     return true;
@@ -1701,10 +1711,8 @@ class EngineRun {
     if (!this.isRunning) return;
     this.isPaused = true;
     this.pausedAtWall = Date.now();
-    if (this._isFocused()) {
-      document.querySelector('.view-run')?.classList.add('is-paused');
-      document.querySelector('.view-run')?.classList.remove('is-warning');
-    }
+    this.warningOn = false;
+    UI._syncRunViewState();
     // Only release the wake lock when NO run is still actively
     // counting down. activeRunningCount() includes paused-but-running
     // runs (isRunning stays true while isPaused flips), so for a
@@ -1729,9 +1737,7 @@ class EngineRun {
     if (this.awaitingDismiss) return;   // only dismissAlarm() clears a gate
     this.pausedDuration += Date.now() - this.pausedAtWall;
     this.isPaused = false;
-    if (this._isFocused()) {
-      document.querySelector('.view-run')?.classList.remove('is-paused');
-    }
+    UI._syncRunViewState();
     if (Store.getSettings().wake) Wake.acquire();
     this._persist();
     this._loop();
@@ -1789,10 +1795,15 @@ class EngineRun {
   stop(opts = {}) {
     this.isRunning = false;
     this.isPaused = false;
+    this.warningOn = false;
+    // v1.4.23 — stopping a run that sat at a ringing gate clears the
+    // gate and silences it. The FGS hears about it through chain:cancel
+    // below; the web/PWA ring loop lives in JS and had nothing telling
+    // it to stop, so it kept bursting after the chain was gone.
+    this.awaitingDismiss = false;
+    if (Alarm.activeRunId() === this.id) Alarm.stop();
     cancelAnimationFrame(this.rafId);
-    if (this._isFocused()) {
-      document.querySelector('.view-run')?.classList.remove('is-warning', 'is-paused');
-    }
+    UI._syncRunViewState();
     // Same active-ticking check as in pause() — release the wake lock
     // when no run is actually counting down. A paused-but-running run
     // shouldn't keep the screen awake; v1.3.x semantics.
@@ -1913,18 +1924,15 @@ const Engine = {
   focusedRunId()         { return this._focusedId; },
 
   // Switch which run is the "primary" for the run view. Returns true
-  // if focus actually moved. Recomputes the UI's is-warning/is-paused
-  // classes against the new focused run.
+  // if focus actually moved. The run view's state tints are re-derived
+  // from the newly focused run (v1.4.23 — they used to be copied from
+  // run.warningOn, a flag only the focused run ever updated).
   focus(chainId) {
     if (!chainId || !this._runs.has(chainId)) return false;
     if (this._focusedId === chainId) return false;
     this._focusedId = chainId;
     const run = this._runs.get(chainId);
-    const view = document.querySelector('.view-run');
-    if (view) {
-      view.classList.toggle('is-paused', !!run.isPaused);
-      view.classList.toggle('is-warning', !!run.warningOn);
-    }
+    UI._syncRunViewState();
     this._notifyRunsChange();
     // Re-render the run UI for the newly-focused run.
     if (typeof this.onSegmentChange === 'function') this.onSegmentChange();
@@ -2050,6 +2058,7 @@ const Engine = {
       const next = this.activeRuns()[0] || null;
       this._focusedId = next ? next.id : null;
       if (next) this._promoteToFocused(next);
+      else UI._syncRunViewState();
     }
     this._notifyRunsChange();
   },
@@ -2060,21 +2069,13 @@ const Engine = {
   // re-emit chain:reschedule so the native bridge re-binds the FGS to
   // the newly-focused run.
   _promoteToFocused(next) {
-    const view = document.querySelector('.view-run');
-    if (view) {
-      view.classList.toggle('is-paused', !!next.isPaused);
-      view.classList.toggle('is-warning', !!next.warningOn);
-    }
+    UI._syncRunViewState();
     if (typeof this.onSegmentChange === 'function') this.onSegmentChange();
     if (next.isRunning) {
       const seg = next.segments[next.currentIndex];
       if (seg) {
         const elapsedSec = next._elapsedMs() / 1000;
         const remainingSec = Math.max(0, seg.duration - elapsedSec);
-        // Sync the warningOn flag against the run's current remaining so
-        // the ring color is correct on the very first frame post-swap.
-        next.warningOn = remainingSec <= 5 && remainingSec > 0 && !next.isPaused;
-        if (view) view.classList.toggle('is-warning', !!next.warningOn);
         // If we're past the final-3 window, mark it fired so we don't
         // double-fire the burst on the next focused tick.
         if (remainingSec < 0.5) next.finalThreeFiredFor = next.currentIndex;
@@ -2143,9 +2144,11 @@ const Engine = {
     if (wasFocused) {
       const next = this.activeRuns()[0] || null;
       this._focusedId = next ? next.id : null;
-      if (next) {
-        this._promoteToFocused(next);
-      } else if (reason !== 'catchup' && typeof this.onComplete === 'function') {
+      // Either way the run view's state tints belong to whoever is
+      // focused now — which, with nothing left, is nobody.
+      if (next) this._promoteToFocused(next);
+      else      UI._syncRunViewState();
+      if (!next && reason !== 'catchup' && typeof this.onComplete === 'function') {
         // Last run finished; show the completion overlay for it.
         // Snapshot details from the completing run BEFORE the coordinator
         // tries to read Engine.segments — by this point the run is
@@ -2269,11 +2272,7 @@ const Engine = {
     // No extra emit needed on focused-died.
     const focused = this._focused;
     if (focused) {
-      const runView = document.querySelector('.view-run');
-      if (runView) {
-        runView.classList.toggle('is-paused', focused.isPaused);
-        runView.classList.remove('is-warning');
-      }
+      UI._syncRunViewState();
       const seg = focused.segments[focused.currentIndex];
       if (seg && typeof this.onTick === 'function') {
         const elapsedSec = focused._elapsedMs() / 1000;
@@ -4295,21 +4294,48 @@ const UI = {
     el.textContent = text || '—';
   },
 
-  // v1.4.13 — reflect the ring-until-dismissed gate in the run view:
-  // swap the transport row for a Dismiss bar, pin the clock at 00:00,
-  // and tint the view. Called from renderRun / updateRunSegmentInfo and
-  // whenever a run enters or leaves the gate.
-  _syncAlarmUI() {
+  // v1.4.23 — THE run view's state, derived (never remembered).
+  //
+  // Three tints share one element: is-paused, is-warning (final seconds)
+  // and is-alarm (held at a ringing gate), plus the Dismiss bar that
+  // replaces the transport row. They used to be poked in from a dozen
+  // places, each guarded by "is this run the focused one?", and one of
+  // them copied run.warningOn — a flag only the focused run ever
+  // updated. Any path that changed focus or repainted without hitting
+  // the matching poke left the previous run's tint on a view now showing
+  // a different chain: the reported "it counts down correctly but shows
+  // red as if it had finished". So every one of those paths now lands
+  // here instead, and here reads the focused run's LIVE state. Cheap and
+  // idempotent — safe to call from anywhere, focused run or not.
+  //
+  // Kept under the old _syncAlarmUI name too: that is what the gate call
+  // sites (and the ring smoke tests) ask for.
+  _syncRunViewState() {
     const run = Engine._focused;
-    const held = !!run?.awaitingDismiss;
+    const view = document.querySelector('.view-run');
     const bar = document.getElementById('run-dismiss-bar');
     const controls = document.querySelector('.run-controls');
-    const view = document.querySelector('.view-run');
+    const held = !!run?.awaitingDismiss;
+    const seg  = run?.segments[run.currentIndex];
+    // Final-seconds warning, recomputed from the clock rather than
+    // trusted: Math.ceil matches the tick loop so the tint flips on the
+    // same digit the clock does.
+    let warn = false;
+    if (run && seg && run.isRunning && !run.isPaused && !held) {
+      const remainingInt = Math.ceil(Math.max(0, seg.duration - run._elapsedMs() / 1000));
+      warn = remainingInt <= 5 && remainingInt > 0;
+    }
+    if (run) run.warningOn = warn;
     if (bar) bar.hidden = !held;
     if (controls) controls.hidden = held;
-    if (view) view.classList.toggle('is-alarm', held);
+    if (view) {
+      // A held gate reads as ringing, not as paused, even though the
+      // freeze rides on the pause plumbing.
+      view.classList.toggle('is-paused', !!run && run.isPaused && !held);
+      view.classList.toggle('is-warning', warn);
+      view.classList.toggle('is-alarm', held);
+    }
     if (held) {
-      const seg = run.segments[run.currentIndex];
       const isLast = run.currentIndex >= run.segments.length - 1;
       const label = document.getElementById('run-dismiss-label');
       if (label) {
@@ -4322,6 +4348,10 @@ const UI = {
       UI._stopOvertimeTicker();
     }
   },
+
+  // Older name, same job — the ring-until-dismissed call sites read
+  // better as "sync the alarm UI".
+  _syncAlarmUI() { UI._syncRunViewState(); },
 
   // v1.4.19 — while a gate rings, the clock counts UP in negative time,
   // the way the stock Android timer does, so you can tell at a glance
@@ -4493,6 +4523,10 @@ const UI = {
     // showing, so it is refreshed on every render (focus swaps between
     // concurrent chains, and each carries its own overrides).
     UI._syncRunCueBell();
+    // Before either early return below: opening or repainting the run
+    // view always re-derives its state tints, so nothing stale can be
+    // waiting on screen when the user walks back into the view.
+    UI._syncRunViewState();
     if (UI.prestartPendingChain && !UI.prestartYielded) {
       UI.renderRunChips();
       return;
@@ -4547,7 +4581,11 @@ const UI = {
       chip.type = 'button';
       chip.className = 'run-chip'
         + (run.id === focusedId && !previewShown ? ' is-focused' : '')
-        + (run.isPaused                          ? ' is-paused'  : '');
+        // v1.4.23 — a held gate rides on the pause plumbing, so a
+        // ringing chain used to sit in the strip looking merely paused.
+        // It gets its own mark: with two chains up, this is what says
+        // WHICH one is ringing.
+        + (run.awaitingDismiss ? ' is-ringing' : (run.isPaused ? ' is-paused' : ''));
       chip.dataset.chainId = run.id;
       const dot   = document.createElement('span'); dot.className = 'run-chip-dot';
       const name  = document.createElement('span'); name.className = 'run-chip-name';
@@ -4626,6 +4664,10 @@ const UI = {
   },
 
   updateRunSegmentInfo() {
+    // State tints first: they belong to the focused run whether or not
+    // there is a segment to paint below (a preview is showing, the last
+    // run just ended), and both early returns below would skip them.
+    UI._syncRunViewState();
     // Gated during an inline prestart preview — see renderRun.
     if (UI.prestartPendingChain && !UI.prestartYielded) return;
     // Focus can swap between concurrent chains without a full renderRun,
@@ -4674,8 +4716,6 @@ const UI = {
     ico.innerHTML = Engine.isPaused
       ? `<path d="M8 5v14l11-7z"/>`
       : `<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>`;
-
-    UI._syncAlarmUI();
   },
 
   updateRunClock(seg, remainingSec, elapsedSec) {
@@ -4754,7 +4794,10 @@ const UI = {
       const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
       const clock = chip.querySelector('.run-chip-clock');
       if (clock) clock.textContent = fmt(Math.ceil(remaining));
-      chip.classList.toggle('is-paused', !!run.isPaused);
+      // Same rule as renderRunChips: a run held at a gate is ringing,
+      // not paused, even though the freeze rides on the pause plumbing.
+      chip.classList.toggle('is-ringing', !!run.awaitingDismiss);
+      chip.classList.toggle('is-paused', !!run.isPaused && !run.awaitingDismiss);
     });
     // v1.4.5: same piggyback for the library's inline status cards.
     // Guarded internally against the library view being hidden.
@@ -4771,7 +4814,8 @@ const UI = {
   // runs' clocks stopped updating).
   _buildInlineStatusCard(run) {
     const li = document.createElement('li');
-    li.className = 'chain-status-card' + (run.isPaused ? ' is-paused' : '');
+    li.className = 'chain-status-card'
+      + (run.isPaused && !run.awaitingDismiss ? ' is-paused' : '');
     li.dataset.chainId = run.id;
 
     const stripe = document.createElement('div');
@@ -4789,7 +4833,7 @@ const UI = {
     const line1 = document.createElement('div');
     line1.className = 'chain-status-line1';
     line1.innerHTML =
-      `<span class="status-icon">${run.isPaused ? '⏸' : '▶'}</span>` +
+      `<span class="status-icon">${runStatusIcon(run)}</span>` +
       `<span class="status-seg">${escape(curName)}</span>`;
     body.appendChild(line1);
 
@@ -4842,9 +4886,9 @@ const UI = {
       const remaining = cur ? Math.max(0, cur.duration - run._elapsedMs() / 1000) : 0;
       const clock = card.querySelector('.status-clock');
       if (clock) clock.textContent = fmt(Math.ceil(remaining));
-      card.classList.toggle('is-paused', !!run.isPaused);
+      card.classList.toggle('is-paused', !!run.isPaused && !run.awaitingDismiss);
       const icon = card.querySelector('.status-icon');
-      if (icon) icon.textContent = run.isPaused ? '⏸' : '▶';
+      if (icon) icon.textContent = runStatusIcon(run);
       // Cover auto-advance while user is on library: segment name +
       // position + next-label update in place. A structural change
       // (run added / removed) re-renders the whole library via
@@ -5886,7 +5930,21 @@ function init() {
   Engine.onSegmentChange = () => UI.updateRunSegmentInfo();
   // Gate entered/left — refresh the Dismiss bar and the chip strip (a
   // held background run shows as ringing there too).
-  Engine.onAlarmChange = () => { UI._syncAlarmUI(); UI.renderRunChips(); };
+  //
+  // v1.4.23 — and a gate that just STARTED ringing opens its chain. It
+  // has already taken engine focus (EngineRun._beginAlarmHold); showing
+  // the run view is what makes the Dismiss reachable without hunting
+  // for the chain first. Only from the library or the run view: being
+  // yanked out of the editor mid-edit would cost more than it saves,
+  // and the chip strip plus the notification still lead back here.
+  Engine.onAlarmChange = (run) => {
+    const justRang = !!run?.awaitingDismiss && Engine.focusedRunId() === run.id;
+    if (justRang && (View.current === 'library' || View.current === 'run')) {
+      View.show('run');
+    }
+    UI._syncRunViewState();
+    UI.renderRunChips();
+  };
   Engine.onComplete = (totalSeconds, segmentCount, chain) =>
     UI.showCompletion(totalSeconds, segmentCount, chain);
   // v1.4 — chip strip wakes up whenever a run is added/removed/focused.
@@ -5997,8 +6055,9 @@ function init() {
     Engine._catchup();
     if (Engine.activeRunningCount() > 0) {
       Engine._loop();              // re-prime rAF for any unpaused run
-      UI.updateRunSegmentInfo();
+      UI.updateRunSegmentInfo();   // re-derives the run view's tints too
     } else {
+      UI._syncRunViewState();
       bailOutOfStaleRunView();
     }
   }
@@ -6045,8 +6104,8 @@ function init() {
         if (run.awaitingDismiss) {
           run.awaitingDismiss = false;
           run.isPaused = false;
-          Alarm.stop();
-          document.querySelector('.view-run')?.classList.remove('is-alarm');
+          if (Alarm.activeRunId() === run.id) Alarm.stop();
+          UI._syncRunViewState();
         }
         if (Number.isFinite(st.index) && st.index > run.currentIndex) {
           run.currentIndex = Math.min(st.index, run.segments.length - 1);
