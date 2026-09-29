@@ -8,43 +8,36 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  # Opt actions into Node 24 ahead of the June 2026 forced cutover.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 permissions:
   contents: write   # needed for softprops/action-gh-release to create the GitHub Release
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
 
-      # The action's default package list is "tools platform-tools", and
-      # the legacy 'tools' package no longer exists for the runner's
-      # cmdline-tools (sdkmanager: "Failed to find package 'tools'"),
-      # which failed every build from 2026-09-22. Gradle fetches the
-      # platform/build-tools it needs itself once licences are accepted.
+      # v3 defaulted to installing the legacy 'tools' package, which the
+      # runner's sdkmanager no longer has (every build failed from
+      # 2026-09-22). v4 installs only platform-tools; Gradle fetches the
+      # platform/build-tools it needs once licences are accepted.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
+        uses: android-actions/setup-android@v4
 
       - name: Install npm deps
         run: npm ci --no-fund --no-audit
@@ -62,7 +55,7 @@ jobs:
         run: ls -lh android/app/build/outputs/apk/debug/
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chained-timers-${{ github.sha }}-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -79,7 +72,7 @@ jobs:
 
       - name: Attach APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release/chained-timers-*.apk
           generate_release_notes: true
