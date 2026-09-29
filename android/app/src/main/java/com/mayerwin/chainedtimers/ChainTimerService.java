@@ -299,9 +299,21 @@ public class ChainTimerService extends Service {
                 run.plan.addAll(parsed);
             }
         }
+        int prevIndex = run.curIndex;
+        long prevStartedAtMs = run.segStartedAtMs;
         run.curIndex = clampIndex(run, intent.getIntExtra(EXTRA_SEGMENT_INDEX, 0));
         run.segStartedAtMs = intent.getLongExtra(EXTRA_SEGMENT_STARTED_AT_MS, System.currentTimeMillis());
         run.paused = intent.getBooleanExtra(EXTRA_PAUSED, false);
+        // v1.4.24 — a 3-2-1 burst belongs to one stretch of one segment.
+        // Pausing, or JS moving the run to another segment or restarting
+        // this one (skip, previous, resume — which shifts the effective
+        // start), silences it and re-arms it; maybeStartFinalThree below
+        // then picks the burst up again at the right pulse, if the
+        // segment is in its last three seconds.
+        if (run.paused || run.curIndex != prevIndex
+                || Math.abs(run.segStartedAtMs - prevStartedAtMs) > 250L) {
+            stopFinalThree(run);
+        }
         run.pausedRemainingMs = Math.max(0L, intent.getLongExtra(EXTRA_PAUSED_REMAINING_MS, 0L));
         run.tickEnabled  = intent.getBooleanExtra(EXTRA_TICK_ENABLED, true);
         run.soundEnabled = intent.getBooleanExtra(EXTRA_SOUND_ENABLED, true);
@@ -410,6 +422,7 @@ public class ChainTimerService extends Service {
             armRingLoop(run, /*immediate=*/false);
         } else if (!run.paused && !run.plan.isEmpty()) {
             scheduleNextTick(run);
+            maybeStartFinalThree(run);
         }
 
         // Refresh the summary if 2+ runs are now active.
@@ -559,16 +572,82 @@ public class ChainTimerService extends Service {
             tryVoiceForCurrentSegment(run);
         }
 
-        Segment cur = run.plan.get(run.curIndex);
-        long remainingSec = computeRemainingSec(run, cur);
-        if (run.tickEnabled && remainingSec >= 1L && remainingSec <= 3L) {
-            if (run.finalThreeStartedAtIndex != run.curIndex) {
-                run.finalThreeStartedAtIndex = run.curIndex;
-                playFinalThree(run);
-            }
-        }
+        maybeStartFinalThree(run);
 
         scheduleNextTick(run);
+    }
+
+    /**
+     * v1.4.24 — start this segment's 3-2-1 burst if it is inside its last
+     * three seconds, with final3.wav's pulses landed on the 3, 2 and 1.
+     *
+     * The burst used to be armed only from the per-second tick, and
+     * always from the top of the file. A segment of 3s or less starts
+     * INSIDE the window, but its first tick comes a second in, so the
+     * pulses fell on 2, 1 and 0 — the 0 on top of the chime or finale
+     * (reported: "a 3 second chain doesn't beep on 3 but beeps on 0").
+     * So this runs wherever a segment (re)starts as well as on the tick,
+     * and seeks into the file by however far into the window we are.
+     *
+     * A pulse we are late for still plays if it is at most 500ms overdue
+     * (its digit is still on screen): the service can take that long to
+     * hear about a chain that just started — the bridge, a cold service,
+     * building the cue pool (~400ms measured on the emulator). The file
+     * is then realigned in the silence after that pulse, so the next
+     * ones still land on their digits. Further behind, the pulse is
+     * skipped. Same rule as finalThreeOffsets() in js/app.js.
+     */
+    private void maybeStartFinalThree(ChainRun run) {
+        if (!run.tickEnabled || run.paused || run.ringingAtIndex >= 0) return;
+        if (run.finalThreeStartedAtIndex == run.curIndex) return;
+        if (run.curIndex < 0 || run.curIndex >= run.plan.size()) return;
+        Segment cur = run.plan.get(run.curIndex);
+        final long endMs = run.segStartedAtMs + cur.durationSec * 1000L;
+        long remMs = endMs - System.currentTimeMillis();
+        // (ceil(remMs) <= 3s, same test the clock's digit uses)
+        if (remMs <= 0L || remMs > 3000L) return;
+        run.finalThreeStartedAtIndex = run.curIndex;
+        long posMs = 3000L - remMs;            // where final3.wav should be now
+        long intoPulse = posMs % 1000L;
+        long pulseMs = posMs - intoPulse;      // onset of the pulse due last
+        if (intoPulse < 150L) {
+            playCueSoundFrom(run, run.finalThreePlayer, (int) pulseMs);
+        } else if (intoPulse <= 500L) {
+            playCueSoundFrom(run, run.finalThreePlayer, (int) pulseMs);
+            final int idx = run.curIndex;
+            final long startedAt = run.segStartedAtMs;
+            tickHandler.postDelayed(() -> realignFinalThree(run, idx, startedAt, endMs), 200L);
+        } else if (pulseMs < 2000L) {
+            playCueSoundFrom(run, run.finalThreePlayer, (int) posMs);
+        }
+        // else: the last pulse is already behind us.
+    }
+
+    /** Seek a late-started burst back onto the clock, between pulses. */
+    private void realignFinalThree(ChainRun run, int idx, long startedAt, long endMs) {
+        if (!runs.containsValue(run) || run.paused) return;
+        if (run.curIndex != idx || run.segStartedAtMs != startedAt || run.finalThreeStartedAtIndex != idx) return;
+        android.media.MediaPlayer mp = run.finalThreePlayer;
+        long posMs = 3000L - (endMs - System.currentTimeMillis());
+        if (mp == null || posMs < 0L || posMs >= 2150L) return;
+        try {
+            if (!mp.isPlaying()) return;
+            if (cueTraceOn()) android.util.Log.d(CUE_TAG, "realign run=" + run.runId + " to=" + posMs);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mp.seekTo(posMs, android.media.MediaPlayer.SEEK_CLOSEST);
+            } else {
+                mp.seekTo((int) posMs);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** Silence a burst that no longer belongs (pause, or its segment was
+     *  left or restarted), and let the segment arm a fresh one. */
+    private void stopFinalThree(ChainRun run) {
+        run.finalThreeStartedAtIndex = -1;
+        android.media.MediaPlayer mp = run.finalThreePlayer;
+        if (mp == null) return;
+        try { if (mp.isPlaying()) mp.pause(); } catch (Throwable ignored) {}
     }
 
     private boolean isAppForegroundSafe() {
@@ -939,12 +1018,15 @@ public class ChainTimerService extends Service {
 
         long remainingSec = computeRemainingSec(run, cur);
         boolean ringing = run.ringingAtIndex >= 0;
+        // v1.4.24 — a gate with a segment after it moves the chain on
+        // (Continue); only the chain's own end is a Dismiss.
+        boolean endGate = ringing && run.curIndex >= total - 1;
         String prefix = ringing ? "⏰" : (run.paused ? "⏸" : "▶");
         String segName = (cur != null && cur.name != null && !cur.name.isEmpty()) ? cur.name : "Segment";
         // A held gate reads as a finished timer, not a ticking one: no
         // countdown in the title, since nothing is counting.
         String title = ringing
-            ? (segName + " done · tap Dismiss")
+            ? (endGate ? (run.chainName + " complete · tap Dismiss") : (segName + " done · tap Continue"))
             : (prefix + " " + segName + " · " + fmtClock(remainingSec));
         String body = "Segment " + (run.curIndex + 1) + " of " + total + " · " + run.chainName;
         String sub  = (run.curIndex + 1) + "/" + total;
@@ -999,13 +1081,18 @@ public class ChainTimerService extends Service {
         // v1.4.13 — while a ring-until-dismissed gate is held, the
         // notification's whole job is to offer the one action that
         // matters. Transport buttons would only invite the user to
-        // sidestep the gate by accident, so Dismiss stands alone
-        // (Stop still rides along as the escape hatch).
-        if (run.ringingAtIndex >= 0) {
-            b.addAction(R.drawable.ic_notif_play, "Dismiss",
+        // sidestep the gate by accident, so the gate's own action stands
+        // alone. v1.4.24 — mid-chain that action is Continue, with Stop
+        // still riding along as the escape hatch. At the chain's end it
+        // is Dismiss, alone: Dismiss already ends the chain there, and a
+        // Stop beside it read as a second, different way out.
+        if (ringing) {
+            b.addAction(R.drawable.ic_notif_play, endGate ? "Dismiss" : "Continue",
                 commandPendingIntent(run.runId, COMMAND_DISMISS, 14));
-            b.addAction(R.drawable.ic_notif_stop, "Stop chain",
-                commandPendingIntent(run.runId, COMMAND_STOP, 12));
+            if (!endGate) {
+                b.addAction(R.drawable.ic_notif_stop, "Stop chain",
+                    commandPendingIntent(run.runId, COMMAND_STOP, 12));
+            }
             return b.build();
         }
 
@@ -1164,6 +1251,7 @@ public class ChainTimerService extends Service {
                 run.pausedRemainingMs = Math.max(0L, endMs - now);
                 run.paused = true;
                 cancelTickFor(run);
+                stopFinalThree(run);
                 updated = true;
             }
         } else if (COMMAND_RESUME.equals(cmd)) {
@@ -1172,6 +1260,7 @@ public class ChainTimerService extends Service {
                 run.pausedRemainingMs = 0L;
                 run.paused = false;
                 scheduleNextTick(run);
+                maybeStartFinalThree(run);
                 updated = true;
             }
         } else if (COMMAND_SKIP_NEXT.equals(cmd)) {
@@ -1181,10 +1270,11 @@ public class ChainTimerService extends Service {
                 run.pausedRemainingMs = 0L;
                 run.paused = false;
                 run.prevAlertIndex = run.curIndex;
-                run.finalThreeStartedAtIndex = -1;
+                stopFinalThree(run);
                 tryVoiceForCurrentSegment(run);
                 cancelTickFor(run);
                 scheduleNextTick(run);
+                maybeStartFinalThree(run);
                 updated = true;
             } else if (cur != null) {
                 ChainTimerPlugin.deliverChainCommand(cmd, runId);
@@ -1202,10 +1292,11 @@ public class ChainTimerService extends Service {
             run.pausedRemainingMs = 0L;
             run.paused = false;
             run.prevAlertIndex = run.curIndex;
-            run.finalThreeStartedAtIndex = -1;
+            stopFinalThree(run);
             tryVoiceForCurrentSegment(run);
             cancelTickFor(run);
             scheduleNextTick(run);
+            maybeStartFinalThree(run);
             updated = true;
         }
 
@@ -1350,7 +1441,7 @@ public class ChainTimerService extends Service {
         run.curIndex = cleared + 1;
         run.segStartedAtMs = System.currentTimeMillis();
         run.prevAlertIndex = run.curIndex;
-        run.finalThreeStartedAtIndex = -1;
+        stopFinalThree(run);
         publishGateState(run);
         if (run.curIndex >= run.plan.size()) {
             completeRun(run, /*alert=*/false);
@@ -1359,6 +1450,7 @@ public class ChainTimerService extends Service {
         tryVoiceForCurrentSegment(run);
         cancelTickFor(run);
         scheduleNextTick(run);
+        maybeStartFinalThree(run);
         pushRunNotification(run, /*alert=*/false);
     }
 
@@ -1401,6 +1493,13 @@ public class ChainTimerService extends Service {
         warmOneCue(run.finalePlayer);
     }
 
+    // v1.4.24 — the warm-up start()/pause() is asynchronous underneath:
+    // the first few ms of the file can already be in the audio track when
+    // pause() lands. Turning the volume back up right here let those
+    // frames out, a stray blip at chain start that doubled whatever cue
+    // came first ("two beeps, as if one was late"). Every cue file opens
+    // on a tone, so the player now stays parked at volume 0 and
+    // playCueSoundFrom() raises it immediately before a real start().
     private void warmOneCue(android.media.MediaPlayer mp) {
         if (mp == null) return;
         try {
@@ -1408,7 +1507,6 @@ public class ChainTimerService extends Service {
             mp.start();
             mp.pause();
             mp.seekTo(0);
-            mp.setVolume(1f, 1f);
         } catch (Throwable ignored) {}
     }
 
@@ -1467,14 +1565,24 @@ public class ChainTimerService extends Service {
     }
 
     private void playCueSound(ChainRun run, android.media.MediaPlayer mp) {
+        playCueSoundFrom(run, mp, 0);
+    }
+
+    private void playCueSoundFrom(ChainRun run, android.media.MediaPlayer mp, int fromMs) {
         if (cueTraceOn()) {
             android.util.Log.d(CUE_TAG, "cue run=" + run.runId + " sound=" + run.soundEnabled
-                + " ringing=" + run.ringingAtIndex);
+                + " ringing=" + run.ringingAtIndex + " from=" + fromMs);
         }
         if (!run.soundEnabled || mp == null) return;
         try {
             if (mp.isPlaying()) mp.pause();
-            mp.seekTo(0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mp.seekTo(fromMs, android.media.MediaPlayer.SEEK_CLOSEST);
+            } else {
+                mp.seekTo(fromMs);
+            }
+            // Warmed players are parked at volume 0 (warmOneCue).
+            mp.setVolume(1f, 1f);
             mp.start();
         } catch (Throwable ignored) {}
     }
@@ -1522,7 +1630,6 @@ public class ChainTimerService extends Service {
 
     private void playChime(ChainRun run)      { playCueSound(run, run.chimePlayer); }
     private void playFinale(ChainRun run)     { playCueSound(run, run.finalePlayer); }
-    private void playFinalThree(ChainRun run) { playCueSound(run, run.finalThreePlayer); }
 
     private void releaseCueMediaPlayers(ChainRun run) {
         if (run.chimePlayer != null)      { try { run.chimePlayer.release(); }      catch (Throwable ignored) {} run.chimePlayer = null; }

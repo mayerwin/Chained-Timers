@@ -75,6 +75,7 @@ const gateState = () => page.evaluate(() => {
     barHidden: document.getElementById('run-dismiss-bar')?.hidden,
     controlsHidden: document.querySelector('.run-controls')?.hidden,
     label: document.getElementById('run-dismiss-label')?.textContent,
+    button: document.getElementById('run-dismiss')?.textContent,
     alarmClass: document.querySelector('.view-run')?.classList.contains('is-alarm'),
     running: Engine.activeRuns().map(r => r.id),
   };
@@ -156,6 +157,8 @@ console.log('\nTest 2: mid-chain gate holds the chain and rings');
   eq(s.alarmClass, true, 'run view flagged is-alarm');
   if (/Work/.test(s.label)) ok(`label names the finished segment ("${s.label}")`);
   else bad(`label: ${s.label}`);
+  // v1.4.24 — mid-chain the button moves the chain on.
+  eq(s.button, 'Continue', 'button reads Continue mid-chain');
   const ringing = await page.evaluate(() => window.ChainedApp.Alarm?.active?.() ?? 'no Alarm');
   eq(ringing, true, 'alarm loop running');
   // Still held a couple of seconds later — nothing auto-advances.
@@ -200,6 +203,7 @@ console.log('\nTest 4: gate on the LAST segment holds at chain end, dismiss comp
   eq(s.running, ['c_last'], 'run still alive (not auto-completed)');
   if (/complete/i.test(s.label)) ok(`label reads as chain end ("${s.label}")`);
   else bad(`label: ${s.label}`);
+  eq(s.button, 'Dismiss', 'button reads Dismiss at chain end');
   await page.click('#run-dismiss');
   await page.waitForTimeout(400);
   eq(await page.evaluate(() => window.ChainedApp.Engine.activeRuns().map(r => r.id)), [], 'chain completed on dismiss');

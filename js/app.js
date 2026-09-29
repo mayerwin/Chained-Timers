@@ -642,6 +642,21 @@ function isAncestorOf(maybeAncestorId, descendantChain, visited = new Set()) {
   return false;
 }
 
+// v1.4.24 — when, from now, each 3-2-1 pulse is due, given the time left
+// in the segment. Pulses belong at 3000, 2000 and 1000ms remaining. One
+// up to 500ms overdue still plays, at once — its digit is still on
+// screen, and the next pulse is at least half a second behind it. One
+// further behind is dropped rather than crowding the next. The FGS
+// applies the same rule to final3.wav (maybeStartFinalThree).
+function finalThreeOffsets(remainingMs) {
+  const out = [];
+  for (let k = 3; k >= 1; k--) {
+    const due = remainingMs - k * 1000;
+    if (due >= -500) out.push(Math.max(0, due));
+  }
+  return out;
+}
+
 // ============================================================
 // Audio cues (Web Audio API — generated tones, no asset files)
 // ============================================================
@@ -716,13 +731,19 @@ const Audio = {
   // out of the JS event loop and into the audio thread, which plays
   // them gap-free at sample-rate precision (same approach as concatenated
   // final3.wav in the native FGS path). Total scheduled length ~2.08s.
-  finalThree() {
+  //
+  // v1.4.24 — the pulses belong on the 3, 2 and 1, wherever the burst is
+  // armed from. A segment of 3s or less starts INSIDE the window, and a
+  // burst that always began "now" put its pulses a beat late (a 2s
+  // segment beeped on 2, 1 and on the 0 that belongs to the chime).
+  // finalThreeOffsets drops the pulses already behind us.
+  finalThree(remainingMs = 3000) {
     if (this._skipOnNative()) return;
     this.ensure();
     if (!this.ctx) return;
     const t0 = this.ctx.currentTime;
-    for (let i = 0; i < 3; i++) {
-      const t   = t0 + i;
+    for (const offsetMs of finalThreeOffsets(remainingMs)) {
+      const t   = t0 + offsetMs / 1000;
       const osc = this.ctx.createOscillator();
       const g   = this.ctx.createGain();
       osc.type  = 'square';
@@ -1006,9 +1027,20 @@ const Vibe = {
     try { navigator.vibrate(pattern); } catch {}
   },
   segmentEnd() { this.do([60, 60, 60, 60, 200]); },
-  // Three 40ms pulses at exact 1-second offsets, matching Audio.finalThree.
-  // Pattern: 40ms ON / 960ms OFF / 40ms ON / 960ms OFF / 40ms ON.
-  finalTick()  { this.do([40, 960, 40, 960, 40]); },
+  // Three 40ms pulses at exact 1-second offsets, matching Audio.finalThree
+  // (40ms ON / 960ms OFF / ...), landed on the same 3-2-1 digits: a burst
+  // armed late opens with an OFF gap, and drops the pulses already past.
+  finalTick(remainingMs = 3000) {
+    const pattern = [];
+    let at = 0;
+    for (const offsetMs of finalThreeOffsets(remainingMs)) {
+      if (pattern.length) pattern.push(offsetMs - at);
+      else if (offsetMs > 0) pattern.push(0, offsetMs);
+      pattern.push(40);
+      at = offsetMs + 40;
+    }
+    if (pattern.length) this.do(pattern);
+  },
   start()      { this.do(120); },
   finale()     { this.do([90, 80, 90, 80, 240]); },
 };
@@ -1551,8 +1583,9 @@ class EngineRun {
       if (!this.isPaused && this._isFocused() && effectiveCue(seg, this.chain, 'finalTick')) {
         if (remainingInt <= 3 && remainingInt >= 1 && this.finalThreeFiredFor !== this.currentIndex) {
           this.finalThreeFiredFor = this.currentIndex;
-          if (effectiveCue(seg, this.chain, 'sound'))   Audio.finalThree();
-          if (effectiveCue(seg, this.chain, 'vibrate')) Vibe.finalTick();
+          const remainingMs = Math.max(0, seg.duration * 1000 - elapsedMs);
+          if (effectiveCue(seg, this.chain, 'sound'))   Audio.finalThree(remainingMs);
+          if (effectiveCue(seg, this.chain, 'vibrate')) Vibe.finalTick(remainingMs);
         }
       }
 
@@ -4116,7 +4149,7 @@ const UI = {
       finalTick: { title: 'Final 3 seconds tick', hint: "Three quick tones counting down this segment's last 3s.", requires: 'sound' },
       ringUntilDismissed: {
         title: 'Ring until dismissed',
-        hint: 'Keep ringing at the end of this segment; the chain waits here until you tap Dismiss.',
+        hint: 'Keep ringing at the end of this segment; the chain waits here until you tap Continue.',
         requires: 'sound',
         binary: true,
       },
@@ -4343,6 +4376,10 @@ const UI = {
           ? `${run.chain?.name || 'Chain'} complete`
           : `${seg?.name || 'Segment'} done`;
       }
+      // v1.4.24 — mid-chain the button moves you on, so it says so;
+      // only the chain's end is a plain Dismiss.
+      const btn = document.getElementById('run-dismiss');
+      if (btn) btn.textContent = isLast ? 'Dismiss' : 'Continue';
       UI._startOvertimeTicker();
     } else {
       UI._stopOvertimeTicker();
