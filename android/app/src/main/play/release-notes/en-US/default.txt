@@ -1,5 +1,5 @@
-v1.4.23 — The timer that's up is the one you see
+v1.4.24 — Continue, and a countdown on the beat
 
-• When one chain's alarm goes off while another is still running, the app now opens the chain that finished, with its Dismiss — instead of leaving you on the one still counting, unable to stop the ringing.
-• A chain waiting on its alarm reads as ringing now, not paused, in your chain list and in the run screen's strip.
-• Fixed: a run screen could show a finished chain's red while its own timer counted down normally.
+• A ringing timer that has more segments after it now says Continue, in the app and in the notification. At the end of the chain it still says Dismiss, and the notification no longer shows Stop chain beside it.
+• Fixed: the final 3-2-1 tick now beeps on 3, 2 and 1 even in segments of 3 seconds or less, instead of starting late and beeping on 0.
+• Fixed: a stray extra beep when a chain starts.
