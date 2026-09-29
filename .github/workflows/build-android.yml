@@ -36,8 +36,15 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # The action's default package list is "tools platform-tools", and
+      # the legacy 'tools' package no longer exists for the runner's
+      # cmdline-tools (sdkmanager: "Failed to find package 'tools'"),
+      # which failed every build from 2026-09-22. Gradle fetches the
+      # platform/build-tools it needs itself once licences are accepted.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Install npm deps
         run: npm ci --no-fund --no-audit
